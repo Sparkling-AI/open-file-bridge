@@ -30,6 +30,20 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 # so Pyodide installs them from localhost instead of PyPI (fast + offline).
 WHEELS_DIR = Path(__file__).resolve().parent / "wheels"
 
+# Optional PDF/OCR add-on (NOT stdlib). Enabled automatically when the libs
+# are importable: `pip install pymupdf rapidocr-onnxruntime` on the user
+# machine, or bundled into the PyInstaller build. Bridge stays functional
+# without them — /health reports what's available.
+try:
+    import fitz  # pymupdf
+    HAVE_PYMUPDF = True
+except ImportError:
+    fitz = None
+    HAVE_PYMUPDF = False
+
+HAVE_RAPIDOCR = False  # lazy: importing RapidOCR loads a big ONNX model
+_RAPIDOCR = None
+
 # CORS headers allowing the Open WebUI page to call us.
 # NOTE: In production, replace * with your actual OWUI origin for safety.
 CORS_HEADERS = [
@@ -38,6 +52,28 @@ CORS_HEADERS = [
     ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
     ("Access-Control-Allow-Headers", "Content-Type"),
 ]
+
+
+def _get_rapidocr():
+    """Lazy singleton: import + model load takes seconds; only pay when used."""
+    global HAVE_RAPIDOCR, _RAPIDOCR
+    if _RAPIDOCR is not None:
+        return _RAPIDOCR
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        _RAPIDOCR = RapidOCR()
+        HAVE_RAPIDOCR = True
+    except ImportError:
+        _RAPIDOCR = False
+    return _RAPIDOCR or None
+
+
+def safe_child(base: Path, rel: str) -> Path:
+    """Resolve rel under base with traversal protection (for tmp files)."""
+    p = (base / rel).resolve()
+    if os.path.commonpath([str(base.resolve()), str(p)]) != str(base.resolve()):
+        raise PermissionError("path escapes allowed root")
+    return p
 
 
 def load_root() -> Path | None:
@@ -89,9 +125,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
 
         if u.path == "/health":
-            if root:
-                return self._json(200, {"ok": True, "root": str(root), "version": "1.0"})
-            return self._json(200, {"ok": False, "hint": "no folder chosen yet"})
+            info = {"ok": True, "root": str(root), "version": "1.1"} if root else \
+                   {"ok": False, "hint": "no folder chosen yet"}
+            info["addons"] = {"pdf": HAVE_PYMUPDF,
+                              "ocr": HAVE_RAPIDOCR or _get_rapidocr() is not None}
+            info["wheels"] = len(list(WHEELS_DIR.glob("*.whl"))) if WHEELS_DIR.is_dir() else 0
+            return self._json(200, info)
 
         if u.path == "/state":
             return self._json(200, {"root": str(root) if root else None, "port": PORT})
@@ -179,6 +218,92 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "path": q.get("path"), "size": st.st_size,
                     "mtime": int(st.st_mtime), "kind": kind, "ext": ext or None,
                 })
+
+            # ---------- optional PDF/OCR add-on endpoints ----------
+
+            if u.path == "/pdf_text":
+                # Extract embedded text layer from a PDF (pymupdf).
+                if not HAVE_PYMUPDF:
+                    return self._json(501, {"error": "PDF add-on not installed on this machine "
+                                                     "(pip install pymupdf)"})
+                p = resolve_safe(root, unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                pages_param = q.get("pages", "")  # "1-3,5" optional, 1-indexed
+                doc = fitz.open(p)
+                try:
+                    total = doc.page_count
+                    wanted = list(range(total))
+                    if pages_param:
+                        wanted = []
+                        for part in pages_param.split(","):
+                            part = part.strip()
+                            if "-" in part:
+                                a, b = part.split("-", 1)
+                                wanted.extend(range(int(a) - 1, min(int(b), total)))
+                            elif part:
+                                wanted.append(int(part) - 1)
+                        wanted = sorted(set(w for w in wanted if 0 <= w < total))
+                    pages_out = []
+                    char_budget = MAX_READ
+                    for i in wanted:
+                        txt = doc[i].get_text("text").strip()
+                        pages_out.append({"page": i + 1, "text": txt})
+                        char_budget -= len(txt)
+                        if char_budget <= 0:
+                            pages_out.append({"page": i + 1, "text": "…truncated (budget)"})
+                            break
+                    return self._json(200, {"path": q.get("path"), "page_count": total,
+                                            "pages": pages_out})
+                finally:
+                    doc.close()
+
+            if u.path == "/ocr":
+                # OCR an image (png/jpg/bmp/webp) or a scanned PDF (per page).
+                # Uses RapidOCR (CPU, ~1-3 s/page on a laptop).
+                ocr = _get_rapidocr()
+                if ocr is None:
+                    return self._json(501, {"error": "OCR add-on not installed on this machine "
+                                                     "(pip install rapidocr-onnxruntime)"})
+                p = resolve_safe(root, unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                ext = p.suffix.lower()
+                max_pages = int(q.get("max_pages", "5"))
+                results = []
+
+                import tempfile
+                tmpdir = tempfile.mkdtemp(prefix="fb-ocr-")
+
+                def run_image_bytes(img_bytes, name):
+                    # RapidOCR accepts a file path (handles decoding itself)
+                    tf = os.path.join(tmpdir, name)
+                    with open(tf, "wb") as f:
+                        f.write(img_bytes)
+                    res, _ = ocr(tf)
+                    if not res:
+                        return []
+                    return [r[1] for r in res]  # each item: [box, text, score]
+
+                if ext in {".png", ".jpg", ".jpeg", ".bmp", ".webp"}:
+                    lines = run_image_bytes(p.read_bytes(), "img" + ext)
+                    results.append({"page": 1, "lines": lines})
+                elif ext == ".pdf":
+                    if not HAVE_PYMUPDF:
+                        return self._json(501, {"error": "PDF add-on not installed (pip install pymupdf)"})
+                    doc = fitz.open(p)
+                    try:
+                        for i in range(min(doc.page_count, max_pages)):
+                            pix = doc[i].get_pixmap(dpi=200)
+                            lines = run_image_bytes(pix.tobytes("png"), f"p{i}.png")
+                            results.append({"page": i + 1, "lines": lines})
+                    finally:
+                        doc.close()
+                else:
+                    return self._json(400, {"error": f"OCR supports images and PDF, not {ext}"})
+                import shutil
+                shutil.rmtree(tmpdir, ignore_errors=True)
+                return self._json(200, {"path": q.get("path"), "pages": results})
 
         except PermissionError as e:
             return self._json(400, {"error": str(e)})

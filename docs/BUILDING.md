@@ -85,6 +85,21 @@ git tag v1.0.0 && git push --tags
 # → Actions → build → three artifacts ready to download
 ```
 
+## Bundling the PDF/OCR add-ons (optional but recommended)
+
+The bridge core is stdlib-only; `/pdf_text` and `/ocr` light up when pymupdf
+and rapidocr-onnxruntime are importable. For packaged binaries include them:
+
+```bash
+pip install pymupdf rapidocr-onnxruntime
+pyinstaller ... --collect-all rapidocr_onnxruntime --collect-all pymupdf ...
+```
+
+(`--collect-all` ships the ONNX models inside the binary.)
+Without them the endpoints return 501 with a clear message; everything else
+works. The *browser-side* wheels live in `src/wheels/` — bundle that directory
+alongside the binary in installers.
+
 ## Smoke-testing a build
 
 ```bash

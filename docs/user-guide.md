@@ -75,6 +75,16 @@ python3 file_bridge.py ~/my-folder
   the internet, only from your own browser.
 - Files are read as plain text; the bridge caps reads at ~200 KB per file.
 
+## PDFs, scans and photos
+
+If your admin bundled the PDF/OCR add-on (included in the standard installer):
+
+- *"What's in invoice.pdf?"* — works even for scanned documents (OCR)
+- *"Read this receipt photo"* — OCR on png/jpg images
+- *"Find the total in the scanned contract"* — search recognized text
+
+Scanned pages take ~1–3 seconds each.
+
 ## Troubleshooting
 
 **"Bridge isn't running"** — Start File Bridge (Windows: Start menu; macOS:

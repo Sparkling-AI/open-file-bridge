@@ -1,6 +1,6 @@
 ---
 name: local-file-bridge
-description: Read, write, edit and CREATE files — including Word/Excel/PowerPoint/PDF — in the user's chosen local folder via the File Bridge app (http://127.0.0.1:8765). Use with Code Interpreter (Pyodide engine) enabled.
+description: Read, write, edit and CREATE files — Word/Excel/PowerPoint/PDF, plus PDF text extraction and OCR of scanned documents — in the user's local folder via the File Bridge app (http://127.0.0.1:8765). Use with Code Interpreter (Pyodide engine) enabled.
 ---
 
 # Local File Bridge
@@ -18,6 +18,9 @@ Access files in **the user's own computer** through their local File Bridge serv
 | `/read_b64?path=X` | GET | Read **binary** file as base64 (≤8 MB) — for Office/PDF/images |
 | `/write` | POST | Write **text** file `{"path","content"}` |
 | `/write_b64` | POST | Write **binary** file `{"path","b64"}` — for Office/PDF/images |
+| `/pdf_text?path=X&pages=1-3,5` | GET | **Extract text layer** from PDF (addon: pymupdf) |
+| `/ocr?path=X&max_pages=5` | GET | **OCR** scanned PDF or image (addon: rapidocr) |
+| `/wheels` | GET | Local wheel URLs for micropip (openpyxl etc.) |
 
 ## Bootstrap helpers (run once per session)
 
@@ -56,19 +59,15 @@ async def write_text(path, text: str):
 
 ## Office files (Word / Excel / PowerPoint / PDF)
 
-Install libraries — **prefer the bridge's local wheels** (faster, works
-offline; served from the user's own disk). Always try local first, PyPI as
-fallback:
+Install libraries from the **bridge's local wheels** (served from the user's
+own disk — offline-safe, version-pinned; do NOT use PyPI):
 
 ```python
 import micropip
 from pyodide.http import pyfetch
 r = await pyfetch("http://127.0.0.1:8765/wheels")
-wheel_urls = (await r.json())["urls"]
-if wheel_urls:
-    await micropip.install(wheel_urls)          # openpyxl, python-docx,
-else:                                            # python-pptx, fpdf2 + deps
-    await micropip.install(["openpyxl", "python-docx", "python-pptx", "fpdf2"])
+urls = (await r.json())["urls"]                  # openpyxl, python-docx,
+await micropip.install(urls)                      # python-pptx, fpdf2 + deps
 ```
 
 NOTE: install is per-session (the Pyodide worker is shared and persistent
@@ -163,8 +162,29 @@ pdf.multi_cell(0, 8, "Body text, wrapped automatically.")
 await write_binary("reports/summary.pdf", bytes(pdf.output()))
 ```
 
-Reading existing PDFs: no pure-Python extractor works reliably in Pyodide —
-ask the user to paste key passages, or use the OWUI knowledge base upload.
+### PDF reading — use the bridge (NOT Pyodide)
+
+Pyodide cannot parse PDFs, but the bridge can (native Python on the user's
+machine). Check `/health` → `addons`:
+
+```python
+h = await bridge_get("/health")
+if h["addons"]["pdf"]:
+    d = await bridge_get("/pdf_text", {"path": "docs/invoice.pdf"})
+    text = "\n\n".join(p["text"] for p in d["pages"])
+    print(d["page_count"], "pages")
+
+# scanned PDFs (image-only, no text layer) → OCR:
+if h["addons"]["ocr"]:
+    d = await bridge_get("/ocr", {"path": "docs/invoice-scanned.pdf", "max_pages": 5})
+    for pg in d["pages"]:
+        print(pg["page"], "\n".join(pg["lines"]))
+```
+
+Rules: try `/pdf_text` first (instant, exact). If it returns empty text the
+PDF is scanned → fall back to `/ocr` (~1–3 s/page). OCR also works on plain
+images (png/jpg/bmp/webp). If addons are false, tell the user the bridge needs
+`pip install pymupdf rapidocr-onnxruntime` (or the full installer).
 
 ### Plain text / CSV / Markdown
 
