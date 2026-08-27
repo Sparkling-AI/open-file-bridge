@@ -245,8 +245,17 @@ final validation pass (not after every change). Do not block on either.
    144dpi, ≤100pg) for vision models; capability fallback pattern.
 ☐ Sensitive-name blacklist (.env, id_rsa, credentials) in bridge.
 ☐ Version endpoint + update nudge (keep skill & bridge in sync).
-☐ `/zip`, `/unzip` (stdlib zipfile).
-☐ `/directory_tree?format=tree` (from openapi-servers).
+✅ **/zip, /unzip** (stdlib zipfile). /zip: members resolved through
+   resolve_guarded individually (ignore lists + traversal apply per
+   member), output written atomically + snapshotted, 8 MB cap, 200-member
+   cap, flat basenames (dirs recurse). /unzip: every member name
+   REJECTED if absolute/drive-letter/`..` (zip-slip aborts the whole
+   extraction), 1000-entry + 8 MB caps, symlink members refused, ignore
+   rules apply to extracted paths, rate-breaker counted.
+☐ `/directory_tree?format=tree` (from openapi-servers). ✅ done —
+   GET /directory_tree: recursive name/type/size tree, ignore-list aware,
+   symlinks never listed, entry cap (default 500, max 2000) + depth cap
+   (default 6, max 12) with truncated flags.
 ☐ Local preview tab in settings page (what the AI can see) — Open Terminal
    file-browser inspiration.
 
@@ -290,7 +299,7 @@ final validation pass (not after every change). Do not block on either.
 | pdf (scanned) | ✅ /ocr (tesseract) | — | swe+eng combo verified |
 | images | ✅ /ocr, /read_b64 | ✅ /write_b64 | |
 | doc/xls/ppt (legacy) | ❌ | ❌ | P3: LibreOffice convert |
-| zip | ❌ | ❌ | P2: /zip /unzip |
+| zip | ✅ /zip (create), /unzip, /peek kind=zip | ✅ /zip | flat basenames; zip-slip rejected |
 
 ## Measured performance (reference)
 

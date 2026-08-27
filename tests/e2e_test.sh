@@ -400,6 +400,42 @@ if grep -q "outside data" "$TESTDIR/realdir/secret.txt" 2>/dev/null; then echo "
 LEFT2=$(find "$TESTDIR" -maxdepth 1 -name '.fb-*' | wc -l)
 if [ "$LEFT2" = "0" ]; then echo "  PASS: still no temp leftovers after symlink tests"; else echo "  FAIL: $LEFT2 temp files left"; fail=1; fi
 
+# ---------- /zip /unzip /directory_tree (P2, stdlib) ----------
+mkdir -p "$TESTDIR/pack/sub"
+echo "alpha" > "$TESTDIR/pack/a.txt"
+echo "beta"  > "$TESTDIR/pack/sub/b.txt"
+echo "loose" > "$TESTDIR/loose.txt"
+check "zip creates archive"   '"ok": *true'    "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack","loose.txt"],"out":"bundle.zip"}')"
+check "zip counts files"     '"files": *2'     "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack"],"out":"p2.zip"}')"
+if command -v unzip >/dev/null; then
+  check "zip readable"       'a.txt'  "$(unzip -l "$TESTDIR/bundle.zip" 2>/dev/null || echo NOMEMBER)"
+else
+  check "zip readable"       'PK'     "$(head -c 2 "$TESTDIR/bundle.zip")"
+fi
+check "zip missing member 404" 'not found'  "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["nope.txt"],"out":"x.zip"}')"
+check "zip bad ext refused" 'must end in .zip' "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["loose.txt"],"out":"x.tar"}')"
+# unzip roundtrip
+check "unzip extracts"      '"files": *3'    "$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"bundle.zip","dest":"unpacked"}')"
+check "unzip file content"  'alpha'          "$(cat "$TESTDIR/unpacked/a.txt")"
+check "unzip dir member"    'beta'           "$(cat "$TESTDIR/unpacked/b.txt")"
+# zip-slip: craft a malicious archive with ../ member
+python3 - "$TESTDIR/evil.zip" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr("../escaped.txt", "pwned")
+PY
+check "zip-slip blocked"    'unsafe member'  "$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"evil.zip","dest":"unpacked"}')"
+if [ -f "$TESTDIR/../escaped.txt" ] || [ -f "/tmp/escaped.txt" ]; then echo "  FAIL: zip-slip escaped the root"; fail=1; else echo "  PASS: no file escaped"; fi
+check "unzip non-zip refused" 'not a zip\|not a valid' "$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"loose.txt","dest":"d"}')"
+# directory_tree
+DT=$(curl -s "$BRIDGE/directory_tree?path=." $T)
+check "tree lists root files"   'notes.txt'  "$DT"
+check "tree nested dirs"        '"children"' "$DT"
+check "tree counts entries"     'entry_count' "$DT"
+DT2=$(curl -s "$BRIDGE/directory_tree?path=pack" $T)
+check "tree subdir works"       'a.txt'      "$DT2"
+if echo "$DT" | grep -q 'TOPSECRET'; then echo "  FAIL: tree leaked ignored path"; fail=1; else echo "  PASS: tree respects ignore lists"; fi
+
 # pdf_text/ocr functional tests: run suite WITH addons via:
 #   uv run --with pymupdf,rapidocr-onnxruntime bash tests/e2e_test.sh
 ADDONS=$(curl -s $BRIDGE/health | python3 -c "import json,sys; print(json.load(sys.stdin)['addons']['pdf'])" 2>/dev/null || echo False)
