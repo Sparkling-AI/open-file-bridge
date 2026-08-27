@@ -624,6 +624,270 @@ def confirmation_consume(tok: str, params: dict) -> tuple[bool, str]:
 
 
 
+
+
+# ------------------------------------------------- office reads (P1)
+
+# Optional native readers; stdlib zipfile+XML fallbacks keep the bridge
+# dependency-free (same pattern as the pymupdf add-on).
+try:
+    import openpyxl
+    HAVE_OPENPYXL = True
+except ImportError:
+    openpyxl = None
+    HAVE_OPENPYXL = False
+
+
+def _cell_ref_to_idx(ref: str):
+    """'B3' -> (col_idx_1based, row_idx_1based)."""
+    import re as _r
+    m = _r.match(r"([A-Z]+)([0-9]+)", ref.strip().upper())
+    if not m:
+        return None
+    col = 0
+    for ch in m.group(1):
+        col = col * 26 + (ord(ch) - 64)
+    return col, int(m.group(2))
+
+
+def _xlsx_read_stdlib(path: Path, sheet: str | None, rng: str | None, max_rows: int):
+    """Minimal xlsx reader: sharedStrings + sheet XML -> grid."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    NS = "{http://schemas.openxmlformats.org/spreadsheetml/2006/main}"
+    out = {"engine": "stdlib-xml"}
+    with zipfile.ZipFile(path) as z:
+        # shared strings
+        shared = []
+        if "xl/sharedStrings.xml" in z.namelist():
+            root = ET.fromstring(z.read("xl/sharedStrings.xml"))
+            for si in root.findall(f"{NS}si"):
+                shared.append("".join(t.text or "" for t in si.iter(f"{NS}t")))
+        # workbook sheet map
+        wb = ET.fromstring(z.read("xl/workbook.xml"))
+        sheets = [{"name": sh.get("name"),
+                   "rid": sh.get("{http://schemas.openxmlformats.org/officeDocument/2006/relationships}id")}
+                  for sh in wb.iter(f"{NS}sheet")]
+        rels = ET.fromstring(z.read("xl/_rels/workbook.xml.rels"))
+        relmap = {r.get("Id"): r.get("Target") for r in rels}
+        target_sheet = None
+        if sheet:
+            for sh in sheets:
+                if sh["name"] == sheet:
+                    target_sheet = sh
+                    break
+            if not target_sheet:
+                return {"error": f"no such sheet: {sheet}", "sheets": [s["name"] for s in sheets]}
+        else:
+            target_sheet = sheets[0] if sheets else None
+        if not target_sheet:
+            return {"error": "workbook has no sheets"}
+        t = relmap.get(target_sheet["rid"], "")
+        t = t.lstrip("/")
+        if not t.startswith("xl/"):
+            t = "xl/" + t
+        # absolute rel targets ("/xl/worksheets/...") and "worksheets/..." both
+        # normalize to "xl/worksheets/..." — never double-prefix
+        out["sheet"] = target_sheet["name"]
+        out["sheets"] = [s["name"] for s in sheets]
+        ws = ET.fromstring(z.read(t))
+        # merged cells
+        merged = [mc.get("ref") for mc in ws.iter(f"{NS}mergeCell")]
+        out["merged_cells"] = merged[:200]
+        # range bounds
+        col_a = row_a = 1
+        col_b = row_b = None
+        if rng:
+            try:
+                a, b = rng.split(":")
+                ca, ra = _cell_ref_to_idx(a)
+                cb, rb = _cell_ref_to_idx(b)
+                col_a, row_a, col_b, row_b = ca, ra, cb, rb
+            except Exception:
+                return {"error": f"bad range: {rng} (want A1:C10)"}
+        rows_out, nrow = [], 0
+        for row in ws.iter(f"{NS}row"):
+            ri = int(row.get("r") or len(rows_out) + 1)
+            if ri < row_a:
+                continue
+            if row_b and ri > row_b:
+                break
+            if nrow >= max_rows:
+                out["truncated"] = True
+                break
+            cells = {}
+            for c in row.findall(f"{NS}c"):
+                ref = c.get("r") or ""
+                t = c.get("t")
+                v = c.find(f"{NS}v")
+                is_el = c.find(f"{NS}is")
+                if t == "s" and v is not None:
+                    val = shared[int(v.text)]
+                elif t == "inlineStr" and is_el is not None:
+                    val = "".join(x.text or "" for x in is_el.iter(f"{NS}t"))
+                elif v is not None:
+                    val = v.text
+                    if val is not None:
+                        try:
+                            f = float(val)
+                            val = int(f) if f == int(f) else f
+                        except ValueError:
+                            pass
+                else:
+                    continue
+                idx = _cell_ref_to_idx(ref)
+                if idx:
+                    ci = idx[0]
+                    if ci < col_a or (col_b and ci > col_b):
+                        continue
+                    cells[ci] = val
+            if cells:
+                width = max(cells) - col_a + 1
+                rows_out.append([cells.get(col_a + i) for i in range(width)])
+            else:
+                rows_out.append([])
+            nrow += 1
+    while rows_out and not any(rows_out[-1]):
+        rows_out.pop()
+    out["row_count"] = len(rows_out)
+    out["data"] = rows_out
+    return out
+
+
+def _xlsx_read(path: Path, q: dict):
+    sheet = q.get("sheet") or None
+    rng = q.get("range") or None
+    max_rows = min(int(q.get("max_rows", "200") or 200), 5000)
+    if HAVE_OPENPYXL:
+        wb = openpyxl.load_workbook(path, read_only=True, data_only=True)
+        try:
+            names = wb.sheetnames
+            if sheet and sheet not in names:
+                return {"error": f"no such sheet: {sheet}", "sheets": names}
+            ws = wb[sheet] if sheet else wb.active
+            out = {"engine": "openpyxl", "sheet": ws.title, "sheets": names,
+                   "merged_cells": [str(m) for m in
+                                    (ws.merged_cells.ranges if hasattr(ws, "merged_cells") else [])][:200]}
+            col_a = row_a = 1
+            col_b = row_b = None
+            if rng:
+                try:
+                    a, b = rng.split(":")
+                    ca, ra = _cell_ref_to_idx(a)
+                    cb, rb = _cell_ref_to_idx(b)
+                    col_a, row_a, col_b, row_b = ca, ra, cb, rb
+                except Exception:
+                    return {"error": f"bad range: {rng} (want A1:C10)"}
+            rows_out = []
+            for ri, row in enumerate(ws.iter_rows(), 1):
+                if ri < row_a:
+                    continue
+                if row_b and ri > row_b:
+                    break
+                if len(rows_out) >= max_rows:
+                    out["truncated"] = True
+                    break
+                vals = []
+                for ci, cell in enumerate(row, 1):
+                    if ci < col_a:
+                        continue
+                    if col_b and ci > col_b:
+                        break
+                    vals.append(cell.value)
+                rows_out.append(vals)
+            while rows_out and not any(v is not None for v in rows_out[-1]):
+                rows_out.pop()
+            out["row_count"] = len(rows_out)
+            out["data"] = rows_out
+            return out
+        finally:
+            wb.close()
+    return _xlsx_read_stdlib(path, sheet, rng, max_rows)
+
+
+def _docx_read(path: Path, q: dict):
+    """python-docx if present, else stdlib XML walk → markdown-ish text."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    out_lines = []
+    with zipfile.ZipFile(path) as z:
+        root = ET.fromstring(z.read("word/document.xml"))
+        body = root.find(f"{W}body")
+        for el in body.iter():
+            if el.tag == f"{W}p":
+                # heading?
+                style = ""
+                pPr = el.find(f"{W}pPr")
+                if pPr is not None:
+                    s = pPr.find(f"{W}pStyle")
+                    if s is not None:
+                        style = s.get(f"{W}val", "")
+                text = "".join(t.text or "" for t in el.iter(f"{W}t")).strip()
+                if not text:
+                    continue
+                sm = re.match(r"(?i)heading(\d)$", style) or re.match(r"(?i)titre(\d)$", style)
+                if style.lower() == "title":
+                    out_lines.append("# " + text)
+                elif sm:
+                    lvl = min(int(sm.group(1)), 6)
+                    out_lines.append("#" * lvl + " " + text)
+                elif style.startswith("List") or style == "BulletList":
+                    out_lines.append("- " + text)
+                else:
+                    out_lines.append(text)
+            elif el.tag == f"{W}tbl":
+                # table: rows -> pipe rows
+                rows = []
+                for tr in el.findall(f"{W}tr"):
+                    cells = []
+                    for tc in tr.findall(f"{W}tc"):
+                        cells.append("".join(t.text or "" for t in tc.iter(f"{W}t")).strip())
+                    rows.append("| " + " | ".join(cells) + " |")
+                if rows:
+                    sep = "|" + "---|" * (rows[0].count("|") - 1)
+                    rows.insert(1, sep)
+                    out_lines.extend(rows)
+    text = "\n".join(out_lines)
+    max_chars = int(q.get("max_chars", "60000") or 60000)
+    return {"path": q.get("path"), "chars": len(text),
+            "truncated": len(text) > max_chars,
+            "markdown": text[:max_chars]}
+
+
+def _pptx_read(path: Path, q: dict):
+    """Per-slide titles + text boxes via stdlib XML."""
+    import zipfile
+    import xml.etree.ElementTree as ET
+    import re as _r
+    A = "{http://schemas.openxmlformats.org/drawingml/2006/main}"
+    slides = []
+    with zipfile.ZipFile(path) as z:
+        names = sorted((n for n in z.namelist()
+                        if _r.fullmatch(r"ppt/slides/slide\d+\.xml", n)),
+                       key=lambda n: int(_r.search(r"(\d+)", n).group(1)))
+        for i, name in enumerate(names, 1):
+            root = ET.fromstring(z.read(name))
+            texts = []
+            for p in root.iter(f"{A}p"):
+                t = "".join(x.text or "" for x in p.iter(f"{A}t")).strip()
+                if t:
+                    texts.append(t)
+            slides.append({"slide": i, "texts": texts,
+                           "title": texts[0] if texts else None})
+            if i >= 200:
+                break
+    return {"path": q.get("path"), "slide_count": len(slides), "slides": slides}
+
+
+
+
+
+
+
+
+
+
 # ------------------------------------------- trash + write guards (P0b)
 
 TRASH_DIR = STATE_DIR / "trash"
@@ -1254,6 +1518,48 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json(200, {"path": q.get("path"), "lang": lang,
                                         "pages": results})
 
+
+
+
+
+            if u.path == "/xlsx_read":
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                if p.suffix.lower() not in {".xlsx", ".xlsm"}:
+                    return self._json(400, {"error": f"not an xlsx: {p.suffix}"})
+                try:
+                    out = _xlsx_read(p, q)
+                except Exception as e:
+                    return self._json(500, {"error": f"xlsx parse failed: {e}",
+                                            "hint": "file may be legacy .xls — ask the "
+                                                    "user to convert to .xlsx"})
+                return self._json(200, out)
+
+            if u.path == "/docx_read":
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                if p.suffix.lower() != ".docx":
+                    return self._json(400, {"error": f"not a docx: {p.suffix}"})
+                try:
+                    out = _docx_read(p, q)
+                except Exception as e:
+                    return self._json(500, {"error": f"docx parse failed: {e}"})
+                return self._json(200, out)
+
+            if u.path == "/pptx_read":
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                if p.suffix.lower() != ".pptx":
+                    return self._json(400, {"error": f"not a pptx: {p.suffix}"})
+                try:
+                    out = _pptx_read(p, q)
+                except Exception as e:
+                    return self._json(500, {"error": f"pptx parse failed: {e}"})
+                return self._json(200, out)
+
             if u.path == "/ocr/config":
                 # GET: current OCR settings + available langs. POST via /api/root.
                 return self._json(200, {
@@ -1361,6 +1667,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 p.write_bytes(raw)
                 return self._json(200, {"ok": True, "written": str(p), "bytes": len(raw),
                                         "snapshot": snap})
+
 
             if u.path == "/versions/list":
                 rel = body.get("path", "")
