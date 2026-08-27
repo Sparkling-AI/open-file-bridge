@@ -26,6 +26,10 @@ MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
+# Wheel hosting: serve pure-Python wheels bundled next to this file in ./wheels/
+# so Pyodide installs them from localhost instead of PyPI (fast + offline).
+WHEELS_DIR = Path(__file__).resolve().parent / "wheels"
+
 # CORS headers allowing the Open WebUI page to call us.
 # NOTE: In production, replace * with your actual OWUI origin for safety.
 CORS_HEADERS = [
@@ -91,6 +95,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if u.path == "/state":
             return self._json(200, {"root": str(root) if root else None, "port": PORT})
+
+        # ---- wheel hosting (works regardless of chosen folder) ----
+        if u.path == "/wheels":
+            if WHEELS_DIR.is_dir():
+                names = sorted(f.name for f in WHEELS_DIR.glob("*.whl"))
+            else:
+                names = []
+            return self._json(200, {"wheels": names,
+                                    "urls": [f"http://127.0.0.1:{PORT}/wheels/{n}" for n in names]})
+
+        if u.path.startswith("/wheels/"):
+            name = os.path.basename(unquote(u.path[len("/wheels/"):]))
+            wf = (WHEELS_DIR / name).resolve()
+            if os.path.commonpath([str(WHEELS_DIR), str(wf)]) != str(WHEELS_DIR) or not wf.is_file():
+                return self._json(404, {"error": f"no such wheel: {name}"})
+            data = wf.read_bytes()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self._cors()
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
 
         if root is None:
             return self._json(409, {"error": "No folder chosen. Open http://127.0.0.1:%d to pick one." % PORT})

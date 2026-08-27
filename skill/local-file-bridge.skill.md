@@ -56,11 +56,31 @@ async def write_text(path, text: str):
 
 ## Office files (Word / Excel / PowerPoint / PDF)
 
-Install libraries first (pure-Python, works in Pyodide):
+Install libraries — **prefer the bridge's local wheels** (faster, works
+offline; served from the user's own disk). Always try local first, PyPI as
+fallback:
 
 ```python
 import micropip
-await micropip.install(["openpyxl", "python-docx", "python-pptx", "fpdf2"])
+from pyodide.http import pyfetch
+r = await pyfetch("http://127.0.0.1:8765/wheels")
+wheel_urls = (await r.json())["urls"]
+if wheel_urls:
+    await micropip.install(wheel_urls)          # openpyxl, python-docx,
+else:                                            # python-pptx, fpdf2 + deps
+    await micropip.install(["openpyxl", "python-docx", "python-pptx", "fpdf2"])
+```
+
+NOTE: install is per-session (the Pyodide worker is shared and persistent
+within a chat session). Importing again later in the same session is instant
+(cached). First call in a session: a few seconds. Do NOT reinstall per request
+— wrap installs in `try: import openpyxl except ImportError: <install>`:
+
+```python
+try:
+    import openpyxl
+except ImportError:
+    <install block above>; import openpyxl
 ```
 
 **fpdf2 needs this shim before import** (Pyodide has no raw HTTPS sockets):
