@@ -11,17 +11,30 @@ Access files in **the user's own computer** through their local File Bridge serv
 
 | Endpoint | Method | Use |
 |---|---|---|
-| `/health` | GET | Check bridge is running |
+| `/health` | GET | Check bridge is running (also reports `security` mode + addons) |
 | `/list?path=.` | GET | Recursive folder listing (path, type, size, mtime) |
 | `/stat?path=X` | GET | Size/mtime/**kind** (text, zip=docx/xlsx/pptx, pdf, image, legacy=doc/xls/ppt) |
-| `/read?path=X` | GET | Read **text** file (utf-8, ≤200 KB) |
+| `/peek?path=X&bytes=512` | GET | **Identify** any file cheaply: kind sniff, printable ratio, preview, next-endpoint hint |
+| `/read?path=X&start_line=1&max_lines=2000` | GET | Read **text** file — numbered lines (`     1→text`), windowed; trailer tells how to continue. Text extensions only (fail-closed) |
 | `/read_b64?path=X` | GET | Read **binary** file as base64 (≤8 MB) — for Office/PDF/images |
-| `/write` | POST | Write **text** file `{"path","content"}` |
-| `/write_b64` | POST | Write **binary** file `{"path","b64"}` — for Office/PDF/images |
+| `/write` | POST | Write **text** file `{"path","content"}` — overwriting needs a confirmation token (409 flow below) |
+| `/write_b64` | POST | Write **binary** file `{"path","b64"}` — same confirmation rule |
+| `/versions/list` | POST | `{"path":""}` — metadata of pre-write snapshots (ts/path/size) |
+| `/versions/restore` | POST | `{"path","ts"}` — restore needs its own confirmation token |
 | `/pdf_text?path=X&pages=1-3,5` | GET | **Extract text layer** from PDF (addon: pymupdf) |
 | `/ocr?path=X&lang=swe+eng&max_pages=5` | GET | **OCR** scanned PDF/image (tesseract) |
 | `/ocr/config` | GET | Current OCR language + installed languages |
 | `/wheels` | GET | Local wheel URLs for micropip (openpyxl etc.) |
+
+**Reading rules (P0):** `/read` is text-only and **fail-closed** — unknown
+extensions and binary files are rejected with 415 + a routing hint. When
+unsure what a file is, call `/peek` first (a few tokens) and follow its
+`hint`. Never try to `/read` a PDF/Office/image directly.
+
+**Large files:** `/read` windows at 2000 lines by default and clips lines at
+500 chars. The response tells you `total_lines` and `start_line=N` to
+continue. NEVER dump whole large files into chat — read windows, summarize,
+and cite `path:line`.
 
 ## Bootstrap helpers (run once per session)
 
@@ -29,21 +42,27 @@ Access files in **the user's own computer** through their local File Bridge serv
 from pyodide.http import pyfetch
 import json, base64, io
 
+# If the org set a Tier-2 token (admin will have told you; it looks like
+# BRIDGE_TOKEN = "..." in an injected block above), send it on EVERY call:
+BRIDGE_HEADERS = {"Content-Type": "application/json"}   # default, no token
+# BRIDGE_HEADERS = {"Content-Type": "application/json",
+#                   "X-Bridge-Token": BRIDGE_TOKEN}      # when token exists
+
 async def bridge_get(path, params=None):
     url = f"http://127.0.0.1:8765{path}"
     if params:
         url += "?" + "&".join(f"{k}={v}" for k, v in params.items())
     r = await pyfetch(url)
     if r.status != 200:
-        raise RuntimeError(f"bridge {path} -> HTTP {r.status}")
+        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {await r.text()}")
     return await r.json()
 
 async def bridge_post(path, payload):
     r = await pyfetch(f"http://127.0.0.1:8765{path}", method="POST",
-                      headers={"Content-Type": "application/json"},
+                      headers=BRIDGE_HEADERS,
                       body=json.dumps(payload))
     if r.status != 200:
-        raise RuntimeError(f"bridge {path} -> HTTP {r.status}")
+        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {await r.text()}")
     return await r.json()
 
 async def read_binary(path):
@@ -209,15 +228,22 @@ with the stdlib `csv` module from a `StringIO`.
 1. **Check first:** `await bridge_get("/health")` — if not ok or fetch fails,
    tell the user: "Your File Bridge isn't running — start the File Bridge app,
    then ask me again." Do NOT retry more than once.
-2. **`/stat` before `/read`:** if kind is `zip`/`pdf`/`image`, use the b64
-   endpoints; only `text` kinds work with `/read`.
-3. **Never overwrite without saying so.** When editing an existing file, state
-   what will change; prefer writing new versions alongside (e.g. `report_v2.docx`)
-   unless the user asked for in-place edit.
+2. **`/stat` or `/peek` before `/read`:** if kind is `zip`/`pdf`/`image`, use the b64
+   endpoints; only `text` kinds work with `/read`. Unknown extension or unsure →
+   `/peek` and follow its hint.
+3. **Never overwrite without confirmation.** Writing to an EXISTING file returns
+   HTTP 409 with a `confirmation_token` (60 s). Show the user what will change,
+   and when they approve re-send the SAME request plus `"confirmation_token"`.
+   The bridge snapshots the old version automatically — if the user regrets an
+   edit, offer `POST /versions/list` → `POST /versions/restore` (restore itself
+   needs a confirmation token too). Do NOT resend with a changed payload: the
+   token burns on any attempt and you must start a new 409 flow.
 4. **Legacy formats (.doc/.xls/.ppt) are read-only-ish:** no library support —
    tell the user to convert to the modern format first (e.g. open in Office →
    Save As .docx).
-5. **Keep files under ~8 MB** (bridge cap). Bigger → ask the user first.
+5. **Never dump whole large files into chat.** Read windows (`start_line` /
+   `max_lines`), summarize what you found, and cite `path:line`. For Office
+   files, extract and report the relevant parts, not the whole grid.
 6. The browser may ask once for local-network permission — user must click Allow.
 7. Only touch files inside the shared folder. Never construct `../` paths.
 8. Supported libraries are pure-Python only. No pandas/openpyxl-with-numpy

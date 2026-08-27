@@ -96,7 +96,7 @@ recommended when copying non-trivial blocks.
    AND no token simultaneously (Open Terminal v0.11.30 refuses keyless
    start; adopt the stance). ✅ done — see items 1/2 above.
 
-☐ Skill rule: never dump whole large files into chat; summarize + cite.
+✅ Skill rule: never dump whole large files into chat; summarize + cite. (skill/local-file-bridge.skill.md updated: API table, /peek, windowing, 409 confirm flow, token header plumbing)
 
 ## P0b — Scope configuration & accident protection (enterprise-critical)
 
