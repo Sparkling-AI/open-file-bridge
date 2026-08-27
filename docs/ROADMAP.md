@@ -13,17 +13,22 @@ Priorities: P0 = production gate · P1 = high value · P2 = later · P3 = option
    (TODO.md #1 has the full rationale.)
 
 ☐ **Bearer token auth** — defense in depth against local pages/processes
-   (Firefox does not enforce Private-Network-Access). Token generated on
-   first run, shown in the settings page, sent by the skill as a header.
+   (Firefox does not enforce PNA). Token generated on first run, stored
+   0600 (OpenWorker secrets.py pattern), shown in settings page, sent by
+   the skill as a header; **never echoed in chat/context** (their hard rule).
+   OpenWorker independently converged on the same 8765+token design.
 
-☐ **Binary read whitelist + /peek** — `/read` on binary files today yields
-   mojibake; `/read_b64` can push 8 MB into chat context = token bonfire.
-   Three layers:
-   1. extension whitelist for `/read` (txt/md/csv/json/xml/yaml/log/code…)
-   2. magic-byte sniffing (`%PDF-`, `PK\x03\x04`, `\x89PNG`, `\xff\xd8`…)
-      → reject with routing hint ("this is a PDF → use /pdf_text")
-   3. `/peek?bytes=512` endpoint so the model can identify a file for
-      ~5 lines of tokens before choosing the right reader.
+☐ **Binary read whitelist + /peek + windowed reads** — `/read` on binary
+   files today yields mojibake; `/read_b64` can push 8 MB into context.
+   Four layers (windowing pattern borrowed from OpenWorker tools/files.py):
+   1. extension whitelist for `/read`, **fail-closed** on unknown extensions
+      (OpenWorker readonly.py confirms fail-closed as the right default)
+   2. magic-byte sniffing (`%PDF-`, `PK\x03\x04`, `\x89PNG`…) → reject
+      with routing hint ("this is a PDF → use /pdf_text")
+   3. `/peek?bytes=512` — identify a file for ~5 lines of tokens
+   4. **`/read` windowing**: cat -n numbered lines, `start_line`/`max_lines`
+      (default 2000), 500-char line clip, response tells the model how to
+      continue — large files become page-through instead of a hard cap.
    Enforcement lives in the BRIDGE (hard), skill rules are advisory only.
 
 ☐ **Write-before-overwrite snapshots + confirmation tokens** — before any
@@ -75,10 +80,18 @@ through the model anyway).
    Linux only: drive letters/backslashes, port-conflict UX, first real Inno
    Setup compile, SmartScreen/Gatekeeper flows.
 ☐ Inno Setup compile run on Windows (script written, never executed).
-☐ Audit log `~/.file-bridge.log` (metadata only: ts, action, path, size).
+☐ Audit log (sqlite or JSONL, from OpenWorker audit.py pattern): every call
+   logs ts, endpoint, path, size, status + **secret-scrubbed args** and
+   truncated result preview (copy their `_SECRET_KEYS` scrub list).
 ☐ Atomic writes (temp + rename); symlink-escape tests on Windows.
 ☐ Log rotation; optional service/LaunchAgent installers.
 ☐ `/ocr_pdf` — tesseract PDF output → searchable PDF (scan → archive).
+☐ Content-hash cache for /pdf_text + /ocr results (OpenWorker pdf_support:
+   history replays every turn — same for chat re-asks; sha256+params keyed).
+☐ `/pptx_from_template` (.potx/pptx layout matching) + `/docx_merge`
+   placeholder filling — from OpenWorker issue #454 (real office demand).
+☐ `/pdf_text?mode=text|images` — images mode rasters pages (pypdfium2,
+   144dpi, ≤100pg) for vision models; capability fallback pattern.
 ☐ Sensitive-name blacklist (.env, id_rsa, credentials) in bridge.
 ☐ Version endpoint + update nudge (keep skill & bridge in sync).
 ☐ `/zip`, `/unzip` (stdlib zipfile).
@@ -109,6 +122,10 @@ through the model anyway).
 ☐ OWUI version-compat window documented (tested 0.11.1).
 ☐ Multi-model smoke tests (only GLM tested; weak models may need stronger
    skill rules).
+☐ RiskClass per endpoint (READ/WRITE_LOCAL/…) declared in code — from
+   OpenWorker risk.py; future-proofs confirmation/audit gating.
+☐ Skill shipped as folder w/ version + changelog; setup script previews
+   diff before updating an existing skill (their staging pattern).
 ☐ Support runbook (SmartScreen / port conflict / Safari).
 
 ## Format support matrix (current)
