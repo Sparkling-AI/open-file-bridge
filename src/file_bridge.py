@@ -13,6 +13,7 @@ import http.server
 import json
 import os
 import socketserver
+import subprocess
 import sys
 import threading
 import time
@@ -30,10 +31,10 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 # so Pyodide installs them from localhost instead of PyPI (fast + offline).
 WHEELS_DIR = Path(__file__).resolve().parent / "wheels"
 
-# Optional PDF/OCR add-on (NOT stdlib). Enabled automatically when the libs
-# are importable: `pip install pymupdf rapidocr-onnxruntime` on the user
-# machine, or bundled into the PyInstaller build. Bridge stays functional
-# without them — /health reports what's available.
+# Optional PDF/OCR add-on. Two parts, each auto-detected:
+#   PDF: `pip install pymupdf` (importable)          -> /pdf_text, + /ocr for PDFs
+#   OCR: tesseract binary on PATH (or TESSERACT_CMD) -> /ocr
+# Bridge stays fully functional without them; /health reports availability.
 try:
     import fitz  # pymupdf
     HAVE_PYMUPDF = True
@@ -41,8 +42,65 @@ except ImportError:
     fitz = None
     HAVE_PYMUPDF = False
 
-HAVE_RAPIDOCR = False  # lazy: importing RapidOCR loads a big ONNX model
-_RAPIDOCR = None
+
+def _find_tesseract():
+    """Locate the tesseract binary. Honors TESSERACT_CMD env override.
+    Returns (path, version_str) or (None, None)."""
+    import shutil as _sh
+    cand = os.environ.get("TESSERACT_CMD") or _sh.which("tesseract")
+    if not cand:
+        return None, None
+    try:
+        out = subprocess.run([cand, "--version"], capture_output=True, text=True,
+                             timeout=10)
+        ver = (out.stdout or out.stderr).splitlines()[0] if (out.stdout or out.stderr) else ""
+        return cand, ver
+    except Exception:
+        return None, None
+
+
+TESSERACT_BIN, TESSERACT_VER = _find_tesseract()
+# tessdata dir override (bundled langs next to the app, or system default).
+# Order: env TESSDATA_PREFIX > ./tessdata next to this file > tesseract default.
+_app_dir = Path(__file__).resolve().parent
+_TESSDATA_LOCAL = _app_dir / "tessdata"
+TESSDATA_DIR = (Path(os.environ["TESSDATA_PREFIX"]) if os.environ.get("TESSDATA_PREFIX")
+                else _TESSDATA_LOCAL if (_TESSDATA_LOCAL / "eng.traineddata").exists()
+                else None)  # None = let tesseract use its compiled-in default
+
+
+def _ocr_langs_available():
+    """List installed language codes from the active tessdata dir."""
+    if TESSDATA_DIR and TESSDATA_DIR.is_dir():
+        return sorted(f.stem for f in TESSDATA_DIR.glob("*.traineddata"))
+    if TESSERACT_BIN:
+        try:
+            out = subprocess.run([TESSERACT_BIN, "--list-langs"],
+                                 capture_output=True, text=True, timeout=10)
+            langs = [l.strip() for l in (out.stdout or "").splitlines()[1:]
+                     if l.strip() and ":" not in l]
+            return langs
+        except Exception:
+            pass
+    return []
+
+
+def _get_ocr_lang():
+    """Configured OCR language(s), e.g. 'swe+eng'. Saved in state file."""
+    try:
+        return json.loads(STATE_FILE.read_text()).get("ocr_lang", "eng")
+    except Exception:
+        return "eng"
+
+
+def _set_ocr_lang(lang: str):
+    st = {}
+    try:
+        st = json.loads(STATE_FILE.read_text())
+    except Exception:
+        pass
+    st["ocr_lang"] = lang
+    STATE_FILE.write_text(json.dumps(st))
 
 # CORS headers allowing the Open WebUI page to call us.
 # NOTE: In production, replace * with your actual OWUI origin for safety.
@@ -52,20 +110,6 @@ CORS_HEADERS = [
     ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
     ("Access-Control-Allow-Headers", "Content-Type"),
 ]
-
-
-def _get_rapidocr():
-    """Lazy singleton: import + model load takes seconds; only pay when used."""
-    global HAVE_RAPIDOCR, _RAPIDOCR
-    if _RAPIDOCR is not None:
-        return _RAPIDOCR
-    try:
-        from rapidocr_onnxruntime import RapidOCR
-        _RAPIDOCR = RapidOCR()
-        HAVE_RAPIDOCR = True
-    except ImportError:
-        _RAPIDOCR = False
-    return _RAPIDOCR or None
 
 
 def safe_child(base: Path, rel: str) -> Path:
@@ -127,13 +171,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if u.path == "/health":
             info = {"ok": True, "root": str(root), "version": "1.1"} if root else \
                    {"ok": False, "hint": "no folder chosen yet"}
-            info["addons"] = {"pdf": HAVE_PYMUPDF,
-                              "ocr": HAVE_RAPIDOCR or _get_rapidocr() is not None}
+            info["addons"] = {"pdf": HAVE_PYMUPDF, "ocr": bool(TESSERACT_BIN)}
+            info["ocr_lang"] = _get_ocr_lang()
+            info["ocr_langs_available"] = _ocr_langs_available()
             info["wheels"] = len(list(WHEELS_DIR.glob("*.whl"))) if WHEELS_DIR.is_dir() else 0
             return self._json(200, info)
 
         if u.path == "/state":
-            return self._json(200, {"root": str(root) if root else None, "port": PORT})
+            return self._json(200, {"root": str(root) if root else None, "port": PORT,
+                                    "ocr_lang": _get_ocr_lang()})
 
         # ---- wheel hosting (works regardless of chosen folder) ----
         if u.path == "/wheels":
@@ -259,51 +305,72 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     doc.close()
 
             if u.path == "/ocr":
-                # OCR an image (png/jpg/bmp/webp) or a scanned PDF (per page).
-                # Uses RapidOCR (CPU, ~1-3 s/page on a laptop).
-                ocr = _get_rapidocr()
-                if ocr is None:
-                    return self._json(501, {"error": "OCR add-on not installed on this machine "
-                                                     "(pip install rapidocr-onnxruntime)"})
+                # OCR an image (png/jpg/bmp/webp/tiff) or a scanned PDF (per
+                # page) using the tesseract binary. Language: request param
+                # `lang` > saved setting (picker UI) > "eng".
+                if not TESSERACT_BIN:
+                    return self._json(501, {"error": "OCR unavailable: tesseract not "
+                                                     "found. Install tesseract or set "
+                                                     "TESSERACT_CMD."})
                 p = resolve_safe(root, unquote(q.get("path", "")))
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                import re as _re
+                raw = q.get("lang") or _get_ocr_lang()
+                # URL '+' decodes to space; treat space and ',' as separators
+                parts = [p for p in _re.split(r"[\s,+]+", raw) if p and _re.fullmatch(r"[a-zA-Z_]{2,8}", p)]
+                lang = "+".join(parts) if parts else "eng"
                 ext = p.suffix.lower()
                 max_pages = int(q.get("max_pages", "5"))
+                dpi = q.get("dpi", "200")
                 results = []
-
-                import tempfile
+                import tempfile, shutil
                 tmpdir = tempfile.mkdtemp(prefix="fb-ocr-")
 
-                def run_image_bytes(img_bytes, name):
-                    # RapidOCR accepts a file path (handles decoding itself)
-                    tf = os.path.join(tmpdir, name)
-                    with open(tf, "wb") as f:
-                        f.write(img_bytes)
-                    res, _ = ocr(tf)
-                    if not res:
-                        return []
-                    return [r[1] for r in res]  # each item: [box, text, score]
+                def run_tesseract(img_path):
+                    cmd = [TESSERACT_BIN, img_path, "stdout", "-l", lang,
+                           "--dpi", dpi]
+                    env = dict(os.environ)
+                    if TESSDATA_DIR:
+                        env["TESSDATA_PREFIX"] = str(TESSDATA_DIR)
+                    r = subprocess.run(cmd, capture_output=True, text=True,
+                                       timeout=120, env=env)
+                    if r.returncode != 0:
+                        raise RuntimeError(r.stderr.strip()[:300])
+                    return [l for l in r.stdout.splitlines() if l.strip()]
 
-                if ext in {".png", ".jpg", ".jpeg", ".bmp", ".webp"}:
-                    lines = run_image_bytes(p.read_bytes(), "img" + ext)
-                    results.append({"page": 1, "lines": lines})
-                elif ext == ".pdf":
-                    if not HAVE_PYMUPDF:
-                        return self._json(501, {"error": "PDF add-on not installed (pip install pymupdf)"})
-                    doc = fitz.open(p)
-                    try:
-                        for i in range(min(doc.page_count, max_pages)):
-                            pix = doc[i].get_pixmap(dpi=200)
-                            lines = run_image_bytes(pix.tobytes("png"), f"p{i}.png")
-                            results.append({"page": i + 1, "lines": lines})
-                    finally:
-                        doc.close()
-                else:
-                    return self._json(400, {"error": f"OCR supports images and PDF, not {ext}"})
-                import shutil
-                shutil.rmtree(tmpdir, ignore_errors=True)
-                return self._json(200, {"path": q.get("path"), "pages": results})
+                try:
+                    if ext in {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}:
+                        lines = run_tesseract(str(p))
+                        results.append({"page": 1, "lines": lines})
+                    elif ext == ".pdf":
+                        if not HAVE_PYMUPDF:
+                            return self._json(501, {"error": "PDF OCR needs the PDF add-on "
+                                                             "(pip install pymupdf)"})
+                        doc = fitz.open(p)
+                        try:
+                            for i in range(min(doc.page_count, max_pages)):
+                                pix = doc[i].get_pixmap(dpi=int(dpi))
+                                tf = os.path.join(tmpdir, f"p{i}.png")
+                                pix.save(tf)
+                                lines = run_tesseract(tf)
+                                results.append({"page": i + 1, "lines": lines})
+                        finally:
+                            doc.close()
+                    else:
+                        return self._json(400, {"error": f"OCR supports images and PDF, not {ext}"})
+                finally:
+                    shutil.rmtree(tmpdir, ignore_errors=True)
+                return self._json(200, {"path": q.get("path"), "lang": lang,
+                                        "pages": results})
+
+            if u.path == "/ocr/config":
+                # GET: current OCR settings + available langs. POST via /api/root.
+                return self._json(200, {
+                    "lang": _get_ocr_lang(),
+                    "available": _ocr_langs_available(),
+                    "engine": TESSERACT_VER or "tesseract",
+                })
 
         except PermissionError as e:
             return self._json(400, {"error": str(e)})
@@ -361,11 +428,24 @@ in <b>one folder you choose</b> on this computer. Nothing else is exposed.</p>
 <button onclick="setRoot()">Save folder</button>
 <p class="ok" id="status"></p>
 <hr>
+<p>OCR language (for reading scanned PDFs / photos):</p>
+<input id="ocrlang" placeholder="swe+eng" value="__OCRLANG__" style="max-width:200px">
+<button onclick="setLang()">Save language</button>
+<p class="hint" id="langs"></p>
+<hr>
 <p class="hint">Status: __STATUS__<br>Keep this window/service running while using Open WebUI.
 You can close this browser tab — the service keeps running.</p>
 <script>
 async function refresh(){const s=await (await fetch('/state')).json();
-document.getElementById('root').value=s.root||'';}
+document.getElementById('root').value=s.root||'';
+const c=await (await fetch('/ocr/config')).json();
+document.getElementById('ocrlang').value=c.lang||'eng';
+document.getElementById('langs').textContent='Installed: '+(c.available||[]).join(', ')+' — engine: '+(c.engine||'?');}
+async function setLang(){
+ const l=document.getElementById('ocrlang').value.trim();
+ const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ocr_lang:l})});
+ const d=await res.json();
+ document.getElementById('status').textContent=d.ok?'✓ OCR language: '+d.ocr_lang:'✗ '+(d.error||'failed');}
 async function setRoot(){
  const r=document.getElementById('root').value.trim();
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root:r})});
@@ -375,14 +455,20 @@ async function setRoot(){
 refresh();
 </script></body></html>"""
 
-    def do_POST_picker(self):  # /api/root
+    def do_POST_picker(self):  # /api/root — sets root and/or ocr_lang
         length = int(self.headers.get("Content-Length", 0))
         body = json.loads(self.rfile.read(length) or b"{}")
-        p = Path(body["root"]).expanduser()
-        if not p.is_dir():
-            return self._json(400, {"ok": False, "error": f"not a folder: {p}"})
-        save_root(p)
-        return self._json(200, {"ok": True, "root": str(p.resolve())})
+        if "ocr_lang" in body:
+            lang = str(body["ocr_lang"]).strip()
+            _set_ocr_lang(lang)
+        if body.get("root"):
+            p = Path(body["root"]).expanduser()
+            if not p.is_dir():
+                return self._json(400, {"ok": False, "error": f"not a folder: {p}"})
+            save_root(p)
+            return self._json(200, {"ok": True, "root": str(p.resolve()),
+                                    "ocr_lang": _get_ocr_lang()})
+        return self._json(200, {"ok": True, "ocr_lang": _get_ocr_lang()})
 
 
 def serve_picker_api(handler_cls):
@@ -415,6 +501,7 @@ def main():
         if urlparse(self.path).path in ("/", "/picker"):
             root = load_root()
             html = Handler.PICKER_HTML.replace("__ROOT__", str(root) if root else "")
+            html = html.replace("__OCRLANG__", _get_ocr_lang())
             html = html.replace("__STATUS__", f"sharing {root}" if root else "no folder chosen yet")
             body = html.encode()
             self.send_response(200)

@@ -102,6 +102,46 @@ Further options if you need them:
 - Read-only mode: remove the `/write` handler.
 - Audit log: append each request to `~/.file-bridge.log`.
 
+## OCR engine & language packs (tesseract)
+
+`/ocr` shells out to the **tesseract binary** (no Python deps). Detection order:
+
+1. `TESSERACT_CMD` env var (absolute path to the binary)
+2. `tesseract` on PATH
+
+Language data (`.traineddata`) resolution order:
+
+1. `TESSDATA_PREFIX` env var
+2. `tessdata/` directory **next to the bridge executable** (bundled — recommended)
+3. tesseract's compiled-in system default (`/usr/share/tesseract-ocr/…`)
+
+The repo bundles `src/tessdata/` with **eng, swe, chi_sim, osd** (~20 MB).
+Ship it inside your installers (it's just files — no install needed).
+
+### Adding languages
+
+Download from https://github.com/tesseract-ocr/tessdata_fast (fast, good) or
+tessdata_best (slower, more accurate) and drop the `.traineddata` into the
+`tessdata/` directory, then restart the bridge. Users pick languages in the
+File Bridge settings page (`http://127.0.0.1:8765`), or the model sets them
+per request (`/ocr?lang=swe+eng`). Combo languages work: `swe+eng` fixes
+å/ä/ö AND keeps digits correct (verified — each alone loses one of the two).
+
+### Per-OS install for admins who don't bundle
+
+- **Windows**: https://github.com/UB-Mannheim/tesseract/wiki (installer incl.
+  language selection; default install is auto-detected on PATH)
+- **macOS**: `brew install tesseract tesseract-lang` (or `brew install
+  tesseract` + manual .traineddata)
+- **Linux**: `apt install tesseract-ocr tesseract-ocr-swe` etc.
+
+### Packaging tesseract into the binaries
+
+Windows/macOS installers should bundle the tesseract binary + your chosen
+langs and set `TESSERACT_CMD`/`TESSDATA_PREFIX` in the launcher. On Linux the
+distro package is fine. (Inno Setup / package_macos.sh have hooks for this;
+also add `--collect-all pymupdf` for the PDF add-on.)
+
 ## Model notes
 
 Needs a model that follows tool-use instructions reliably (tool calling isn't

@@ -86,10 +86,12 @@ Full walkthrough incl. permission prompts: [docs/user-guide.md](docs/user-guide.
 - Only **list / read / write** — no delete, no move, no exec.
 - **Local wheel hosting** — Office libs (openpyxl/python-docx/python-pptx/fpdf2)
   served from the user's own disk (`/wheels`): offline-safe, version-pinned.
-- **PDF text extraction & OCR** (optional add-on) — `/pdf_text` pulls the text
-  layer (pymupdf); `/ocr` recognizes scanned PDFs and photos (rapidocr, CPU,
-  ~1–3 s/page). These run in the bridge's native Python — impossible in the
-  browser's WASM sandbox, which is exactly why they live bridge-side.
+- **PDF text extraction & OCR** (optional add-ons) — `/pdf_text` pulls the
+  text layer (pymupdf); `/ocr` recognizes scanned PDFs and photos via
+  **tesseract** (~0.5 s/page). Language packs are droppable files — bundled
+  eng/swe/chi_sim, user-switchable in the settings page or per request
+  (`lang=swe+eng`). These run in the bridge's native Python — impossible in
+  the browser's WASM sandbox, which is exactly why they live bridge-side.
 - Reads capped at 200 KB; text files.
 - CORS: ships permissive (`*`) for out-of-the-box demos — **lock it to your
   OWUI origin before real rollout** (one line, see admin guide §Hardening).
@@ -103,7 +105,7 @@ Full walkthrough incl. permission prompts: [docs/user-guide.md](docs/user-guide.
 - Office/PDF writes are the sweet spot. Not covered: legacy .doc/.xls/.ppt
   (ask users to convert), PDF *reading* of scanned docs without the OCR add-on.
 - Not Safari-compatible (fundamental browser limitation).
-- OCR/PDF add-ons are optional (`pip install pymupdf rapidocr-onnxruntime`);
+- OCR/PDF add-ons are optional (`pip install pymupdf` + tesseract binary);
   without them those endpoints return a clear 501, everything else works.
 
 ## License

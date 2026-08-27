@@ -85,20 +85,31 @@ git tag v1.0.0 && git push --tags
 # → Actions → build → three artifacts ready to download
 ```
 
-## Bundling the PDF/OCR add-ons (optional but recommended)
+## Bundling the PDF/OCR add-ons (recommended for office deployments)
 
-The bridge core is stdlib-only; `/pdf_text` and `/ocr` light up when pymupdf
-and rapidocr-onnxruntime are importable. For packaged binaries include them:
+Two independent pieces:
+
+**PDF** (`/pdf_text`, PDF page rendering for OCR): pure pip —
 
 ```bash
-pip install pymupdf rapidocr-onnxruntime
-pyinstaller ... --collect-all rapidocr_onnxruntime --collect-all pymupdf ...
+pip install pymupdf
+pyinstaller ... --collect-all pymupdf ...
 ```
 
-(`--collect-all` ships the ONNX models inside the binary.)
-Without them the endpoints return 501 with a clear message; everything else
-works. The *browser-side* wheels live in `src/wheels/` — bundle that directory
-alongside the binary in installers.
+**OCR** (`/ocr`): the **tesseract binary**, not a pip package —
+
+- Bundle `src/tessdata/` (eng/swe/chi_sim/osd, ~20 MB) **next to the bridge
+  executable** — auto-detected, zero config.
+- Bundle a tesseract build (Windows: UB-Mannheim build; macOS: `brew`-style
+  dylibs) and set `TESSERACT_CMD` in the launcher — or rely on the system
+  `tesseract` on PATH (Linux distro package is fine).
+- Extra languages: drop `.traineddata` files from
+  https://github.com/tesseract-ocr/tessdata_fast into `tessdata/`.
+  Users select them at runtime in the settings page — no rebuild needed.
+
+Without the add-ons the endpoints return 501 with a clear message; everything
+else works. The *browser-side* wheels live in `src/wheels/` — bundle that
+directory alongside the binary in installers.
 
 ## Smoke-testing a build
 

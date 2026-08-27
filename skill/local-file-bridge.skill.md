@@ -19,7 +19,8 @@ Access files in **the user's own computer** through their local File Bridge serv
 | `/write` | POST | Write **text** file `{"path","content"}` |
 | `/write_b64` | POST | Write **binary** file `{"path","b64"}` — for Office/PDF/images |
 | `/pdf_text?path=X&pages=1-3,5` | GET | **Extract text layer** from PDF (addon: pymupdf) |
-| `/ocr?path=X&max_pages=5` | GET | **OCR** scanned PDF or image (addon: rapidocr) |
+| `/ocr?path=X&lang=swe+eng&max_pages=5` | GET | **OCR** scanned PDF/image (tesseract) |
+| `/ocr/config` | GET | Current OCR language + installed languages |
 | `/wheels` | GET | Local wheel URLs for micropip (openpyxl etc.) |
 
 ## Bootstrap helpers (run once per session)
@@ -176,15 +177,27 @@ if h["addons"]["pdf"]:
 
 # scanned PDFs (image-only, no text layer) → OCR:
 if h["addons"]["ocr"]:
-    d = await bridge_get("/ocr", {"path": "docs/invoice-scanned.pdf", "max_pages": 5})
+    cfg = await bridge_get("/ocr/config")     # installed languages
+    # lang: default is the user's saved setting; override per request when
+    # the user says the document language, e.g. Swedish invoice → swe+eng
+    d = await bridge_get("/ocr", {"path": "docs/invoice-scanned.pdf",
+                                  "lang": "swe+eng", "max_pages": 5})
     for pg in d["pages"]:
         print(pg["page"], "\n".join(pg["lines"]))
 ```
 
+Language rules: use what `/ocr/config` lists as available. For Nordic office
+docs `swe+eng` works well (verified: fixes å/ä/ö AND keeps digits correct —
+single-language runs each lose one of the two). Chinese: `chi_sim(+eng)`.
+If the needed language is missing, tell the user to add the .traineddata file
+(see admin guide) or change the default in the File Bridge settings page.
+
 Rules: try `/pdf_text` first (instant, exact). If it returns empty text the
-PDF is scanned → fall back to `/ocr` (~1–3 s/page). OCR also works on plain
-images (png/jpg/bmp/webp). If addons are false, tell the user the bridge needs
-`pip install pymupdf rapidocr-onnxruntime` (or the full installer).
+PDF is scanned → fall back to `/ocr` (tesseract: ~0.5 s/page at 200 dpi —
+fast). OCR also works on plain images (png/jpg/bmp/webp/tiff). If
+addons.ocr is false, the user's bridge lacks the tesseract binary — suggest
+the full installer or `TESSERACT_CMD` (admin guide). addons.pdf false →
+`pip install pymupdf`.
 
 ### Plain text / CSV / Markdown
 

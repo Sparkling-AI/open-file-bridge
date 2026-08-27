@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # Addon test: PDF text extraction + OCR, run against the stdlib bridge env.
-# Usage: uv run --with pymupdf,rapidocr-onnxruntime bash tests/addon_test.sh
+# Usage: uv run --with pymupdf bash tests/addon_test.sh
+#        (OCR additionally needs a tesseract binary; TESSERACT_CMD to point at it)
 # (expects the e2e bridge already running on 8765 with addons, or starts its own)
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -10,7 +11,7 @@ TESTDIR=$(mktemp -d)
 
 started_here=0
 if ! curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1; then
-  uv run --with pymupdf,rapidocr-onnxruntime python src/file_bridge.py "$TESTDIR" &
+  uv run --with pymupdf python src/file_bridge.py "$TESTDIR" &
   BPID=$!
   started_here=1
   trap 'kill $BPID 2>/dev/null; rm -rf "$TESTDIR"' EXIT
@@ -21,7 +22,7 @@ fail=0
 check() { if echo "$3" | grep -q "$2"; then echo "  PASS: $1"; else echo "  FAIL: $1 — got: $3"; fail=1; fi }
 
 # make fixtures
-python3 - <<PY
+uv run --with pymupdf python - <<PY
 import fitz
 doc = fitz.open(); page = doc.new_page()
 page.insert_text((72, 72), "E2E INVOICE 997", fontname="helv", fontsize=12)
@@ -45,7 +46,7 @@ check "ocr scanned pdf"  'INVOICE'         "$O"
 check "ocr amount"       '44000'           "$O"
 
 # make standalone image fixture
-python3 - <<PY
+uv run --with pymupdf python - <<PY
 import fitz
 src = fitz.open("$TESTDIR/inv.pdf")
 src[0].get_pixmap(dpi=150).save("$TESTDIR/inv.png")
@@ -53,6 +54,13 @@ src.close()
 PY
 OI=$(curl -s -m 60 "$BRIDGE/ocr?path=inv.png")
 check "ocr image"        'INVOICE'         "$OI"
+
+# language handling
+CFG=$(curl -s "$BRIDGE/ocr/config")
+check "ocr config langs"  'eng'            "$CFG"
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"ocr_lang":"swe+eng"}' >/dev/null
+check "ocr lang saved"    'swe+eng'        "$(curl -s "$BRIDGE/ocr/config")"
+check "ocr lang used"     'swe+eng'        "$(curl -s -m 60 "$BRIDGE/ocr?path=inv-scan.pdf")"
 
 check "pdf_text traversal" 'escapes'       "$(curl -s "$BRIDGE/pdf_text?path=../../etc/passwd")"
 check "ocr traversal"      'escapes'       "$(curl -s "$BRIDGE/ocr?path=/etc/shadow")"

@@ -75,6 +75,13 @@ python3 file_bridge.py ~/my-folder
   the internet, only from your own browser.
 - Files are read as plain text; the bridge caps reads at ~200 KB per file.
 
+## OCR language
+
+File Bridge reads scans in your language. Open `http://127.0.0.1:8765`, set
+**OCR language** (e.g. `swe+eng` for Swedish documents with English words,
+`chi_sim+eng` for Chinese). The list of installed languages is shown there.
+Changing it takes effect immediately — no restart needed.
+
 ## PDFs, scans and photos
 
 If your admin bundled the PDF/OCR add-on (included in the standard installer):
