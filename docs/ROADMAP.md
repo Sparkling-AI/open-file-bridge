@@ -1,7 +1,12 @@
 # File Bridge — Roadmap
 
 Status legend: ☐ not started · ◐ in progress · ✅ done
-Priorities: P0 = production gate · P1 = high value · P2 = later · P3 = optional
+Priorities: P0 = production gate · P0b = scope/accident · P1 = high value · P2 = later · P3 = optional
+
+**Implementation order (2026-08-27):** P0 → P0b → P0.5 (standing) → P1 → P2
+(Linux-only; Win/mac is the user's final phase) → P3 opportunistic.
+Start at P0 item 1. Read docs/DEVNOTES.md first — environment quirks and
+test-infra rebuild live there (`bash scripts/rebuild_testenv.sh`).
 
 ---
 
@@ -200,6 +205,11 @@ through the model anyway).
    on confirm applies. (Borrowed from openapi-servers /edit_file.)
 
 ## P2 — Reliability & rollout
+
+**Sequencing (user decision 2026-08-27):** ALL Linux-side items first;
+Windows/macOS build+verify is a FINAL phase done by the user personally
+after Linux is complete. Frozen-binary repackaging likewise deferred to one
+final validation pass (not after every change). Do not block on either.
 
 ☐ **Windows + macOS real-machine testing** — everything so far verified on
    Linux only: drive letters/backslashes, port-conflict UX, first real Inno
