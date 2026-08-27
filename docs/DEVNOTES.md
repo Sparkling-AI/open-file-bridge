@@ -95,3 +95,28 @@ Add every new gotcha here, not to memory.
   github.com). Don't burn time on push; local commits accumulate.
 - Roadmap: `docs/ROADMAP.md` — P0 security first, P0b scope/accident, then
   P1 reads. Reference index at top maps every item to exact source files.
+
+## Pitfalls found this session (P1, 2026-08-28)
+
+- **Python via bash heredoc mangles escapes**: `bash <<'EOF' python3 -` code
+  containing `\d` regexes lost backslashes, and f-strings with literal `{`
+  produced "single '}' is not allowed" syntax errors that looked like real
+  code bugs. Use the patch tool / write_file for code containing backslashes
+  or braces — never round-trip it through a heredoc.
+- **grep against JSON-escaped responses lies**: diffs returned by `/edit`
+  arrive as JSON strings, so `\n` is literally backslash-n and grep patterns
+  spanning "lines" never match. Pipe through
+  `python3 -c "import json,sys; print(json.load(sys.stdin)['diff'])"` first.
+- **xlsx rel targets are absolute**: workbook.xml.rels points at
+  `/xl/worksheets/sheet1.xml` WITH the leading slash. Strip it before
+  joining with the zip prefix — naive `zip_prefix + rel_target` double-
+  prefixes and every lookup 404s inside the archive.
+- **docx style ids**: paragraph styles are `Title`, `Heading1`, `Heading2`
+  (no hyphen, no space, casing varies by generator). Map by prefix match,
+  not exact equality against "Heading 1".
+- **Test env vars leak across assertions**: the e2e suite raises
+  FILE_BRIDGE_MAX_WRITES=500 globally, which made the rate-breaker trip test
+  unreachable by construction. When a test needs tight limits, give it its
+  OWN bridge instance on a fresh state dir (and its own port timing —
+  the suite hardcodes 8765, so such tests must run LAST or after killing
+  the main instance).
