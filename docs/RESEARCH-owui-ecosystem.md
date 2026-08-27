@@ -27,6 +27,53 @@ Code Interpreter (browser-side execution + pyfetch to localhost).
   "Terminals" orchestrator, which changes the whole security story (files on
   server containers). Document, don't build yet.
 
+## 1b. Deep-dive: can Open Terminal replace Pyodide? (2026-08-27 source analysis)
+
+**What Open Terminal IS (architecturally):** a separate server (usually
+Docker) exposing an OpenAPI tool spec (`run_command`, `read_file`,
+`write_file`, `grep_search`, `glob_search`, `display_file`, process mgmt).
+OWUI's backend acts as a reverse proxy (`routers/terminals.py`); the model
+calls tools directly — no code generation round-trip. Sessions tracked via
+`X-Session-Id` (chat_id), cwd per session. Very solid project: created
+2026-02, 3k stars in ~6 months, releases weekly (v0.12.2 Aug 25), security
+hardened (mandatory API key since v0.11.30).
+
+**Correcting the record on "Pyodide deprecated":** the v0.11.1 admin UI
+marks **Jupyter** as "(Legacy)" — NOT Pyodide. Pyodide remains the zero-setup
+default CI engine. The docs' "legacy / may be deprecated" framing is about
+recommending Open Terminal as the *power* path. No deprecation issue exists
+in the tracker (0 results), and Pyodide bug PRs are still actively merged
+(#28740, #27562…). Realistic read: **basic-vs-pro split, not replacement,
+for at least 6-18 months.** Near-term risk is config drift (the two-switch
+preset), not removal.
+
+**User perspective without browser CI (their end-vision):**
+- Model gets direct tools instead of generated code — arguably better UX
+  (file browser sidebar, inline file cards, drag-drop into terminal fs).
+- Local files: either uploaded INTO the terminal container (sync PR #22528
+  merged), or "Open WebUI Computer" (separate product: your real machine in
+  a browser tab), or per-user containers via the "Terminals" orchestrator
+  (enterprise, k8s/docker, files live server-side per user).
+- The one thing their vision does NOT cover: AI reading a user's EXISTING
+  local folder from a CENTRAL OWUI without uploads — that is exactly our
+  bridge's niche. Their answers all move files to the server side (or need
+  the user's machine to be network-reachable — bare-metal mode reversed).
+
+**Why Open Terminal cannot simply replace our architecture:** tool calls
+route model → OWUI backend → terminal server. For user-LOCAL files the OWUI
+server would need network reachability INTO every user's machine (tunnels,
+VPN) — the exact problem browser-side execution solves for free.
+
+**PLAN B discovered (verify before needed):** Open Terminal security docs
+state user-configured (direct) terminal connections make requests **directly
+from the browser**, not via the OWUI backend. Same pattern exists for
+user-level OpenAPI tool servers (`directConnections` in frontend source).
+=> If Pyodide CI ever dies: expose an OpenAPI spec from the File Bridge
+(`GET /openapi.json` mapping our endpoints as tools), users add it as a
+direct/personal tool server, calls stay browser→localhost, CORS as today.
+Architecture survives, skill becomes thinner (tools instead of codegen).
+Fallback documented; not built.
+
 ## 2. Official `openapi-servers` Filesystem Server — direct feature donors
 
 FastAPI server from OWUI org (server-side, admin-run — different trust model
