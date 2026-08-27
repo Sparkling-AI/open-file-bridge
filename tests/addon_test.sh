@@ -67,7 +67,8 @@ check "ocr lang saved"    'swe+eng'        "$(curl -s "$BRIDGE/ocr/config")"
 check "ocr lang used"     'swe+eng'        "$(curl -s -m 60 "$BRIDGE/ocr?path=inv-scan.pdf")"
 
 check "pdf_text traversal" 'escapes'       "$(curl -s "$BRIDGE/pdf_text?path=../../etc/passwd")"
-check "ocr traversal"      'escapes'       "$(curl -s "$BRIDGE/ocr?path=/etc/shadow")"
+check "ocr traversal"      'escapes'       "$(curl -s "$BRIDGE/ocr?path=../../etc/shadow")"
+check "ocr absolute path"  'not allowed'   "$(curl -s "$BRIDGE/ocr?path=/etc/shadow")"
 
 echo
 if [[ $fail -eq 0 ]]; then echo "ALL ADDON TESTS PASSED ✅"; else echo "SOME ADDON TESTS FAILED ❌"; exit 1; fi
