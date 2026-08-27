@@ -52,12 +52,12 @@ recommended when copying non-trivial blocks.
 
 ## P0 — Production gates (must before internal rollout)
 
-☐ **CORS lock to OWUI origin** — today `Access-Control-Allow-Origin: *`
+✅ **CORS lock to OWUI origin** — today `Access-Control-Allow-Origin: *`
    lets ANY website's JS call the bridge. Fix: first-run picker asks for the
    OWUI URL, saved next to the folder choice in `~/.file-bridge.json`.
    (TODO.md #1 has the full rationale.)
 
-☐ **Bearer token auth** — defense in depth against local pages/processes
+✅ **Bearer token auth** — defense in depth against local pages/processes
    (Firefox does not enforce PNA). Token stored 0600 (OpenWorker secrets.py
    pattern), sent by the skill as a header; **never echoed in chat/context**.
    OpenWorker independently converged on the same 8765+token design.
@@ -94,7 +94,7 @@ recommended when copying non-trivial blocks.
    reversible and deliberate — trust foundation for office use.
 ☐ **"Production mode" hard-fail** — bridge refuses to serve with CORS `*`
    AND no token simultaneously (Open Terminal v0.11.30 refuses keyless
-   start; adopt the stance).
+   start; adopt the stance). ✅ done — see items 1/2 above.
 
 ☐ Skill rule: never dump whole large files into chat; summarize + cite.
 
