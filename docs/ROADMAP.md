@@ -87,7 +87,7 @@ recommended when copying non-trivial blocks.
       continue — large files become page-through instead of a hard cap.
    Enforcement lives in the BRIDGE (hard), skill rules are advisory only.
 
-☐ **Write-before-overwrite snapshots + confirmation tokens** — before any
+✅ **Write-before-overwrite snapshots + confirmation tokens** — before any
    write to an existing file, copy original to `.fb-versions/<name>.<ts>`;
    destructive ops get a two-step confirmation token (60 s validity — design
    borrowed from OWUI openapi-servers filesystem server). Makes model edits

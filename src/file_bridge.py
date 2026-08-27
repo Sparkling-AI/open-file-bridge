@@ -468,6 +468,160 @@ def _windowed_read(p: Path, start_line: int, max_lines: int) -> dict:
     return out
 
 
+# ------------------------------------------------- versions + confirmations
+
+CONFIRM_TTL_SECONDS = 60
+_CONFIRM_FILE = STATE_DIR / "pending-confirmations.json"
+_CONFIRM_LOCK = threading.Lock()
+
+# writes that hit an EXISTING target snapshot it first (P0/P0b: 'makes model
+# edits reversible'). Versions live OUTSIDE all roots — structurally
+# unreachable via the path resolver (user decision 2026-08-27).
+VERSIONS_DIR = STATE_DIR / "versions"
+
+
+def _root_key(root: Path) -> str:
+    return hashlib.sha256(str(root).encode()).hexdigest()[:12]
+
+
+def _versions_root_for(root: Path) -> Path:
+    d = VERSIONS_DIR / _root_key(root)
+    return d
+
+
+def snapshot_before_write(root: Path, target: Path) -> dict | None:
+    """Copy current contents to versions store (root-hash scoped). Returns
+    metadata or None (new file / unreadable). Cap: 8 MB per snapshot,
+    512 MB total store (oldest pruned)."""
+    try:
+        if not target.is_file():
+            return None
+        size = target.stat().st_size
+        if size > MAX_BINARY:
+            return {"skipped": "too_large", "size": size}
+        ts = time.strftime("%Y%m%d-%H%M%S") + "-" + _secrets.token_hex(2)
+        rel = target.relative_to(root).as_posix()
+        vdir = _versions_root_for(root)
+        dest_dir = vdir / ts / rel.lstrip("/")
+        dest_dir.parent.mkdir(parents=True, exist_ok=True)
+        _restrict_to_user(vdir, is_dir=True)
+        shutil.copy2(target, dest_dir)
+        # manifest entry (append-only JSONL, one line per snapshot)
+        with open(vdir / "manifest.jsonl", "a", encoding="utf-8") as fh:
+            fh.write(json.dumps({"ts": ts, "path": rel, "size": size,
+                                 "snapshot": str(dest_dir)}) + "\n")
+        _prune_versions(vdir)
+        return {"ts": ts, "path": rel, "size": size}
+    except Exception as e:
+        return {"skipped": f"error: {e}"}
+
+
+def _prune_versions(vdir: Path, max_bytes: int = 512 * 1024 * 1024):
+    """Keep the store under ~max_bytes by dropping oldest snapshot dirs."""
+    try:
+        snaps = sorted((d for d in vdir.glob("*/") if d.is_dir()))
+        total = sum(f.stat().st_size for d in snaps for f in d.rglob("*") if f.is_file())
+        i = 0
+        while total > max_bytes and i < len(snaps):
+            sz = sum(f.stat().st_size for f in snaps[i].rglob("*") if f.is_file())
+            shutil.rmtree(snaps[i], ignore_errors=True)
+            total -= sz
+            i += 1
+    except Exception:
+        pass
+
+
+def versions_list(root: Path, rel_filter: str = "") -> list:
+    """METADATA ONLY (path/ts/size) — contents are never served (user
+    decision: old/removed content must not re-enter model reach)."""
+    out = []
+    mf = _versions_root_for(root) / "manifest.jsonl"
+    try:
+        for line in open(mf, encoding="utf-8").read().splitlines():
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            if rel_filter and rel_filter not in e.get("path", ""):
+                continue
+            e["restore"] = "POST /versions/restore {path: %r, ts: %r}" % (e["path"], e["ts"])
+            out.append(e)
+    except FileNotFoundError:
+        pass
+    out.reverse()  # newest first
+    return out[:200]
+
+
+def version_restore(root: Path, rel: str, ts: str) -> tuple[bool, str]:
+    """Restore = a write: snapshot-first if target exists now, then copy back."""
+    vdir = _versions_root_for(root)
+    snap_root = vdir / ts / rel.lstrip("/")
+    if not snap_root.is_file():
+        # search by ts + suffix (snapshot dirs embed the tree)
+        cands = list((vdir / ts).rglob(snap_root.name))
+        if len(cands) != 1:
+            return False, f"no unique snapshot for {rel} @ {ts}"
+        snap_root = cands[0]
+    target = resolve_safe(root, rel)
+    if target.exists():
+        snapshot_before_write(root, target)  # don't lose current state either
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(snap_root, target)
+    return True, str(target)
+
+
+# ---- two-step confirmation tokens (pattern: openapi-servers filesystem) ----
+
+def _confirm_load() -> dict:
+    try:
+        data = json.loads(_CONFIRM_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    now = time.time()
+    out = {}
+    for tok, det in data.items():
+        try:
+            if float(det["expiry"]) > now:
+                out[tok] = det
+        except Exception:
+            continue
+    return out
+
+
+def _confirm_save(data: dict):
+    tmp = _CONFIRM_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    _restrict_to_user(tmp, is_dir=False)
+    os.replace(tmp, _CONFIRM_FILE)
+
+
+def confirmation_issue(params: dict) -> dict:
+    """Create a pending confirmation; returns the token payload (TTL 60 s)."""
+    with _CONFIRM_LOCK:
+        allc = _confirm_load()
+        tok = _secrets.token_hex(4)  # 8 hex chars — relayed via chat
+        allc[tok] = {"params": params, "expiry": time.time() + CONFIRM_TTL_SECONDS}
+        _confirm_save(allc)
+    return {"confirmation_token": tok,
+            "expires_in": CONFIRM_TTL_SECONDS}
+
+
+def confirmation_consume(tok: str, params: dict) -> tuple[bool, str]:
+    """Validate token + params match. The token is burned on ANY consume
+    attempt — mismatch included (stricter than the openapi-servers original,
+    which allowed retries: a mismatch means the model changed its request)."""
+    with _CONFIRM_LOCK:
+        allc = _confirm_load()
+        det = allc.pop(tok, None)
+        _confirm_save(allc)
+        if not det:
+            return False, "invalid or expired confirmation token"
+        if det["params"] != params:
+            return False, ("request parameters do not match the original request "
+                           "for this token (token consumed — request a new one)")
+        return True, ""
+
+
 # ------------------------------------------------------------------ server
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -802,9 +956,28 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if u.path == "/write":
                 p = resolve_safe(root, unquote(body.get("path", "")))
                 content = body.get("content", "")
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "write", "path": body.get("path", ""),
+                                  "bytes": len(content)}
+                if p.exists() and p.is_file() and not confirm_token:
+                    # destructive overwrite → two-step confirmation (60 s)
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "target exists — overwrite needs confirmation",
+                        "confirmation_required": True,
+                        "confirm_op": ("reply to the user with the token; re-send the "
+                                       "SAME write with confirmation_token set after "
+                                       "the user approves"),
+                        **iss})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
+                snap = snapshot_before_write(root, p) if p.exists() else None
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(content, encoding="utf-8")
-                return self._json(200, {"ok": True, "written": str(p), "bytes": len(content)})
+                return self._json(200, {"ok": True, "written": str(p), "bytes": len(content),
+                                        "snapshot": snap})
 
             if u.path == "/write_b64":
                 # binary-safe write: takes base64. For Office/PDF/image files.
@@ -815,9 +988,49 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(400, {"error": f"invalid base64: {e}"})
                 if len(raw) > MAX_BINARY:
                     return self._json(413, {"error": f"payload too large: {len(raw)} > {MAX_BINARY} bytes"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "write_b64", "path": body.get("path", ""),
+                                  "bytes": len(raw)}
+                if p.exists() and p.is_file() and not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "target exists — overwrite needs confirmation",
+                        "confirmation_required": True, **iss})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
+                snap = snapshot_before_write(root, p) if p.exists() else None
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_bytes(raw)
-                return self._json(200, {"ok": True, "written": str(p), "bytes": len(raw)})
+                return self._json(200, {"ok": True, "written": str(p), "bytes": len(raw),
+                                        "snapshot": snap})
+
+            if u.path == "/versions/list":
+                rel = body.get("path", "")
+                rel = unquote(rel) if isinstance(rel, str) else ""
+                return self._json(200, {"versions": versions_list(root, rel)})
+
+            if u.path == "/versions/restore":
+                rel = body.get("path", "")
+                ts = str(body.get("ts", ""))
+                if not rel or not ts:
+                    return self._json(400, {"error": "need path + ts (from /versions/list)"})
+                # restore is itself a write over an existing file → confirm
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "restore", "path": rel, "ts": ts}
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {"error": "restore overwrites the current file — "
+                                                     "needs confirmation",
+                                            "confirmation_required": True, **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
+                okr, mes = version_restore(root, unquote(rel), ts)
+                if not okr:
+                    return self._json(404, {"error": mes})
+                return self._json(200, {"ok": True, "restored": mes})
         except PermissionError as e:
             return self._json(400, {"error": str(e)})
         except Exception as e:

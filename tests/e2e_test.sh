@@ -110,6 +110,38 @@ check "peek on office zip"     'office'         "$(curl -s "$BRIDGE/peek?path=mo
 check "peek unknown kind"      '"kind": *"unknown"' "$(curl -s "$BRIDGE/peek?path=doc.dat" $T)"
 check "peek printable ratio"   'printable_ratio' "$(curl -s "$BRIDGE/peek?path=notes.txt" $T)"
 
+# ---------- snapshots + confirmation tokens (P0 #4) ----------
+# first write to a NEW file: no confirmation needed
+check "write new file ok"     '"ok": *true'   "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v1"}')"
+# overwrite WITHOUT token → 409 + token
+OW=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
+check "overwrite demands confirm" 'confirmation_required' "$OW"
+CT=$(echo "$OW" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+# overwrite with WRONG params (different content length) → token mismatch
+check "confirm params mismatch" 'do not match' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2-CHANGED\",\"confirmation_token\":\"$CT\"}")"
+# token was consumed by the failed attempt → now invalid
+check "token one-shot" 'invalid or expired' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT\"}")"
+# fresh token, correct params → success + snapshot recorded
+OW2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
+CT2=$(echo "$OW2" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+W2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT2\"}")
+check "confirmed overwrite ok"  '"ok": *true'     "$W2"
+check "snapshot recorded"       '"snapshot": *{"ts"' "$W2"
+check "v2 landed"               'v2'              "$(cat "$TESTDIR/snapme.txt")"
+# versions list shows metadata only
+VL=$(curl -s -X POST $BRIDGE/versions/list -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt"}')
+check "versions list metadata"  '"path": *"snapme.txt"' "$VL"
+if echo "$VL" | grep -q '"content"'; then echo "  FAIL: version contents leaked"; fail=1; else echo "  PASS: versions are metadata-only"; fi
+VTS=$(echo "$VL" | python3 -c "import json,sys; print(json.load(sys.stdin)['versions'][0]['ts'])")
+# restore needs its own confirmation
+RV=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"ts\":\"$VTS\"}")
+check "restore demands confirm" 'confirmation_required' "$RV"
+RCT=$(echo "$RV" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+check "restore confirmed"       '"ok": *true' "$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"ts\":\"$VTS\",\"confirmation_token\":\"$RCT\"}")"
+check "restore brought v1 back" 'v1'          "$(cat "$TESTDIR/snapme.txt")"
+# versions store is OUTSIDE the root
+if [ -d "$TESTDIR"/.fb-versions ]; then echo "  FAIL: versions inside root"; fail=1; else echo "  PASS: versions stored outside root"; fi
+
 # ---------- state dir isolation & permissions ----------
 if [ -f "$STATEDIR/state.json" ]; then echo "  PASS: state in FILE_BRIDGE_STATE_DIR"; else echo "  FAIL: state.json not in STATEDIR"; fail=1; fi
 PERM=$(stat -c '%a' "$STATEDIR/state.json" 2>/dev/null || echo "?")
