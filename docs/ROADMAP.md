@@ -215,9 +215,13 @@ final validation pass (not after every change). Do not block on either.
    Linux only: drive letters/backslashes, port-conflict UX, first real Inno
    Setup compile, SmartScreen/Gatekeeper flows.
 ☐ Inno Setup compile run on Windows (script written, never executed).
-☐ Audit log (sqlite or JSONL, from OpenWorker audit.py pattern): every call
-   logs ts, endpoint, path, size, status + **secret-scrubbed args** and
-   truncated result preview (copy their `_SECRET_KEYS` scrub list).
+✅ **Audit log** — JSONL at `state_dir/audit.log` (from OpenWorker audit.py
+   pattern): every file-touching call logs ts, endpoint, method, path, size,
+   status + **secret-scrubbed args** (`_SECRET_KEYS` scrub list adopted;
+   file-content keys reduced to type+length — contents never logged).
+   0600, best-effort append, 5 MB simple rotation to `.log.1`. No API —
+   owner-facing only (state dir is structurally outside every root, so the
+   model can never read it).
 ☐ Atomic writes (temp + rename); symlink-escape tests on Windows.
 ☐ Log rotation; optional service/LaunchAgent installers.
 ☐ `/ocr_pdf` — tesseract PDF output → searchable PDF (scan → archive).
