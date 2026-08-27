@@ -32,7 +32,16 @@ Access files in **the user's own computer** through their local File Bridge serv
 | `/html_text?path=X` | GET | HTML with tags stripped (script/style dropped) — not raw source |
 | `/search?q=&glob=*.md&exclude=&context=2&case=0` | GET | Cross-file grep with context lines; respects ignore lists |
 | `/edit` | POST | `{"path","edits":[{"old_text","new_text"}],"dry_run":true}` → unified diff preview; real apply needs confirmation token (409 flow) |
+| `/directory_tree?path=.&max_entries=500&max_depth=6` | GET | Recursive folder **tree** (name/type/size + children) — respects ignore lists, symlinks never listed |
+| `/zip` | POST | `{"members":["dir","file.txt"],"out":"bundle.zip"}` — create archive (members stored flat; recursive for dirs) |
+| `/unzip` | POST | `{"path":"bundle.zip","dest":"outdir"}` — extract under dest/ (zip-slip names rejected) |
 | `/wheels` | GET | Local wheel URLs for micropip (openpyxl etc.) |
+
+**Caching (P2):** `/pdf_text` and `/ocr` results are cached per
+(sha256(file), params) — a repeat call returns the same answer instantly
+with `"cached": true`. Editing the file or changing params (lang, dpi,
+pages) recomputes. You don't need to do anything; just don't be surprised
+by the flag.
 
 **Reading rules (P0):** `/read` is text-only and **fail-closed** — unknown
 extensions and binary files are rejected with 415 + a routing hint. When
