@@ -34,6 +34,7 @@ import secrets as _secrets
 import shutil
 import socketserver
 import subprocess
+import stat
 import sys
 import tempfile
 import threading
@@ -453,6 +454,42 @@ def resolve_safe(root: Path, rel: str) -> Path:
     return p
 
 
+# ------------------------------------------- atomic writes (P2, temp+rename)
+# A crash mid-write must never leave a torn file at a real path: write to a
+# same-dir temp file, fsync, then os.replace (atomic on POSIX + Win on same
+# volume). Final-path symlink protection: resolve_safe() rejects escape, but
+# the LAST hop could still be a symlink swapped in after resolution — for
+# overwrite targets we refuse to replace through one.
+
+def atomic_write_bytes(target: Path, data: bytes, *, preserve_mode: bool = True):
+    """Atomic binary write: same-dir tmp → fsync → chmod → os.replace."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink():
+        raise PermissionError("refusing to write through a symlink")
+    mode = None
+    if preserve_mode and target.exists():
+        mode = stat.S_IMODE(target.stat().st_mode)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=".fb-tmp-")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode if mode is not None else 0o644)
+        os.replace(tmp, target)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+def atomic_write_text(target: Path, text: str, *, preserve_mode: bool = True):
+    """Atomic text write (UTF-8). See atomic_write_bytes."""
+    atomic_write_bytes(target, text.encode("utf-8"), preserve_mode=preserve_mode)
+
+
 # ----------------------------------------------------- read safety (P0 #3)
 
 # /read serves ONLY these extensions — fail-closed on anything else (unknown
@@ -644,7 +681,12 @@ def version_restore(root: Path, rel: str, ts: str) -> tuple[bool, str]:
     if target.exists():
         snapshot_before_write(root, target)  # don't lose current state either
     target.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(snap_root, target)
+    # verified copy-then-rename (snapshot store may be another filesystem)
+    fd, tmp = tempfile.mkstemp(dir=str(target.parent), prefix=".fb-restore-")
+    os.close(fd)
+    shutil.copy2(snap_root, tmp)
+    os.chmod(tmp, stat.S_IMODE(snap_root.stat().st_mode))
+    os.replace(tmp, target)
     return True, str(target)
 
 
@@ -1396,6 +1438,16 @@ def resolve_any(rel: str):
     p = (root / rel).resolve()
     if os.path.commonpath([str(root), str(p)]) != str(root):
         raise PermissionError("path escapes shared root")
+    # symlink guard: no component of p may be a symlink (a link to a dir
+    # INSIDE the same root still resolves inside, but mixed trust — refuse
+    # uniformly; the model can address the real path instead)
+    cur = root
+    for comp in rel.split("/"):
+        if not comp:
+            continue
+        cur = cur / comp
+        if cur.is_symlink():
+            raise PermissionError(f"symlink in path is not allowed: {comp}")
     return p, root, cfg
 
 
@@ -1925,8 +1977,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                             "hint": "relay this to the user and wait "
                                                     "for their confirmation"})
                 snap = snapshot_before_write(root, p) if p.exists() else None
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_text(content, encoding="utf-8")
+                atomic_write_text(p, content)
                 return self._json(200, {"ok": True, "written": str(p), "bytes": len(content),
                                         "snapshot": snap})
 
@@ -1960,8 +2011,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                             "hint": "relay this to the user and wait "
                                                     "for their confirmation"})
                 snap = snapshot_before_write(root, p) if p.exists() else None
-                p.parent.mkdir(parents=True, exist_ok=True)
-                p.write_bytes(raw)
+                atomic_write_bytes(p, raw)
                 return self._json(200, {"ok": True, "written": str(p), "bytes": len(raw),
                                         "snapshot": snap})
 
@@ -1994,7 +2044,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not okr:
                     return self._json(429, {"error": err, "rate_limited": True})
                 snap = snapshot_before_write(root, p)
-                p.write_text(modified, encoding="utf-8")
+                atomic_write_text(p, modified)
                 return self._json(200, {"ok": True, "path": body.get("path"),
                                         "snapshot": snap})
 
@@ -2112,8 +2162,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                             "written so far are listed",
                                                     "results": results})
                         snap = snapshot_before_write(root, p) if p.exists() else None
-                        p.parent.mkdir(parents=True, exist_ok=True)
-                        p.write_text(content, encoding="utf-8")
+                        atomic_write_text(p, content)
                         results.append({"path": path, "ok": True, "bytes": len(content),
                                         "snapshot": snap})
                     except (PermissionError, ExcludedPath) as e:

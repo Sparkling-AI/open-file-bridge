@@ -358,6 +358,48 @@ else
   echo "  FAIL: /api/root audit missing or origin leaked"; fail=1
 fi
 
+# ---------- atomic writes (P2): mode preserved, no tmp leftovers ----------
+chmod 640 "$TESTDIR/notes.txt" 2>/dev/null || true
+check "overwrite keeps mode" '600\|640' "$(OWT=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"notes.txt","content":"v2 atomic"}'); OCT=$(echo "$OWT" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo ""); curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"content\":\"v2 atomic\",\"confirmation_token\":\"$OCT\"}" >/dev/null; stat -c '%a' "$TESTDIR/notes.txt")"
+check "atomic write landed"  'v2 atomic'  "$(cat "$TESTDIR/notes.txt")"
+LEFT=$(find "$TESTDIR" -maxdepth 1 -name '.fb-tmp-*' -o -maxdepth 1 -name '.fb-restore-*' | wc -l)
+if [ "$LEFT" = "0" ]; then echo "  PASS: no temp files left behind"; else echo "  FAIL: $LEFT temp files left in root"; fail=1; fi
+# edit path also atomic + mode-preserving
+chmod 640 "$TESTDIR/contract.txt" 2>/dev/null || true
+EDM=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"60 days","new_text":"90 days"}]}')
+ECT2=$(echo "$EDM" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
+curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d "{\"path\":\"contract.txt\",\"edits\":[{\"old_text\":\"60 days\",\"new_text\":\"90 days\"}],\"confirmation_token\":\"$ECT2\"}" >/dev/null
+if [ "$(stat -c '%a' "$TESTDIR/contract.txt")" = "640" ]; then echo "  PASS: edit preserves mode"; else echo "  FAIL: edit changed mode to $(stat -c '%a' "$TESTDIR/contract.txt")"; fail=1; fi
+check "edit atomic landed" '90 days' "$(cat "$TESTDIR/contract.txt")"
+# write_b64 preserves mode too
+chmod 640 "$TESTDIR/out.bin" 2>/dev/null || true
+OB=$(curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n x | base64)\"}")
+OBT=$(echo "$OB" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
+curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n y | base64)\",\"confirmation_token\":\"$OBT\"}" >/dev/null
+if [ "$(stat -c '%a' "$TESTDIR/out.bin")" = "640" ]; then echo "  PASS: write_b64 preserves mode"; else echo "  FAIL: write_b64 mode $(stat -c '%a' "$TESTDIR/out.bin")"; fail=1; fi
+# versions/restore lands atomically with snapshot's mode
+VLN=$(curl -s -X POST $BRIDGE/versions/list -H 'Content-Type: application/json' $T -d '{"path":"notes.txt"}')
+VRT=$(echo "$VLN" | python3 -c "import json,sys; print(json.load(sys.stdin)['versions'][0]['ts'])")
+VRV=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"ts\":\"$VRT\"}")
+VRT2=$(echo "$VRV" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
+check "restore confirmed (atomic)" '"ok": *true' "$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"ts\":\"$VRT\",\"confirmation_token\":\"$VRT2\"}")"
+check "restore landed original" 'test content' "$(cat "$TESTDIR/notes.txt")"
+RPERM=$(stat -c '%a' "$TESTDIR/notes.txt")
+if [ "$RPERM" = "640" ] || [ "$RPERM" = "600" ]; then echo "  PASS: restore preserves mode ($RPERM)"; else echo "  FAIL: restore mode $RPERM"; fail=1; fi
+
+# ---------- symlink protection (P2, Linux) ----------
+mkdir -p "$TESTDIR/realdir"
+echo "outside data" > "$TESTDIR/realdir/secret.txt"
+ln -sfn "$TESTDIR/realdir" "$TESTDIR/linkdir"
+ln -sf "$TESTDIR/realdir/secret.txt" "$TESTDIR/linkfile.txt"
+check "write via dir-symlink blocked"  'escapes\|not found\|symlink' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"linkdir/newfile.txt","content":"x"}')"
+check "read via dir-symlink blocked"   'symlink' "$(curl -s "$BRIDGE/read?path=linkdir/secret.txt" $T)"
+check "write through file-symlink refused" 'symlink' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"linkfile.txt","content":"x"}')"
+if [ -L "$TESTDIR/linkfile.txt" ]; then echo "  PASS: symlink not clobbered by replace"; else echo "  FAIL: symlink was replaced"; fail=1; fi
+if grep -q "outside data" "$TESTDIR/realdir/secret.txt" 2>/dev/null; then echo "  PASS: symlink target untouched"; else echo "  FAIL: secret.txt via symlink was modified"; fail=1; fi
+LEFT2=$(find "$TESTDIR" -maxdepth 1 -name '.fb-*' | wc -l)
+if [ "$LEFT2" = "0" ]; then echo "  PASS: still no temp leftovers after symlink tests"; else echo "  FAIL: $LEFT2 temp files left"; fail=1; fi
+
 # pdf_text/ocr functional tests: run suite WITH addons via:
 #   uv run --with pymupdf,rapidocr-onnxruntime bash tests/e2e_test.sh
 ADDONS=$(curl -s $BRIDGE/health | python3 -c "import json,sys; print(json.load(sys.stdin)['addons']['pdf'])" 2>/dev/null || echo False)
