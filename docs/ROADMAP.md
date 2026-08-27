@@ -233,8 +233,12 @@ final validation pass (not after every change). Do not block on either.
    Windows symlink/junction tests deferred to the user's final phase.
 ☐ Log rotation; optional service/LaunchAgent installers.
 ☐ `/ocr_pdf` — tesseract PDF output → searchable PDF (scan → archive).
-☐ Content-hash cache for /pdf_text + /ocr results (OpenWorker pdf_support:
-   history replays every turn — same for chat re-asks; sha256+params keyed).
+✅ **Content-hash cache for /pdf_text + /ocr** (OpenWorker pdf_support
+   `_cached` pattern): results keyed by (sha256(file bytes), op, params) —
+   in-memory, 16-entry FIFO, `"cached": true` flag on hits. Re-asks and
+   history replays skip raster+tesseract entirely; any file change
+   (different digest) or param change (lang/dpi/pages/max_pages) computes
+   fresh. In-memory only: restart clears it, no disk state.
 ☐ `/pptx_from_template` (.potx/pptx layout matching) + `/docx_merge`
    placeholder filling — from OpenWorker issue #454 (real office demand).
 ☐ `/pdf_text?mode=text|images` — images mode rasters pages (pypdfium2,
