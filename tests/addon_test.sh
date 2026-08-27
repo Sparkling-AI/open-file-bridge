@@ -70,5 +70,31 @@ check "pdf_text traversal" 'escapes'       "$(curl -s "$BRIDGE/pdf_text?path=../
 check "ocr traversal"      'escapes'       "$(curl -s "$BRIDGE/ocr?path=../../etc/shadow")"
 check "ocr absolute path"  'not allowed'   "$(curl -s "$BRIDGE/ocr?path=/etc/shadow")"
 
+# ---------- content-hash cache (P2) ----------
+T2=$(curl -s "$BRIDGE/pdf_text?path=inv.pdf")
+check "cache miss first"   'E2E INVOICE 997' "$T2"
+T3=$(curl -s "$BRIDGE/pdf_text?path=inv.pdf")
+check "cache hit second"   'E2E INVOICE 997' "$T3"
+check "cache hit flagged"  '"cached": *true'  "$T3"
+# modified file → different sha256 → miss again
+python3 - <<PY
+import fitz
+doc = fitz.open("$TESTDIR/inv.pdf")
+doc[0].insert_text((72, 120), "REVISED TOTAL 55000", fontname="helv", fontsize=12)
+doc.saveIncr()
+doc.close()
+PY
+T4=$(curl -s "$BRIDGE/pdf_text?path=inv.pdf")
+check "cache invalidates on change" 'REVISED TOTAL 55000' "$T4"
+if echo "$T4" | grep -q '"cached": *true'; then echo "  FAIL: stale cache served after edit"; fail=1; else echo "  PASS: no stale cache after edit"; fi
+# ocr cache: second identical call hits
+O2=$(curl -s -m 120 "$BRIDGE/ocr?path=inv-scan.pdf")
+O3=$(curl -s -m 120 "$BRIDGE/ocr?path=inv-scan.pdf")
+check "ocr cache hit"      '"cached": *true'  "$O3"
+check "ocr cache content"  'INVOICE'          "$O3"
+# different params → different cache key → fresh compute (no cached flag)
+O4=$(curl -s -m 120 "$BRIDGE/ocr?path=inv-scan.pdf&dpi=150")
+if echo "$O4" | grep -q '"cached": *true'; then echo "  FAIL: params ignored in cache key"; fail=1; else echo "  PASS: params part of cache key"; fi
+
 echo
 if [[ $fail -eq 0 ]]; then echo "ALL ADDON TESTS PASSED ✅"; else echo "SOME ADDON TESTS FAILED ❌"; exit 1; fi

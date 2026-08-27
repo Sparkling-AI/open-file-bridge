@@ -746,6 +746,60 @@ def confirmation_consume(tok: str, params: dict) -> tuple[bool, str]:
 
 
 
+# -------------------------------------------------- result cache (P2)
+# /pdf_text + /ocr are the expensive endpoints (raster + tesseract ≈ 1s per
+# page). History replays and chat re-asks hit the same file+params over and
+# over — cache the computed result keyed by (sha256(content), op+params).
+# Pattern: openworker coworker/pdf_support.py `_cached` LRU.
+
+_CACHE: dict[tuple, dict] = {}
+_CACHE_MAX = 16          # entries (each entry = one full result doc)
+_CACHE_LOCK = threading.Lock()
+
+
+def _file_digest(p: Path) -> str | None:
+    try:
+        h = hashlib.sha256()
+        with open(p, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+        return h.hexdigest()
+    except OSError:
+        return None
+
+
+def _cache_key(p: Path, op: str, params: dict) -> tuple | None:
+    d = _file_digest(p)
+    if d is None:
+        return None
+    return (d, op, json.dumps(params, sort_keys=True, default=str))
+
+
+def cache_get(p: Path, op: str, params: dict):
+    """Returns (hit, value). hit=False → compute, then cache_put()."""
+    key = _cache_key(p, op, params)
+    if key is None:
+        return False, None
+    with _CACHE_LOCK:
+        val = _CACHE.get(key)
+        return val is not None, val
+
+
+def cache_put(p: Path, op: str, params: dict, value: dict) -> None:
+    key = _cache_key(p, op, params)
+    if key is None:
+        return
+    with _CACHE_LOCK:
+        if len(_CACHE) >= _CACHE_MAX and key not in _CACHE:
+            _CACHE.pop(next(iter(_CACHE)))   # FIFO eviction, openworker-style
+        _CACHE[key] = value
+
+
+def cache_stats() -> dict:
+    with _CACHE_LOCK:
+        return {"entries": len(_CACHE), "max": _CACHE_MAX}
+
+
 # ------------------------------------------------- office reads (P1)
 
 # Optional native readers; stdlib zipfile+XML fallbacks keep the bridge
@@ -1747,6 +1801,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
                 pages_param = q.get("pages", "")  # "1-3,5" optional, 1-indexed
+                cache_params = {"pages": pages_param}
+                hit, cached = cache_get(p, "pdf_text", cache_params)
+                if hit:
+                    return self._json(200, {**cached, "cached": True})
                 doc = fitz.open(p)
                 try:
                     total = doc.page_count
@@ -1770,8 +1828,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         if char_budget <= 0:
                             pages_out.append({"page": i + 1, "text": "…truncated (budget)"})
                             break
-                    return self._json(200, {"path": q.get("path"), "page_count": total,
-                                            "pages": pages_out})
+                    out = {"path": q.get("path"), "page_count": total,
+                           "pages": pages_out}
+                    cache_put(p, "pdf_text", cache_params, out)
+                    return self._json(200, out)
                 finally:
                     doc.close()
 
@@ -1793,6 +1853,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 ext = p.suffix.lower()
                 max_pages = int(q.get("max_pages", "5"))
                 dpi = q.get("dpi", "200")
+                cache_params = {"lang": lang, "max_pages": max_pages, "dpi": dpi}
+                hit, cached = cache_get(p, "ocr", cache_params)
+                if hit:
+                    return self._json(200, {**cached, "cached": True})
                 results = []
                 tmpdir = tempfile.mkdtemp(prefix="fb-ocr-")
 
@@ -1830,8 +1894,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         return self._json(400, {"error": f"OCR supports images and PDF, not {ext}"})
                 finally:
                     shutil.rmtree(tmpdir, ignore_errors=True)
-                return self._json(200, {"path": q.get("path"), "lang": lang,
-                                        "pages": results})
+                out = {"path": q.get("path"), "lang": lang,
+                       "pages": results}
+                cache_put(p, "ocr", cache_params, out)
+                return self._json(200, out)
 
             if u.path == "/search":
                 base = unquote(q.get("path", "."))
