@@ -212,6 +212,53 @@ curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"reado
 # rate circuit breaker: moved to END of script (needs its own low-limit
 # instance; see bottom).
 
+# ---------- P1: bridge-side office reads ----------
+if command -v uv >/dev/null; then
+uv run --with openpyxl --with python-docx --with python-pptx python3 - "$TESTDIR" <<'PYEOF'
+import sys, pathlib
+d = pathlib.Path(sys.argv[1])
+import openpyxl
+wb = openpyxl.Workbook(); ws = wb.active; ws.title = "Data"
+ws.append(["Item", "Qty", "Price"]); ws.append(["Widget", 4, 12500])
+ws.append(["Gadget", 2, 9000])
+ws.merge_cells("A5:B5"); ws["A5"] = "merged-here"
+wb.save(d / "sheet.xlsx")
+from docx import Document
+doc = Document()
+doc.add_heading("Quarterly Report", 0)
+doc.add_paragraph("Revenue is up.")
+doc.add_heading("Details", 1)
+t = doc.add_table(rows=2, cols=2); t.cell(0,0).text="K"; t.cell(0,1).text="V"
+t.cell(1,0).text="a"; t.cell(1,1).text="1"
+doc.save(d / "report.docx")
+from pptx import Presentation
+prs = Presentation()
+s1 = prs.slides.add_slide(prs.slide_layouts[0])
+s1.shapes.title.text = "Q3 Review"; s1.placeholders[1].text = "Revenue up 17%"
+s2 = prs.slides.add_slide(prs.slide_layouts[1])
+s2.shapes.title.text = "Agenda"; s2.placeholders[1].text = "One\nTwo"
+prs.save(d / "deck.pptx")
+print("fixtures ok")
+PYEOF
+check "xlsx read engine"   '"engine"'   "$(curl -s "$BRIDGE/xlsx_read?path=sheet.xlsx" $T)"
+check "xlsx headers"       'Widget'     "$(curl -s "$BRIDGE/xlsx_read?path=sheet.xlsx" $T)"
+check "xlsx numeric cell"  '12500'      "$(curl -s "$BRIDGE/xlsx_read?path=sheet.xlsx" $T)"
+check "xlsx sheet select"  '"sheet": *"Data"' "$(curl -s "$BRIDGE/xlsx_read?path=sheet.xlsx&sheet=Data" $T)"
+check "xlsx bad sheet"     'no such sheet' "$(curl -s "$BRIDGE/xlsx_read?path=sheet.xlsx&sheet=Nope" $T)"
+check "xlsx range"         '"row_count": *2' "$(curl -s "$BRIDGE/xlsx_read?path=sheet.xlsx&range=A1:B2" $T)"
+check "xlsx merged"        'A5:B5'      "$(curl -s "$BRIDGE/xlsx_read?path=sheet.xlsx" $T)"
+check "xlsx wrong type"    'not an xlsx' "$(curl -s "$BRIDGE/xlsx_read?path=notes.txt" $T)"
+XLSX_STDLIB=$(FILE_BRIDGE_NO_OPENPYXL=1 curl -s "$BRIDGE/xlsx_read?path=sheet.xlsx" $T 2>/dev/null || echo "")
+check "docx heading"       'Quarterly Report' "$(curl -s "$BRIDGE/docx_read?path=report.docx" $T | python3 -c "import json,sys; print(json.load(sys.stdin)['markdown'])")"
+check "docx subheading"    '# Details' "$(curl -s "$BRIDGE/docx_read?path=report.docx" $T | python3 -c "import json,sys; print(json.load(sys.stdin)['markdown'])")"
+check "docx table pipe"    '| K | V |' "$(curl -s "$BRIDGE/docx_read?path=report.docx" $T | python3 -c "import json,sys; print(json.load(sys.stdin)['markdown'])")"
+check "docx wrong type"    'not a docx' "$(curl -s "$BRIDGE/docx_read?path=sheet.xlsx" $T)"
+check "pptx slide count"   '"slide_count": *2' "$(curl -s "$BRIDGE/pptx_read?path=deck.pptx" $T)"
+check "pptx title"         'Q3 Review' "$(curl -s "$BRIDGE/pptx_read?path=deck.pptx" $T)"
+check "pptx texts"         'Revenue up 17' "$(curl -s "$BRIDGE/pptx_read?path=deck.pptx" $T)"
+check "pptx wrong type"    'not a pptx' "$(curl -s "$BRIDGE/pptx_read?path=report.docx" $T)"
+fi
+
 # ---------- state dir isolation & permissions ----------
 if [ -f "$STATEDIR/state.json" ]; then echo "  PASS: state in FILE_BRIDGE_STATE_DIR"; else echo "  FAIL: state.json not in STATEDIR"; fail=1; fi
 PERM=$(stat -c '%a' "$STATEDIR/state.json" 2>/dev/null || echo "?")

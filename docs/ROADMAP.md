@@ -187,10 +187,10 @@ model context is the same. READ belongs bridge-side (native libs, no session
 install), WRITE stays in Pyodide for now (already works, content flows
 through the model anyway).
 
-☐ `/xlsx_read?path=&sheet=&range=` → JSON: row count, headers, data grid,
+✅ `/xlsx_read?path=&sheet=&range=` → JSON: row count, headers, data grid,
    merged cells. Uses full native openpyxl (Pyodide wheel is a subset).
-☐ `/docx_read?path=` → markdown-ish text preserving headings/lists/tables.
-☐ `/pptx_read?path=` → per-slide title + text boxes.
+✅ `/docx_read?path=` → markdown-ish text preserving headings/lists/tables.
+✅ `/pptx_read?path=` → per-slide title + text boxes.
    Side effect: pure-read tasks need NO wheel install → first interaction
    drops from ~3 s to ~0 s.
 ☐ `/html_text?path=` — strip tags via stdlib html.parser (today /read
@@ -269,7 +269,7 @@ final validation pass (not after every change). Do not block on either.
 | txt/md/code | ✅ /read | ✅ /write | |
 | csv | ✅ /read (whole) | ✅ | P1: head/stats endpoints |
 | html | ⚠ raw source | ✅ | P1: /html_text |
-| xlsx/docx/pptx | ✅ via Pyodide wheels | ✅ via Pyodide | P1: bridge-side read |
+| xlsx/docx/pptx | ✅ /xlsx_read /docx_read /pptx_read | ✅ via Pyodide | |
 | pdf (text layer) | ✅ /pdf_text | ✅ fpdf2 (Pyodide) | |
 | pdf (scanned) | ✅ /ocr (tesseract) | — | swe+eng combo verified |
 | images | ✅ /ocr, /read_b64 | ✅ /write_b64 | |
