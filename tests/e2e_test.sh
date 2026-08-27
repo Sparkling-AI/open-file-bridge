@@ -60,6 +60,10 @@ fi
 # ---------- normal endpoints (with token) ----------
 T="-H X-Bridge-Token:$TOKEN"
 check "health ok"          '"ok": *true'          "$(curl -s $BRIDGE/health)"
+VR=$(curl -s $BRIDGE/version)
+check "version endpoint"   '"bridge"'  "$VR"
+check "version has skill"  '"skill"'   "$VR"
+check "version no token needed" '"bridge"' "$(curl -s $BRIDGE/version)"
 check "health shows root"  "$TESTDIR"             "$(curl -s $BRIDGE/health)"
 check "list contains file" 'notes.txt'            "$(curl -s $BRIDGE/list?path=. $T)"
 check "read content"       'test content'         "$(curl -s "$BRIDGE/read?path=notes.txt" $T)"

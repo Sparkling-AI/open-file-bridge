@@ -51,7 +51,8 @@ MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
-VERSION = "2.0"
+VERSION = "2.1"
+SKILL_VERSION = "2.1"   # keep in sync with skill/local-file-bridge.skill.md
 
 _IS_WINDOWS = sys.platform == "win32"
 
@@ -1850,6 +1851,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
             info["security"] = mode
             info["locked"] = mode != "UNLOCKED"
             return self._json(200, info)
+
+        if u.path == "/version":
+            # token-free like /health: just versions, no fs info.
+            # The skill calls this at session start; a mismatch means the
+            # admin updated one side but not the other → nudge.
+            return self._json(200, {"bridge": VERSION, "skill": SKILL_VERSION,
+                                    "skill_expected": SKILL_VERSION,
+                                    "note": "skill markdown must match; re-run "
+                                            "scripts/setup_owui.py to sync"})
 
         if u.path == "/state":
             return self._json(200, {
