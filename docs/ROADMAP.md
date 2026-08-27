@@ -222,7 +222,15 @@ final validation pass (not after every change). Do not block on either.
    0600, best-effort append, 5 MB simple rotation to `.log.1`. No API —
    owner-facing only (state dir is structurally outside every root, so the
    model can never read it).
-☐ Atomic writes (temp + rename); symlink-escape tests on Windows.
+✅ **Atomic writes** — /write /write_b64 /edit /write_many and
+   /versions/restore now land via same-dir temp file → fsync → chmod →
+   `os.replace` (crash mid-write can never leave a torn file at a real
+   path; chmod happens on the temp BEFORE the rename so the mode actually
+   lands). Existing-file modes are preserved across overwrites.
+   Symlink defense (Linux-verified): every path component is checked with
+   `is_symlink()` in resolve_any (reads AND writes refuse symlinks —
+   in-root ones too), and atomic_write refuses a symlink final hop.
+   Windows symlink/junction tests deferred to the user's final phase.
 ☐ Log rotation; optional service/LaunchAgent installers.
 ☐ `/ocr_pdf` — tesseract PDF output → searchable PDF (scan → archive).
 ☐ Content-hash cache for /pdf_text + /ocr results (OpenWorker pdf_support:
