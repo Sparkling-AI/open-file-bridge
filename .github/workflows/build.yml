@@ -1,0 +1,59 @@
+name: build
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: FileBridge-windows-x64
+            run_windows: ${{ true }}
+          - os: macos-latest
+            artifact: FileBridge-macos
+          - os: ubuntu-latest
+            artifact: FileBridge-linux
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        working-directory: build
+        run: pyinstaller --noconfirm file_bridge_windows.spec
+
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: pyinstaller --onefile --windowed --name FileBridge src/file_bridge.py
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: pyinstaller --onefile --name FileBridge src/file_bridge.py
+
+      - name: Smoke test (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          ./dist/FileBridge /tmp &
+          sleep 2
+          curl -sf http://127.0.0.1:8765/health
+          kill %1
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: |
+            dist/FileBridge.exe
+            dist/FileBridge.app
+            dist/FileBridge

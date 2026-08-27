@@ -1,0 +1,91 @@
+# File Bridge — User Guide
+
+File Bridge lets **your** Open WebUI chats read and write files in **one folder
+on your own computer**. Your files never pass through the Open WebUI server —
+everything happens between your browser and your own machine.
+
+## Requirements
+
+- **Browser: Chrome, Edge, or Firefox.** ⚠️ **Do NOT use Safari** — Safari
+  blocks web pages from calling `http://127.0.0.1` services, so File Bridge
+  cannot work there. This is a hard Safari limitation, not a bug.
+- One of: Windows 10/11, macOS 11+, or Linux.
+- The File Bridge app (get it from your admin, or Downloads below).
+
+## Install & first run
+
+### Windows
+1. Download `FileBridge-Setup.exe` (or `FileBridge.exe`).
+2. Double-click. If Windows shows **"Windows protected your PC"**
+   (SmartScreen — normal for new unsigned apps): click **More info → Run anyway**.
+3. Your browser opens the File Bridge page. Paste the folder you want to share,
+   e.g. `C:\Users\you\Documents\my-project`, click **Save folder**.
+4. Done. A small File Bridge process now runs in the background.
+   Keep it running while you use Open WebUI (re-launch it any time from the
+   Start menu / desktop icon; your folder choice is remembered).
+
+### macOS
+1. Download `FileBridge-macos.zip`, unzip it, drag **FileBridge** into **Applications**.
+2. First launch: **right-click FileBridge → Open → Open**
+   (bypasses Gatekeeper for unsigned apps — needed only once).
+3. Your browser opens the File Bridge page. Type or paste the folder to share,
+   e.g. `/Users/you/Documents/my-project`, click **Save folder**.
+4. Done. File Bridge runs quietly in the background (no Dock icon).
+
+### Linux
+Either run the binary:
+```bash
+chmod +x FileBridge
+./FileBridge ~/my-folder
+```
+or with Python (no install needed — stdlib only):
+```bash
+python3 file_bridge.py ~/my-folder
+```
+
+## Using it in Open WebUI
+
+1. In Open WebUI, select the model your admin prepared
+   (usually called **"Local Files Assistant"**).
+2. Just ask naturally: *"List the files in my folder"* or
+   *"Read notes.txt and summarize it"* or *"Write a draft to report.md"*.
+3. **First time only:** the browser shows a permission prompt —
+   - Chrome/Edge: *"File Bridge wants to access devices on your local network"* → click **Allow**
+   - Firefox: no prompt (localhost fetches are allowed silently)
+4. That's it. The AI reads/writes only inside the folder you chose.
+
+## What to watch out for
+
+| Thing | What happens | What you do |
+|---|---|---|
+| Browser local-network prompt | Appears once (Chrome 142+/Edge) | Click **Allow** — this is what authorizes the connection |
+| Safari | Blocked entirely | Use Chrome, Edge, or Firefox instead |
+| SmartScreen / Gatekeeper warning | First launch of unsigned app | Windows: More info → Run anyway · macOS: right-click → Open |
+| Bridge not running | AI says it can't reach your files | Start the File Bridge app again |
+| Wrong folder | AI sees old/other files | Open `http://127.0.0.1:8765` in your browser, change folder, Save |
+| Corporate VPN/antivirus | May block localhost traffic | Rare; allow `FileBridge.exe` / port 8765 in your security tool |
+
+## Privacy & security
+
+- File Bridge **only** exposes the **one folder** you selected. Nothing else.
+  It's technically impossible for the AI to read outside it (path traversal is
+  rejected server-side — tested).
+- Only `list`, `read`, and `write` exist. No delete, no move, no execute.
+- The service binds to `127.0.0.1` only — not reachable from your network or
+  the internet, only from your own browser.
+- Files are read as plain text; the bridge caps reads at ~200 KB per file.
+
+## Troubleshooting
+
+**"Bridge isn't running"** — Start File Bridge (Windows: Start menu; macOS:
+Applications; Linux: run the binary/script). Verify: open `http://127.0.0.1:8765/health`
+— should say `"ok": true`.
+
+**AI says no code execution available** — Your admin's model preset wasn't
+selected. Pick the prepared model (e.g. "Local Files Assistant") in the chat.
+
+**Nothing happens after Allow** — Ask again; the first request sometimes needs
+a second try while the permission settles.
+
+**Want to stop sharing?** Just quit File Bridge. To reset the folder choice,
+delete `~/.file-bridge.json` (Windows: `C:\Users\you\.file-bridge.json`).

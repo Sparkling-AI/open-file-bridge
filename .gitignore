@@ -1,0 +1,10 @@
+# ignore build outputs
+dist/
+build/work/
+build/bundle/
+__pycache__/
+*.spec.bak
+.venv/
+
+# local state
+.file-bridge.json
