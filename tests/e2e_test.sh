@@ -82,6 +82,34 @@ check "b64 read roundtrip"  '0000000'              "$(curl -s "$BRIDGE/read_b64?
 check "b64 traversal blk"   'escapes'              "$(curl -s "$BRIDGE/read_b64?path=../../etc/shadow" $T)"
 check "stat kind text"      '"kind": *"text"'      "$(curl -s "$BRIDGE/stat?path=notes.txt" $T)"
 
+# ---------- read safety: whitelist + peek + windowing (P0 #3) ----------
+echo "line-one
+line-two
+line-three" > "$TESTDIR/small.txt"
+python3 -c "open('$TESTDIR/big.txt','w').write('\n'.join(f'row {i}' for i in range(1,5001)))"
+printf '\x89PNG\r\n\x1a\nfakepng' > "$TESTDIR/fake.txt"          # mislabeled binary
+printf 'real pdf content' > "$TESTDIR/doc.dat"                   # unknown ext, text-ish
+printf '%%PDF-1.4\nfake pdf body' > "$TESTDIR/mock.pdf"          # pdf magic w/o pymupdf
+printf 'PK\x03\x04\nfake zip' > "$TESTDIR/mock.docx"             # office zip magic
+
+check "read windowed numbered" '1\t.*test content\|^     1'  "$(curl -s "$BRIDGE/read?path=notes.txt" $T | python3 -c "import json,sys;print(json.load(sys.stdin)['content'])")"
+R=$(curl -s "$BRIDGE/read?path=big.txt&max_lines=100" $T)
+check "read window max_lines"  '"end_line": *100'  "$R"
+check "read window trailer"    'start_line=101'     "$R"
+R2=$(curl -s "$BRIDGE/read?path=big.txt&start_line=4950" $T)
+check "read continue window"   '"start_line": *4950' "$R2"
+check "read window end"        '"end_line": *5000'   "$R2"
+check "read no trailer at EOF" '"total_lines": *5000' "$R2"
+check "binary ext rejected"    'not on the' "$(curl -s "$BRIDGE/read?path=out.bin" $T)"
+check "fake txt sniffed"       'sniffs as image' "$(curl -s "$BRIDGE/read?path=fake.txt" $T)"
+check "pdf ext rejected"       'text-only' "$(curl -s "$BRIDGE/read?path=mock.pdf" $T)"
+check "unknown ext rejected"   'fail-closed' "$(curl -s "$BRIDGE/read?path=doc.dat" $T)"
+check "peek identifies pdf"    '"kind": *"pdf"' "$(curl -s "$BRIDGE/peek?path=mock.pdf" $T)"
+check "peek hints pdf_text"    '/pdf_text'      "$(curl -s "$BRIDGE/peek?path=mock.pdf" $T)"
+check "peek on office zip"     'office'         "$(curl -s "$BRIDGE/peek?path=mock.docx" $T)"
+check "peek unknown kind"      '"kind": *"unknown"' "$(curl -s "$BRIDGE/peek?path=doc.dat" $T)"
+check "peek printable ratio"   'printable_ratio' "$(curl -s "$BRIDGE/peek?path=notes.txt" $T)"
+
 # ---------- state dir isolation & permissions ----------
 if [ -f "$STATEDIR/state.json" ]; then echo "  PASS: state in FILE_BRIDGE_STATE_DIR"; else echo "  FAIL: state.json not in STATEDIR"; fail=1; fi
 PERM=$(stat -c '%a' "$STATEDIR/state.json" 2>/dev/null || echo "?")

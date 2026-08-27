@@ -375,6 +375,99 @@ def resolve_safe(root: Path, rel: str) -> Path:
     return p
 
 
+# ----------------------------------------------------- read safety (P0 #3)
+
+# /read serves ONLY these extensions — fail-closed on anything else (unknown
+# ext → 415 + hint to /peek). Stance validated by openworker readonly.py.
+TEXT_EXTS = {
+    ".txt", ".md", ".markdown", ".rst", ".csv", ".tsv", ".json", ".jsonl",
+    ".xml", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".conf", ".env",
+    ".log", ".py", ".pyi", ".js", ".mjs", ".ts", ".jsx", ".tsx", ".html",
+    ".htm", ".css", ".scss", ".less", ".svg", ".sql", ".sh", ".bash",
+    ".zsh", ".fish", ".ps1", ".bat", ".cmd", ".make", ".mk", ".dockerfile",
+    ".tex", ".srt", ".vtt", ".sub", ".c", ".h", ".cpp", ".hpp", ".cc",
+    ".java", ".rs", ".go", ".rb", ".php", ".pl", ".pm", ".lua", ".r",
+    ".swift", ".kt", ".kts", ".scala", ".vue", ".svelte", ".diff", ".patch",
+}
+# Extension-less files that are safely text (unix conventions).
+KNOWN_BASENAMES = {
+    "makefile", "dockerfile", "license", "licence", "readme", "changelog",
+    "contributing", "authors", "notice", "codeowners", ".gitignore",
+    ".gitattributes", ".dockerignore", ".editorconfig", ".env", ".npmrc",
+    ".gitmodules",
+}
+OFFICE_ZIP_EXTS = {".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub"}
+
+# magic-byte signatures → coarse kind (checked BEFORE the extension whitelist:
+# a .txt that is really a PNG gets rejected with the right routing hint)
+_MAGIC = [
+    (b"%PDF-", "pdf"),
+    (b"PK\x03\x04", "zip"), (b"PK\x05\x06", "zip"), (b"PK\x07\x08", "zip"),
+    (b"\x89PNG", "image"), (b"\xff\xd8\xff", "image"), (b"GIF87a", "image"),
+    (b"GIF89a", "image"), (b"BM", "image"), (b"II*\x00", "image"),
+    (b"MM\x00*", "image"), (b"RIFF", "binary"), (b"\x7fELF", "binary"),
+    (b"MZ", "binary"), (b"\xca\xfe\xba\xbe", "binary"),
+    (b"SQLite format 3\x00", "binary"), (b"OggS", "binary"),
+    (b"fLaC", "binary"), (b"ID3", "binary"), (b"\x1f\x8b", "binary"),
+    (b"\xfd7zXZ\x00", "binary"), (b"BZh", "binary"),
+]
+
+
+def sniff_kind(head: bytes):
+    for sig, kind in _MAGIC:
+        if head.startswith(sig):
+            return kind
+    return None
+
+
+def _routing_hint(kind: str, ext: str) -> str:
+    if kind == "pdf":
+        return "PDF detected — use /pdf_text (text layer) or /ocr (scanned)"
+    if kind == "zip" and ext in OFFICE_ZIP_EXTS:
+        return (f"{ext} is a zip-based Office file — use /read_b64 and the "
+                f"Pyodide office stack (see skill)")
+    if kind == "zip":
+        return "zip archive — use /read_b64 (Pyodide can open it via zipfile)"
+    if kind == "image":
+        return "image file — use /ocr (for text in it) or /read_b64"
+    return "binary file — /read_b64 if you truly need the bytes"
+
+
+# /read windowing (pattern: openworker coworker/tools/files.py)
+DEFAULT_MAX_LINES = 2000
+MAX_LINE_CHARS = 500
+
+
+def _windowed_read(p: Path, start_line: int, max_lines: int) -> dict:
+    start = start_line if start_line > 0 else 1
+    n = max_lines if max_lines > 0 else DEFAULT_MAX_LINES
+    n = min(n, DEFAULT_MAX_LINES)
+    selected, total, budget = [], 0, MAX_READ
+    with open(p, "r", encoding="utf-8", errors="replace") as fh:
+        for i, line in enumerate(fh, 1):
+            total = i
+            if i < start or len(selected) >= n:
+                continue
+            text = line.rstrip("\n")
+            if len(text) > MAX_LINE_CHARS:
+                text = text[:MAX_LINE_CHARS] + "… (line truncated)"
+            if budget - (len(text) + 8) < 0:  # overall char backstop
+                selected.append(f"{i:>6}\t…(char budget reached — narrow the window)")
+                budget = -1
+                break
+            budget -= len(text) + 8
+            selected.append(f"{i:>6}\t{text}")
+    end = start + len(selected) - 1 if selected else start - 1
+    out = {
+        "path": str(p.name), "start_line": start, "end_line": end,
+        "total_lines": total, "content": "\n".join(selected),
+    }
+    if end < total:
+        out["note"] = (f"showing lines {start}-{end} of {total}; "
+                       f"call again with start_line={end + 1} to continue")
+    return out
+
+
 # ------------------------------------------------------------------ server
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -493,8 +586,54 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 p = resolve_safe(root, unquote(q.get("path", "")))
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
-                data = p.read_text(encoding="utf-8", errors="replace")[:MAX_READ]
-                return self._json(200, {"path": q.get("path"), "content": data})
+                ext = p.suffix.lower()
+                base = p.name.lower()
+                if ext not in TEXT_EXTS and base not in KNOWN_BASENAMES and base != ".gitignore":
+                    # fail-closed: unknown extension → refuse, offer /peek
+                    return self._json(415, {
+                        "error": f"/read is text-only; '.{ext.lstrip('.')}' is not on the "
+                                 f"text whitelist (fail-closed)",
+                        "hint": f"call /peek?path=…&bytes=512 to identify the file, or "
+                                f"/read_b64 for raw bytes"})
+                head = b""
+                with open(p, "rb") as fh:
+                    head = fh.read(16)
+                kind = sniff_kind(head)
+                if kind:
+                    return self._json(415, {
+                        "error": f"/read is text-only; this file sniffs as {kind}",
+                        "hint": _routing_hint(kind, ext)})
+                start_line = int(q.get("start_line", "1") or 1)
+                max_lines = int(q.get("max_lines", str(DEFAULT_MAX_LINES)))
+                out = _windowed_read(p, start_line, max_lines)
+                out["path"] = q.get("path")
+                return self._json(200, out)
+
+            if u.path == "/peek":
+                # identify a file cheaply: first bytes as preview + sniffing
+                p = resolve_safe(root, unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                nbytes = max(16, min(int(q.get("bytes", "512") or 512), 4096))
+                with open(p, "rb") as fh:
+                    head = fh.read(nbytes)
+                kind = sniff_kind(head)
+                ext = p.suffix.lower()
+                guessed = kind or ("text" if ext in TEXT_EXTS or p.name.lower() in KNOWN_BASENAMES
+                                   else "unknown")
+                preview = head.decode("utf-8", errors="replace")
+                preview = "".join(ch if ch.isprintable() or ch in "\n\r\t" else "·"
+                                  for ch in preview)
+                return self._json(200, {
+                    "path": q.get("path"), "size": p.stat().st_size,
+                    "ext": ext or None, "kind": guessed,
+                    "printable_ratio": (sum(1 for b in head if 32 <= b < 127 or b in (9, 10, 13))
+                                        / max(len(head), 1)),
+                    "preview": preview,
+                    "hint": _routing_hint(kind, ext) if kind else
+                            ("looks like text — /read it" if guessed == "text" else
+                             "unknown format — /read_b64 if you need the bytes"),
+                })
 
             if u.path == "/read_b64":
                 # binary-safe read: returns base64. For Office files, images,

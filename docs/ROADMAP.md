@@ -74,7 +74,7 @@ recommended when copying non-trivial blocks.
    If Tier 2 active AND request has no/wrong token → 401. Bridge refuses
    "production mode" (see below) only when BOTH tiers are off.
 
-☐ **Binary read whitelist + /peek + windowed reads** — `/read` on binary
+✅ **Binary read whitelist + /peek + windowed reads** — `/read` on binary
    files today yields mojibake; `/read_b64` can push 8 MB into context.
    Four layers (windowing pattern borrowed from OpenWorker tools/files.py):
    1. extension whitelist for `/read`, **fail-closed** on unknown extensions
