@@ -24,6 +24,14 @@ Access files in **the user's own computer** through their local File Bridge serv
 | `/pdf_text?path=X&pages=1-3,5` | GET | **Extract text layer** from PDF (addon: pymupdf) |
 | `/ocr?path=X&lang=swe+eng&max_pages=5` | GET | **OCR** scanned PDF/image (tesseract) |
 | `/ocr/config` | GET | Current OCR language + installed languages |
+| `/xlsx_read?path=X&sheet=&range=A1:B2&max_rows=` | GET | Read **Excel** as JSON (row_count, headers, grid, merged cells) — no install needed |
+| `/docx_read?path=X` | GET | Read **Word** as markdown-ish text (headings, lists, pipe tables) |
+| `/pptx_read?path=X` | GET | Read **PowerPoint**: per-slide title + text boxes |
+| `/csv_head?path=X&rows=20` | GET | First rows of a CSV without loading it all |
+| `/csv_stats?path=X` | GET | CSV shape: row count, columns, type sampling, numeric ranges |
+| `/html_text?path=X` | GET | HTML with tags stripped (script/style dropped) — not raw source |
+| `/search?q=&glob=*.md&exclude=&context=2&case=0` | GET | Cross-file grep with context lines; respects ignore lists |
+| `/edit` | POST | `{"path","edits":[{"old_text","new_text"}],"dry_run":true}` → unified diff preview; real apply needs confirmation token (409 flow) |
 | `/wheels` | GET | Local wheel URLs for micropip (openpyxl etc.) |
 
 **Reading rules (P0):** `/read` is text-only and **fail-closed** — unknown
@@ -35,6 +43,31 @@ unsure what a file is, call `/peek` first (a few tokens) and follow its
 500 chars. The response tells you `total_lines` and `start_line=N` to
 continue. NEVER dump whole large files into chat — read windows, summarize,
 and cite `path:line`.
+
+**Reading office files (P1 — read via the BRIDGE, write via Pyodide):**
+`/xlsx_read`, `/docx_read`, `/pptx_read`, `/csv_head`, `/csv_stats`,
+`/html_text` are plain GETs — **no wheel install, no code needed**. Use them
+whenever the task is READ-ONLY:
+
+```python
+d = await bridge_get("/xlsx_read", {"path": "reports/financials.xlsx"})
+print(d["row_count"], d["headers"], d["merged_cells"])
+doc = await bridge_get("/docx_read", {"path": "docs/report.docx"})
+print(doc["markdown"])
+```
+
+Keep the Pyodide wheel route (below) only for **creating or editing** office
+files. If you only need to answer a question about a file, never install.
+
+**Finding things:** `/search` is the top office query tool ("which contract
+mentions the termination clause"). It returns per-file matches with context
+lines and respects the user's ignore lists — if a file you expect is absent,
+it may be excluded in settings; say so rather than scanning manually.
+
+**Editing text files:** prefer `/edit` with `dry_run: true` — it returns a
+unified diff you can show the user; applying without `dry_run` follows the
+standard 409 confirmation flow (snapshot + token). For many scattered
+replacements in one file, one `/edit` call beats several `/write` calls.
 
 ## Bootstrap helpers (run once per session)
 
@@ -79,8 +112,12 @@ async def write_text(path, text: str):
 
 ## Office files (Word / Excel / PowerPoint / PDF)
 
-Install libraries from the **bridge's local wheels** (served from the user's
-own disk — offline-safe, version-pinned; do NOT use PyPI):
+**Reading** office files needs NO libraries — use the bridge GET endpoints
+(`/xlsx_read`, `/docx_read`, `/pptx_read`; see API table above).
+
+**Creating/editing** runs in Pyodide. Install libraries from the **bridge's
+local wheels** (served from the user's own disk — offline-safe,
+version-pinned; do NOT use PyPI):
 
 ```python
 import micropip
@@ -228,8 +265,9 @@ with the stdlib `csv` module from a `StringIO`.
 1. **Check first:** `await bridge_get("/health")` — if not ok or fetch fails,
    tell the user: "Your File Bridge isn't running — start the File Bridge app,
    then ask me again." Do NOT retry more than once.
-2. **`/stat` or `/peek` before `/read`:** if kind is `zip`/`pdf`/`image`, use the b64
-   endpoints; only `text` kinds work with `/read`. Unknown extension or unsure →
+2. **`/stat` or `/peek` before `/read`:** if kind is `zip`/`pdf`/`image`, use the
+   format reader (`/xlsx_read` `/docx_read` `/pptx_read`) or b64 endpoints;
+   only `text` kinds work with `/read`. Unknown extension or unsure →
    `/peek` and follow its hint.
 3. **Never overwrite without confirmation.** Writing to an EXISTING file returns
    HTTP 409 with a `confirmation_token` (60 s). Show the user what will change,
