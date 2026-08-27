@@ -5,6 +5,43 @@ Priorities: P0 = production gate · P1 = high value · P2 = later · P3 = option
 
 ---
 
+## Reference implementation index — build faster by copying
+
+Three studied repos with per-feature pointers. Clone locally before implementing:
+
+```bash
+git clone --depth 1 https://github.com/andrewyng/openworker /tmp/openworker
+git clone --depth 1 https://github.com/open-webui/open-webui   /tmp/owui-src
+git clone --depth 1 https://github.com/open-webui/openapi-servers /tmp/owui-openapi-servers
+```
+
+Deep-dive notes: RESEARCH-openworker.md · RESEARCH-owui-ecosystem.md ·
+(Open Terminal analysis in the latter, §1b.)
+
+| Our item (below) | Copy from | Exact source | What to take |
+|---|---|---|---|
+| /read windowing (P0) | openworker | `coworker/tools/files.py` | cat -n formatting, start_line/max_lines params, 2000-line default, 500-char clip, "how to continue" trailer |
+| Fail-closed whitelist (P0) | openworker | `coworker/readonly.py` | allowlist philosophy, pipeline handling, reject-by-default posture |
+| Token store 0600 (P0) | openworker | `coworker/secrets.py` | state_dir() per-OS resolution, atomic tmp+chmod, never-in-context rule |
+| Audit log (P2) | openworker | `coworker/audit.py` | sqlite schema incl. approval column, `_SECRET_KEYS` scrub list, result_preview truncation |
+| RiskClass per endpoint (P3) | openworker | `coworker/risk.py` | enum + classify + override-floor mechanism |
+| Hash cache for /pdf_text,/ocr (P2) | openworker | `coworker/pdf_support.py` | `_cached(key=(sha256,op))` LRU pattern, replay rationale |
+| PDF mode=text\|images (P2) | openworker | `coworker/pdf_support.py` | pypdf extract vs pypdfium2 raster@2x, RASTER_MAX_PAGES=100 |
+| Confirmation tokens (P0) | owui openapi-servers | `servers/filesystem/main.py` L147-197, L392-491 | 60s token, .pending_confirmations.json, params match check |
+| /edit dry-run diff (P1) | owui openapi-servers | `servers/filesystem/main.py` L254-301 | multi-replacement, dry_run, unified diff output |
+| /search params (P1) | owui openapi-servers | `servers/filesystem/main.py` L363-387, L563-596 | context lines, file pattern, exclusions, case-insensitive |
+| Preset two-switch config | owui | `src/lib/components/chat/Chat.svelte` L1075-1089 | capabilities.code_interpreter AND defaultFeatureIds — regression-test on upgrades |
+| Direct tool connections (Plan B) | owui | `src/routes/+layout.svelte` L630-646 + Open Terminal security docs | browser-direct call pattern if Pyodide CI dies |
+| PPT template / docx merge (P2) | openworker #454 | issue thread (demand) | .potx layout matching, {{placeholder}} filling |
+| Attachment caps | openworker | `coworker/attachments.py` L17-20 | 200k text / 12M image / 15M pdf / 8 per turn |
+| Skill staging/preview (P3) | openworker | `coworker/skills/store.py` | parse→preview→confirm upload flow, disable-outside-folder rule |
+
+Licenses: openworker MIT · open-webui BSD-3 (check branding clause for code
+vs docs) · openapi-servers MIT — all permissive, attribution in NOTICE
+recommended when copying non-trivial blocks.
+
+---
+
 ## P0 — Production gates (must before internal rollout)
 
 ☐ **CORS lock to OWUI origin** — today `Access-Control-Allow-Origin: *`
