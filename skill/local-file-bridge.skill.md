@@ -80,6 +80,13 @@ replacements in one file, one `/edit` call beats several `/write` calls.
 
 ## Bootstrap helpers (run once per session)
 
+**Version check first:** call `/version` (no token needed). If the
+response's `bridge` version doesn't match what this skill documents
+(v2.1), tell the user "the bridge app and the skill are out of sync —
+re-run the File Bridge installer or scripts/setup_owui.py" and continue
+carefully: newer bridges keep old skills working, but new endpoints
+(like /zip, /directory_tree) won't be in an old skill's vocabulary.
+
 ```python
 from pyodide.http import pyfetch
 import json, base64, io

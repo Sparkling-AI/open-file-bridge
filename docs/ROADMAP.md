@@ -251,7 +251,10 @@ final validation pass (not after every change). Do not block on either.
    Deliberately over-broad: false positive = "ask the user", false
    negative = credentials in model context. Applies regardless of
    per-root ignore lists; error tells the model to ask the user.
-☐ Version endpoint + update nudge (keep skill & bridge in sync).
+✅ **Version endpoint + update nudge** — GET /version (token-free like
+   /health): bridge + expected skill version. VERSION bumped 2.0→2.1;
+   skill markdown now starts sessions with a /version check and tells
+   the user to re-run the installer/setup_owui.py on mismatch.
 ✅ **/zip, /unzip** (stdlib zipfile). /zip: members resolved through
    resolve_guarded individually (ignore lists + traversal apply per
    member), output written atomically + snapshotted, 8 MB cap, 200-member
