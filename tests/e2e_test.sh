@@ -67,7 +67,7 @@ check "read nested"        'nested'               "$(curl -s "$BRIDGE/read?path=
 check "write works"        '"ok": *true'          "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"out.txt","content":"written"}')"
 check "write landed"       'written'              "$(cat "$TESTDIR/out.txt")"
 check "traversal blocked"  'escapes'              "$(curl -s "$BRIDGE/read?path=../../etc/passwd" $T)"
-check "abs path blocked"   'escapes'              "$(curl -s "$BRIDGE/read?path=/etc/passwd" $T)"
+check "abs path blocked"   'not allowed'          "$(curl -s "$BRIDGE/read?path=/etc/passwd" $T)"
 check "write traversal blocked" 'escapes'         "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"../evil.txt","content":"x"}')"
 
 # ---------- wheels stay token-free ----------
@@ -141,6 +141,35 @@ check "restore confirmed"       '"ok": *true' "$(curl -s -X POST $BRIDGE/version
 check "restore brought v1 back" 'v1'          "$(cat "$TESTDIR/snapme.txt")"
 # versions store is OUTSIDE the root
 if [ -d "$TESTDIR"/.fb-versions ]; then echo "  FAIL: versions inside root"; fail=1; else echo "  PASS: versions stored outside root"; fi
+
+# ---------- multi-root + ignore lists + self-protection (P0b) ----------
+R2=$(mktemp -d); mkdir -p "$R2/other"
+echo "second root file" > "$R2/other/deep.txt"
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d "{\"roots\":[{\"id\":\"main\",\"path\":\"$TESTDIR\",\"ignore\":[\".git/\",\"secrets/\",\"*.tmp\"]},{\"id\":\"second\",\"path\":\"$R2\",\"alias\":\"extra\",\"ignore\":[]}]}" > /tmp/roots_resp.json
+check "roots saved"  '"ok": *true' "$(cat /tmp/roots_resp.json)"
+check "health lists roots" '"id": *"second"' "$(curl -s $BRIDGE/health)"
+check "read root2 by id"   'second root file' "$(curl -s "$BRIDGE/read?path=second/other/deep.txt" $T)"
+check "default root intact" 'test content'   "$(curl -s "$BRIDGE/read?path=notes.txt" $T)"
+mkdir -p "$TESTDIR/secrets" "$TESTDIR/.git"
+echo "TOPSECRET" > "$TESTDIR/secrets/key.pem"
+echo "ref" > "$TESTDIR/.git/config"
+echo "tmp" > "$TESTDIR/junk.tmp"
+check "list omits ignored"  'clean' "$(curl -s "$BRIDGE/list?path=." $T | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+paths=[e['path'] for e in d['entries']]
+bad=[p for p in paths if 'secrets/' in p or '.git/' in p or p.endswith('.tmp')]
+print('LEAKED:'+str(bad) if bad else 'clean')")"
+check "read ignored 404s"   'excluded by settings' "$(curl -s "$BRIDGE/read?path=secrets/key.pem" $T)"
+check "read dotgit 404s"    'excluded' "$(curl -s "$BRIDGE/read?path=.git/config" $T)"
+check "write ignored refused" 'refused\|excluded' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"secrets/new.txt","content":"x"}')"
+check "pdf-like ignored too" 'excluded\|no such' "$(curl -s "$BRIDGE/read?path=junk.tmp" $T)"
+# self-protection: state dir never reachable even if a root were to overlap
+check "state file unreadable" 'escapes shared root\|never accessible' "$(curl -s "$BRIDGE/read?path=../../../.local/state/file-bridge/state.json" $T 2>/dev/null || echo unreachable)"
+# root-in-state rejected by set_roots
+check "state-inside-root rejected" 'cannot\|error' "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d "{\"roots\":[{\"id\":\"x\",\"path\":\"$STATEDIR\"}]}")"
+# back to single root for the remaining assertions
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d "{\"roots\":[{\"id\":\"main\",\"path\":\"$TESTDIR\",\"ignore\":[\".git/\",\"secrets/\",\"*.tmp\"]}]}" >/dev/null
 
 # ---------- state dir isolation & permissions ----------
 if [ -f "$STATEDIR/state.json" ]; then echo "  PASS: state in FILE_BRIDGE_STATE_DIR"; else echo "  FAIL: state.json not in STATEDIR"; fail=1; fi

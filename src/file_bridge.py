@@ -562,7 +562,7 @@ def version_restore(root: Path, rel: str, ts: str) -> tuple[bool, str]:
         if len(cands) != 1:
             return False, f"no unique snapshot for {rel} @ {ts}"
         snap_root = cands[0]
-    target = resolve_safe(root, rel)
+    target = (root / rel).resolve()  # same-root guard done by caller
     if target.exists():
         snapshot_before_write(root, target)  # don't lose current state either
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -622,6 +622,171 @@ def confirmation_consume(tok: str, params: dict) -> tuple[bool, str]:
         return True, ""
 
 
+# ------------------------------------------------------- multi-root (P0b)
+
+class ExcludedPath(Exception):
+    """Path matches an ignore pattern → endpoints return 404-with-hint
+    (roadmap: 'excluded by settings'), writes are refused outright."""
+    def __init__(self, pattern, rel):
+        self.pattern, self.rel = pattern, rel
+        super().__init__(
+            f"'{rel}' is excluded by ignore settings (pattern: {pattern}); "
+            f"ask the user to adjust File Bridge settings if this is intended")
+
+
+def roots_config() -> list:
+    """All configured roots. Legacy single-'root' state migrates on the fly."""
+    st = _state_load()
+    if isinstance(st.get("roots"), list) and st["roots"]:
+        return st["roots"]
+    r = st.get("root")
+    if r:
+        return [{"id": "main", "path": r, "alias": "main",
+                 "enabled": True, "ignore": []}]
+    return []
+
+
+def enabled_roots() -> list:
+    out = []
+    for r in roots_config():
+        if not r.get("enabled", True):
+            continue
+        p = Path(r.get("path", "")).expanduser()
+        if not p.is_dir():
+            continue  # fail-closed: unlocatable roots simply don't resolve
+        out.append(r)
+    return out
+
+
+def _sanitize_root_entry(e: dict, i: int) -> dict:
+    rid = str(e.get("id") or f"root{i}").strip().lower()
+    rid = re.sub(r"[^a-z0-9_-]", "-", rid)[:32] or f"root{i}"
+    path = str(e.get("path", "")).strip()
+    return {"id": rid, "path": path,
+            "alias": str(e.get("alias") or rid)[:64],
+            "enabled": bool(e.get("enabled", True)),
+            "ignore": [str(x) for x in (e.get("ignore") or [])][:200]}
+
+
+def set_roots(entries: list) -> tuple[bool, str]:
+    """Validate + persist the root list. Rejects: empty paths, dup ids,
+    roots inside the bridge state dir (self-protection)."""
+    if not isinstance(entries, list) or not entries:
+        return False, "roots must be a non-empty list"
+    cleaned, seen = [], set()
+    for i, e in enumerate(entries):
+        c = _sanitize_root_entry(e, i)
+        p = Path(c["path"]).expanduser()
+        if not c["path"]:
+            return False, f"root {i}: empty path"
+        if not p.is_dir():
+            return False, f"root '{c['id']}': not a folder: {p}"
+        rp = p.resolve()
+        try:
+            if os.path.commonpath([str(STATE_DIR), str(rp)]) == str(STATE_DIR):
+                return False, "bridge state dir cannot live inside a shared root"
+            if os.path.commonpath([str(rp), str(STATE_DIR)]) == str(rp):
+                return False, "shared root cannot contain the bridge state dir"
+        except ValueError:
+            pass  # different drives (Windows)
+        if c["id"] in seen:
+            return False, f"duplicate root id: {c['id']}"
+        seen.add(c["id"])
+        c["path"] = str(rp)
+        cleaned.append(c)
+    _state_update(roots=cleaned, root=cleaned[0]["path"])  # root=key compat
+    return True, ""
+
+
+_ROOT_ID_RE = re.compile(r"^([a-z0-9_-]{1,32})(?:/|$)")
+
+
+def resolve_any(rel: str):
+    """Resolve a request path to (abs, root_path, root_cfg).
+
+    Addressing: '<root-id>/sub/path' picks that root; anything else resolves
+    under the FIRST enabled root (default). Unknown leading segment = ordinary
+    subdirectory of the default root."""
+    ros = enabled_roots()
+    if not ros:
+        raise PermissionError("no shared folder configured — open the File Bridge "
+                              "settings page")
+    rel = (rel or "").strip()
+    if rel.startswith("/") or (len(rel) > 1 and rel[1] == ":"):
+        raise PermissionError("absolute paths are not allowed — address files "
+                              "relative to a shared root")
+    rel = rel.lstrip("/").replace("\\", "/")
+    cfg = ros[0]
+    m = _ROOT_ID_RE.match(rel)
+    if m and m.group(1) in {r["id"] for r in ros}:
+        cfg = next(r for r in ros if r["id"] == m.group(1))
+        rel = rel[m.end():]
+    root = Path(cfg["path"]).resolve()
+    p = (root / rel).resolve()
+    if os.path.commonpath([str(root), str(p)]) != str(root):
+        raise PermissionError("path escapes shared root")
+    return p, root, cfg
+
+
+def _global_ignore() -> list:
+    return [str(x) for x in (_state_load().get("ignore_global") or [])]
+
+
+def _ignore_match(rel: str, is_dir: bool, patterns: list):
+    """gitignore-style subset: 'dir/' dir-only, '/x' anchored to root,
+    '*' within/across segments, '#' comments. A path is excluded if it OR
+    ANY ancestor directory matches."""
+    import fnmatch
+    parts = [x for x in rel.split("/") if x]
+    cands = ["/".join(parts[:i + 1]) for i in range(len(parts))]
+    for pat in patterns:
+        p = pat.strip()
+        if not p or p.startswith("#"):
+            continue
+        dir_only = p.endswith("/")
+        if dir_only:
+            p = p[:-1]
+        anchored = p.startswith("/")
+        if anchored:
+            p = p[1:]
+        if not p:
+            continue
+        for i, cand in enumerate(cands):
+            if i == len(cands) - 1 and dir_only and not is_dir:
+                continue
+            if fnmatch.fnmatch(cand, p):
+                return pat
+    return None
+
+
+def resolve_guarded(rel: str, *, for_write: bool = False):
+    """resolve_any + self-protection floor + ignore enforcement.
+    Used by EVERY file endpoint (roadmap: enforcement lives in the BRIDGE)."""
+    p, root, cfg = resolve_any(rel)
+    # --- self-protection floor (P0b): bridge-owned files are never
+    # accessible via the file API, in any mode, even when a root overlaps —
+    # prevents 'one approved write quietly widens future permissions'.
+    try:
+        if os.path.commonpath([str(STATE_DIR), str(p)]) == str(STATE_DIR):
+            raise PermissionError("bridge state/storage is never accessible via the file API")
+    except ValueError:
+        pass
+    rel_in_root = p.relative_to(root).as_posix()
+    if rel_in_root != ".":
+        pats = list(cfg.get("ignore", [])) + _global_ignore()
+        hit = _ignore_match(rel_in_root, p.is_dir(), pats)
+        if hit:
+            if for_write:
+                raise ExcludedPath(hit, rel_in_root)
+            raise ExcludedPath(hit, rel_in_root)
+    return p, root, cfg
+
+
+def _legacy_root() -> Path | None:
+    ros = enabled_roots()
+    return Path(ros[0]["path"]) if ros else None
+
+
 # ------------------------------------------------------------------ server
 
 class Handler(http.server.BaseHTTPRequestHandler):
@@ -668,8 +833,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
 
         if u.path == "/health":
-            info = {"ok": True, "root": str(root), "version": VERSION} if root else \
-                   {"ok": False, "hint": "no folder chosen yet"}
+            ros = [{"id": r["id"], "path": r["path"], "alias": r.get("alias")}
+                   for r in enabled_roots()]
+            info = {"ok": bool(ros), "roots": ros, "version": VERSION} if ros else \
+                   {"ok": False, "hint": "no folder chosen yet",
+                    "roots": [], "version": VERSION}
+            if ros:
+                info["root"] = ros[0]["path"]
             info["addons"] = {"pdf": HAVE_PYMUPDF, "ocr": bool(TESSERACT_BIN)}
             info["ocr_lang"] = _get_ocr_lang()
             info["ocr_langs_available"] = _ocr_langs_available()
@@ -680,11 +850,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(200, info)
 
         if u.path == "/state":
-            return self._json(200, {"root": str(root) if root else None, "port": PORT,
-                                    "ocr_lang": _get_ocr_lang(),
-                                    "allowed_origin": get_allowed_origin(),
-                                    "security": security_mode(),
-                                    "readonly": _is_readonly()})
+            return self._json(200, {
+                "root": str(root) if root else None,
+                "roots": roots_config(), "port": PORT,
+                "ocr_lang": _get_ocr_lang(),
+                "allowed_origin": get_allowed_origin(),
+                "security": security_mode(),
+                "readonly": _is_readonly(),
+                "ignore_global": _global_ignore()})
 
         # ---- wheel hosting (token-free by design: static public wheels) ----
         if u.path == "/wheels":
@@ -719,12 +892,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         try:
             if u.path == "/list":
-                p = resolve_safe(root, unquote(q.get("path", ".")))
+                p, root, cfg = resolve_guarded(unquote(q.get("path", ".")))
                 if not p.is_dir():
                     return self._json(404, {"error": f"not a directory: {q.get('path')}"})
                 entries = []
+                pats = list(cfg.get("ignore", [])) + _global_ignore()
                 for f in sorted(p.rglob("*")):
                     rel = f.relative_to(root).as_posix()
+                    if _ignore_match(rel, f.is_dir(), pats):
+                        continue
                     try:
                         st = f.stat()
                         entries.append({"path": rel, "type": "dir" if f.is_dir() else "file",
@@ -734,10 +910,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         continue
                     if len(entries) >= MAX_LIST:
                         break
-                return self._json(200, {"root": str(root), "entries": entries})
+                return self._json(200, {"root": str(root), "root_id": cfg.get("id"),
+                                        "entries": entries})
 
             if u.path == "/read":
-                p = resolve_safe(root, unquote(q.get("path", "")))
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
                 ext = p.suffix.lower()
@@ -765,7 +942,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
             if u.path == "/peek":
                 # identify a file cheaply: first bytes as preview + sniffing
-                p = resolve_safe(root, unquote(q.get("path", "")))
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
                 nbytes = max(16, min(int(q.get("bytes", "512") or 512), 4096))
@@ -792,7 +969,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if u.path == "/read_b64":
                 # binary-safe read: returns base64. For Office files, images,
                 # PDFs. Capped at MAX_BINARY bytes.
-                p = resolve_safe(root, unquote(q.get("path", "")))
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
                 raw = p.read_bytes()
@@ -805,7 +982,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 })
 
             if u.path == "/stat":
-                p = resolve_safe(root, unquote(q.get("path", "")))
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
                 if not p.exists():
                     return self._json(404, {"error": f"not found: {q.get('path')}"})
                 st = p.stat()
@@ -828,7 +1005,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not HAVE_PYMUPDF:
                     return self._json(501, {"error": "PDF add-on not installed on this machine "
                                                      "(pip install pymupdf)"})
-                p = resolve_safe(root, unquote(q.get("path", "")))
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
                 pages_param = q.get("pages", "")  # "1-3,5" optional, 1-indexed
@@ -868,7 +1045,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(501, {"error": "OCR unavailable: tesseract not "
                                                      "found. Install tesseract or set "
                                                      "TESSERACT_CMD."})
-                p = resolve_safe(root, unquote(q.get("path", "")))
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
                 raw = q.get("lang") or _get_ocr_lang()
@@ -926,6 +1103,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "engine": TESSERACT_VER or "tesseract",
                 })
 
+        except ExcludedPath as e:
+            return self._json(404, {"error": str(e), "excluded": True,
+                                    "hint": "excluded by settings — ask the user "
+                                            "to adjust File Bridge settings"})
         except PermissionError as e:
             return self._json(400, {"error": str(e)})
         except Exception as e:
@@ -954,7 +1135,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
             if u.path == "/write":
-                p = resolve_safe(root, unquote(body.get("path", "")))
+                p, root, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
                 content = body.get("content", "")
                 confirm_token = body.get("confirmation_token")
                 confirm_params = {"op": "write", "path": body.get("path", ""),
@@ -981,7 +1162,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
             if u.path == "/write_b64":
                 # binary-safe write: takes base64. For Office/PDF/image files.
-                p = resolve_safe(root, unquote(body.get("path", "")))
+                p, root, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
                 try:
                     raw = base64.b64decode(body.get("b64", ""), validate=True)
                 except (binascii.Error, ValueError) as e:
@@ -1009,13 +1190,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if u.path == "/versions/list":
                 rel = body.get("path", "")
                 rel = unquote(rel) if isinstance(rel, str) else ""
-                return self._json(200, {"versions": versions_list(root, rel)})
+                _rp, _rr, _rc = resolve_guarded(rel or ".")
+                return self._json(200, {"versions": versions_list(_rr, rel)})
 
             if u.path == "/versions/restore":
                 rel = body.get("path", "")
                 ts = str(body.get("ts", ""))
                 if not rel or not ts:
                     return self._json(400, {"error": "need path + ts (from /versions/list)"})
+                _rp, _rr, _rc = resolve_guarded(rel)
+                rel = _rp.relative_to(_rr).as_posix()
                 # restore is itself a write over an existing file → confirm
                 confirm_token = body.get("confirmation_token")
                 confirm_params = {"op": "restore", "path": rel, "ts": ts}
@@ -1027,10 +1211,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 okc, err = confirmation_consume(confirm_token, confirm_params)
                 if not okc:
                     return self._json(400, {"error": err})
-                okr, mes = version_restore(root, unquote(rel), ts)
+                okr, mes = version_restore(_rr, rel, ts)
                 if not okr:
                     return self._json(404, {"error": mes})
                 return self._json(200, {"ok": True, "restored": mes})
+        except ExcludedPath as e:
+            return self._json(403, {"error": str(e), "excluded": True,
+                                    "hint": "write into an ignored path is refused; "
+                                            "ask the user to adjust settings"})
         except PermissionError as e:
             return self._json(400, {"error": str(e)})
         except Exception as e:
@@ -1083,14 +1271,21 @@ class Handler(http.server.BaseHTTPRequestHandler):
         elif tok_action is None and "token" in body:
             set_token(None)
 
-        if body.get("root"):
+        if isinstance(body.get("roots"), list):
+            okr, err = set_roots(body["roots"])
+            if not okr:
+                return self._json(400, {"ok": False, "error": err}, cors=False)
+        if isinstance(body.get("ignore_global"), list):
+            _state_update(ignore_global=[str(x)[:200] for x in body["ignore_global"]][:200])
+        if body.get("root") and not isinstance(body.get("roots"), list):
+            # legacy single-root setter (CLI arg path)
             p = Path(body["root"]).expanduser()
             if not p.is_dir():
                 return self._json(400, {"ok": False, "error": f"not a folder: {p}"}, cors=False)
             save_root(p)
-            resp = {"ok": True, "root": str(p.resolve()), "ocr_lang": _get_ocr_lang()}
-        else:
-            resp = {"ok": True, "ocr_lang": _get_ocr_lang()}
+        ros = enabled_roots()
+        resp = {"ok": True, "ocr_lang": _get_ocr_lang(),
+                "roots": roots_config(), "root": ros[0]["path"] if ros else None}
         resp["allowed_origin"] = get_allowed_origin()
         resp["security"] = security_mode()
         if new_token:

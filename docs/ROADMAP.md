@@ -102,18 +102,18 @@ recommended when copying non-trivial blocks.
 
 ### Multi-root + ignore lists (scope control)
 
-☐ **Multi-folder roots** — settings page supports ONE OR MORE shared folders;
+✅ **Multi-folder roots** — settings page supports ONE OR MORE shared folders;
    every endpoint takes a root-relative path + root id (or search across
    roots by default). Each root stores: path, alias, enabled flag.
    Pattern: OpenWorker `_resolved_roots()` (permissions.py L314) +
    WorkspaceTrustStore (workspace_trust.py) — trust per canonical path,
    atomic 0600 state writes.
-☐ **Ignore/exclude list per root (and global)** — gitignore-style patterns
+✅ **Ignore/exclude list per root (and global)** — gitignore-style patterns
    (e.g. `.git/`, `node_modules/`, `*.tmp`, `secrets/`): /list omits, /read
    + /pdf_text + /ocr + future /search return 404-with-hint ("excluded by
    settings"), /write into ignored paths is refused. Enforced in the BRIDGE,
    surfaced in skill ("if excluded, tell the user to adjust settings").
-☐ **Bridge self-protection floor** (OpenWorker permissions.py L93-123):
+✅ **Bridge self-protection floor** (OpenWorker permissions.py L93-123):
    `~/.file-bridge.json`, token file, audit db, versions dir are NEVER
    writable via any endpoint, in any mode. Prevents "one approved write
    quietly widens future permissions".
