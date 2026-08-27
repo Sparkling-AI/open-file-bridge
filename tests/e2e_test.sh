@@ -315,6 +315,49 @@ else
   echo "  PASS: state.json holds only the token hash"
 fi
 
+# ---------- audit log (P2): JSONL in state dir, secrets scrubbed ----------
+if [ -f "$STATEDIR/audit.log" ]; then echo "  PASS: audit.log created in state dir"; else echo "  FAIL: no audit.log in $STATEDIR"; fail=1; fi
+if grep -q '"endpoint": "/read"' "$STATEDIR/audit.log"; then echo "  PASS: audit records endpoint"; else echo "  FAIL: no /read entry in audit.log"; fail=1; fi
+if grep -q '"endpoint": "/write"' "$STATEDIR/audit.log"; then echo "  PASS: audit records POST /write"; else echo "  FAIL: no /write entry"; fail=1; fi
+if grep -q '"path": "notes.txt"' "$STATEDIR/audit.log"; then echo "  PASS: audit records path"; else echo "  FAIL: notes.txt not in audit.log"; fail=1; fi
+if grep -q '"status": 404' "$STATEDIR/audit.log"; then echo "  PASS: audit records error status"; else echo "  FAIL: no 404 in audit.log"; fail=1; fi
+if grep -q '"written"' "$STATEDIR/audit.log" || grep -q 'test content' "$STATEDIR/audit.log"; then
+  echo "  FAIL: audit leaked file content"; fail=1
+else
+  echo "  PASS: audit has no file contents"
+fi
+if grep -qi 'test-token-1234' "$STATEDIR/audit.log"; then
+  echo "  FAIL: audit leaked bridge token"; fail=1
+else
+  echo "  PASS: audit has no token material"
+fi
+# every line must be valid JSON (JSONL invariant)
+AJ=$(python3 - "$STATEDIR/audit.log" <<'PY'
+import json, sys
+bad = 0
+with open(sys.argv[1]) as fh:
+    for line in fh:
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            rec = json.loads(line)
+            assert "ts" in rec and "endpoint" in rec and "status" in rec
+        except Exception:
+            bad += 1
+print(bad)
+PY
+)
+if [ "$AJ" = "0" ]; then echo "  PASS: audit.log is valid JSONL with ts/endpoint/status"; else echo "  FAIL: $AJ malformed audit lines"; fail=1; fi
+APER=$(stat -c '%a' "$STATEDIR/audit.log" 2>/dev/null || echo "?")
+if [ "$APER" = "600" ]; then echo "  PASS: audit.log is 0600"; else echo "  FAIL: audit.log perm $APER != 600"; fail=1; fi
+# api/root settings changes audited with values redacted
+if grep -q '"endpoint": "/api/root"' "$STATEDIR/audit.log" && ! grep -q 'owui.test:8080' "$STATEDIR/audit.log"; then
+  echo "  PASS: /api/root audited, origin value redacted"
+else
+  echo "  FAIL: /api/root audit missing or origin leaked"; fail=1
+fi
+
 # pdf_text/ocr functional tests: run suite WITH addons via:
 #   uv run --with pymupdf,rapidocr-onnxruntime bash tests/e2e_test.sh
 ADDONS=$(curl -s $BRIDGE/health | python3 -c "import json,sys; print(json.load(sys.stdin)['addons']['pdf'])" 2>/dev/null || echo False)

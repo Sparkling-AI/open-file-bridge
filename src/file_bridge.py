@@ -121,6 +121,84 @@ def _state_update(**kv) -> dict:
         return st
 
 
+# ------------------------------------------------- audit log (P2, JSONL)
+# Every file-touching call gets one line in state_dir/audit.log: ts,
+# endpoint, method, path, size, status + SECRET-SCRUBBED args. Pattern:
+# openworker coworker/audit.py `_SECRET_KEYS` scrub. Append-only, 0600,
+# best-effort (audit failure must never break serving). Not an API — the
+# file is for the human owner; models can't read it (state dir is
+# structurally outside every root).
+
+AUDIT_FILE = STATE_DIR / "audit.log"
+_AUDIT_LOCK = threading.Lock()
+_AUDIT_MAX_BYTES = 5 * 1024 * 1024   # rotate to audit.log.1 once past 5 MB
+
+_SECRET_KEYS = (
+    "token", "secret", "password", "api_key", "apikey", "authorization",
+    "access_token", "refresh_token", "bearer", "credential", "private_key",
+)
+_BODY_KEYS = ("content", "b64", "body", "text", "old_text", "new_text", "html")
+_ARG_TRUNCATE = 200
+
+
+def _audit_scrub(value):
+    """Recursive copy with secrets → [redacted] and payload keys → size only."""
+    if isinstance(value, dict):
+        out = {}
+        for k, v in value.items():
+            lk = str(k).lower()
+            if any(s in lk for s in _SECRET_KEYS):
+                out[k] = "[redacted]"
+            elif any(b == lk or lk.endswith("_" + b) for b in _BODY_KEYS):
+                # never log file CONTENT — record shape, not bytes
+                out[k] = f"<{type(v).__name__}:{len(v) if hasattr(v, '__len__') else '?'}>"
+            else:
+                out[k] = _audit_scrub(v)
+        return out
+    if isinstance(value, list):
+        return [_audit_scrub(v) for v in value[:10]]
+    if isinstance(value, str):
+        s = value.replace("\n", "\\n")
+        return s if len(s) <= _ARG_TRUNCATE else s[:_ARG_TRUNCATE - 3] + "..."
+    return value
+
+
+def audit_log(endpoint: str, *, method: str = "GET", path: str | None = None,
+              args: dict | None = None, status: int = 200,
+              size: int | None = None, **extra) -> None:
+    rec = {"ts": round(time.time(), 3), "endpoint": endpoint, "method": method,
+           "status": status}
+    if path is not None:
+        rec["path"] = path[-400:]
+    if args:
+        rec["args"] = _audit_scrub(args)
+    if size is not None:
+        rec["size"] = size
+    rec.update(extra)
+    line = json.dumps(rec, default=str, ensure_ascii=False)
+    try:
+        with _AUDIT_LOCK:
+            if AUDIT_FILE.exists() and AUDIT_FILE.stat().st_size > _AUDIT_MAX_BYTES:
+                # simple rotation: shift .1 → dropped, current → .1
+                old = AUDIT_FILE.with_suffix(".log.1")
+                try:
+                    old.unlink()
+                except OSError:
+                    pass
+                try:
+                    AUDIT_FILE.rename(old)
+                except OSError:
+                    pass
+            with open(AUDIT_FILE, "a", encoding="utf-8") as fh:
+                fh.write(line + "\n")
+            try:
+                os.chmod(AUDIT_FILE, 0o600)
+            except OSError:
+                pass
+    except Exception:
+        pass  # audit is best-effort: never fail a user request over it
+
+
 # ------------------------------------------------------------- token store
 
 def _hash_token(tok: str) -> str:
@@ -1404,6 +1482,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _json(self, code, obj, cors=True):
         body = json.dumps(obj).encode()
+        if getattr(self, "_audit_ep", None):
+            audit_log(self._audit_ep, method=self.command,
+                      path=getattr(self, "_audit_path", None),
+                      args=getattr(self, "_audit_args", None), status=code,
+                      size=len(body))
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         if cors:
@@ -1411,6 +1494,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
+
+    def _audit(self, ep, path=None, args=None):
+        """Mark this request for audit logging (idempotent per response)."""
+        self._audit_ep = ep
+        self._audit_path = path if path is None else str(path)
+        self._audit_args = args
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -1483,6 +1572,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if root is None:
             return self._json(409, {"error": "No folder chosen. Open http://127.0.0.1:%d to pick one." % PORT})
+
+        self._audit(u.path, path=unquote(q.get("path", "")) or None,
+                    args={k: q[k] for k in q if k != "path"} or None)
 
         try:
             if u.path == "/list":
@@ -1800,6 +1892,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", 0))
             body = json.loads(self.rfile.read(length) or b"{}")
+            # audit BEFORE handling: one line per call, scrubbed in _json
+            self._audit(u.path, path=unquote(str(body.get("path", ""))) or None,
+                        args={k: body[k] for k in body
+                              if k not in ("path", "content", "b64")} or None)
             if u.path == "/write":
                 p, root, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
                 content = body.get("content", "")
@@ -2049,6 +2145,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             body = json.loads(self.rfile.read(length) or b"{}")
         except Exception:
             return self._json(400, {"ok": False, "error": "invalid JSON"}, cors=False)
+
+        self._audit("/api/root", args={k: "[redacted]" for k in body})  # settings changes: keys only
 
         if "ocr_lang" in body:
             _set_ocr_lang(str(body["ocr_lang"]).strip())
