@@ -24,9 +24,11 @@ State lives in a per-OS state dir (env FILE_BRIDGE_STATE_DIR overrides):
 """
 import base64
 import binascii
+import fnmatch
 import hashlib
 import hmac
 import http.server
+import io
 import json
 import os
 import re
@@ -40,6 +42,7 @@ import tempfile
 import threading
 import time
 import webbrowser
+import zipfile
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -798,6 +801,179 @@ def cache_put(p: Path, op: str, params: dict, value: dict) -> None:
 def cache_stats() -> dict:
     with _CACHE_LOCK:
         return {"entries": len(_CACHE), "max": _CACHE_MAX}
+
+
+# ------------------------------------- zip / tree endpoints (P2, stdlib)
+
+def zip_create(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
+    """Zip files/dirs (root-relative) into <out> (root-relative .zip).
+    Uses resolve_guarded for EVERY member → ignore rules + traversal
+    protection apply to each path. Overwrites are atomic + snapshotted."""
+    members = body.get("members")   # list of rel paths; missing = 400
+    out_rel = body.get("out", "")
+    if not isinstance(members, list) or not members or len(members) > 200:
+        return 400, {"error": "members must be a 1-200 list of root-relative paths"}
+    if not out_rel or Path(out_rel).suffix.lower() != ".zip":
+        return 400, {"error": "out must end in .zip (root-relative)"}
+    if Path(out_rel).name.startswith("."):
+        return 400, {"error": "refusing to write hidden/dot file names"}
+
+    # resolve ALL members first (fail before writing anything)
+    resolved = []
+    for m in members:
+        if not isinstance(m, str) or not m:
+            return 400, {"error": f"bad member: {m!r}"}
+        try:
+            p, r, c = resolve_guarded(unquote(m))
+        except (PermissionError, ExcludedPath) as e:
+            return 400, {"error": f"member not allowed: {m} ({e})"}
+        if not p.exists():
+            return 404, {"error": f"member not found: {m}"}
+        resolved.append((m, p, r))
+    op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
+
+    total = 0
+    nfiles = 0
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for m, p, r in resolved:
+            if p.is_file():
+                data = p.read_bytes()
+                total += len(data)
+                if total > MAX_BINARY:
+                    return 413, {"error": f"zipped payload too large (> {MAX_BINARY} bytes)"}
+                zf.writestr(p.name, data)
+                nfiles += 1
+            else:
+                for f in sorted(p.rglob("*")):
+                    frel = f.relative_to(r).as_posix()
+                    if _ignore_match(frel, f.is_dir(),
+                                     list(cfg.get("ignore", [])) + _global_ignore()):
+                        continue
+                    if f.is_file():
+                        data = f.read_bytes()
+                        total += len(data)
+                        if total > MAX_BINARY:
+                            return 413, {"error": f"zipped payload too large (> {MAX_BINARY} bytes)"}
+                        zf.writestr(f.name, data)
+                        nfiles += 1
+    snap = snapshot_before_write(oroot, op) if op.exists() else None
+    okr, err = rate_check(total)
+    if not okr:
+        return 429, {"error": err, "rate_limited": True}
+    atomic_write_bytes(op, buf.getvalue())
+    return 200, {"ok": True, "written": str(op), "files": nfiles,
+                 "bytes": buf.tell(), "snapshot": snap,
+                 "note": "members stored FLAT (basename only) — directories recurse"}
+
+
+def zip_extract(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
+    """Unzip <path> (.zip, root-relative) under <dest>/ (root-relative dir).
+    Every member name is sanitized: no absolute, no .., no drive letters,
+    no symlink attrs — then extracted under resolve_guarded(dest)."""
+    rel = body.get("path", "")
+    dest_rel = body.get("dest", "")
+    if not rel or not dest_rel:
+        return 400, {"error": "need path (a .zip) + dest (directory)"}
+    p, _r, _c = resolve_guarded(unquote(rel))
+    if not p.is_file():
+        return 404, {"error": f"no such file: {rel}"}
+    if p.suffix.lower() != ".zip":
+        return 400, {"error": f"not a zip: {p.suffix}"}
+    dp, droot, dcfg = resolve_guarded(unquote(dest_rel), for_write=True)
+
+    def safe_name(name: str) -> str | None:
+        """Reject absolute/drive/../members outright (zip-slip), don't
+        silently rewrite — a member that lies about its path aborts the
+        whole extraction."""
+        name = name.replace("\\", "/")
+        if not name or name.startswith("/") or (len(name) > 1 and name[1] == ":"):
+            return None
+        parts = [x for x in name.split("/") if x not in ("", ".")]
+        if not parts or any(x == ".." for x in parts):
+            return None
+        return "/".join(parts)
+
+    try:
+        with zipfile.ZipFile(p) as zf:
+            bad = zf.testzip()
+            if bad is not None:
+                return 400, {"error": f"corrupt member: {bad}"}
+            infos = zf.infolist()
+            if len(infos) > 1000:
+                return 413, {"error": f"too many entries: {len(infos)} > 1000"}
+            total = sum(i.file_size for i in infos)
+            if total > MAX_BINARY:
+                return 413, {"error": f"unzipped payload too large (> {MAX_BINARY} bytes)"}
+            okr, err = rate_check(total)
+            if not okr:
+                return 429, {"error": err, "rate_limited": True}
+            count = 0
+            for info in infos:
+                if info.is_dir():
+                    continue
+                nm = safe_name(info.filename)
+                if nm is None:
+                    return 400, {"error": f"unsafe member name: {info.filename!r}"}
+                target = safe_child(dp, nm)
+                # ignore rules apply to the EXTRACTED path too
+                frel = target.relative_to(droot).as_posix()
+                if _ignore_match(frel, False,
+                                 list(dcfg.get("ignore", [])) + _global_ignore()):
+                    continue
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with zf.open(info) as src, open(target, "wb") as dst:
+                    shutil.copyfileobj(src, dst)
+                if info.external_attr >> 16 & 0o170000 == 0o120000:
+                    return 400, {"error": "refusing to extract symlink member"}
+                count += 1
+    except zipfile.BadZipFile:
+        return 400, {"error": "not a valid zip archive"}
+    return 200, {"ok": True, "dest": str(dp), "files": count}
+
+
+def directory_tree(p: Path, cfg: dict, q: dict) -> dict:
+    """Recursive tree (openapi-servers /directory_tree pattern), respecting
+    ignore lists, with entry caps + depth limit for huge folders."""
+    max_entries = min(int(q.get("max_entries", "500") or 500), 2000)
+    max_depth = min(int(q.get("max_depth", "6") or 6), 12)
+    pats = list(cfg.get("ignore", [])) + _global_ignore()
+    truncated = False
+    count = 0
+
+    def build(cur: Path, depth: int, rel_prefix: str):
+        nonlocal truncated, count
+        entries = []
+        try:
+            children = sorted(cur.iterdir(), key=lambda c: (c.is_file(), c.name.lower()))
+        except OSError:
+            return entries
+        for item in children:
+            if count >= max_entries:
+                truncated = True
+                return entries
+            rel = f"{rel_prefix}/{item.name}" if rel_prefix else item.name
+            if _ignore_match(rel, item.is_dir(), pats):
+                continue
+            if item.is_symlink():
+                continue  # symlinks never appear in the tree
+            count += 1
+            entry = {"name": item.name,
+                     "type": "directory" if item.is_dir() else "file"}
+            if item.is_file():
+                try:
+                    entry["size"] = item.stat().st_size
+                except OSError:
+                    pass
+            elif depth < max_depth:
+                entry["children"] = build(item, depth + 1, rel)
+            else:
+                entry["truncated"] = True
+            entries.append(entry)
+        return entries
+
+    return {"path": q.get("path", "."), "entries": build(p, 0, ""),
+            "entry_count": count, "truncated": truncated}
 
 
 # ------------------------------------------------- office reads (P1)
@@ -1906,6 +2082,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(400, {"error": f"not a directory: {base}"})
                 return self._json(200, _search(p, cfg, q))
 
+            if u.path == "/directory_tree":
+                base = unquote(q.get("path", "."))
+                p, root, cfg = resolve_guarded(base)
+                if not p.is_dir():
+                    return self._json(400, {"error": f"not a directory: {base}"})
+                return self._json(200, directory_tree(p, cfg, q))
+
             if u.path == "/html_text":
                 p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
                 if not p.is_file():
@@ -2196,6 +2379,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if u.path == "/trash/purge":
                 return self._json(403, {"error": "manual purge is a settings-page "
                                                  "action, not an API call"})
+
+            if u.path == "/zip":
+                _, _, cfg = resolve_guarded(".")
+                code, resp = zip_create(root, cfg, body)
+                return self._json(code, resp)
+
+            if u.path == "/unzip":
+                _, _, cfg = resolve_guarded(".")
+                code, resp = zip_extract(root, cfg, body)
+                return self._json(code, resp)
 
             if u.path == "/write_many":
                 # batch writes; >5 files needs {"confirmed": true} (mass-edit
