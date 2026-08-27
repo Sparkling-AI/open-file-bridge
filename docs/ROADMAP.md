@@ -108,11 +108,33 @@ Design stance (validated by OpenWorker source): **no delete endpoint, ever.**
 Deletion only as trash-move. Writes are the remaining blast surface — guards:
 
 ☐ **Snapshots (P0 item, restated here as part of the system)** — every write
-   to an existing file copies original to `.fb-versions/<root>/<relpath>/<ts>`
-   first; /restore endpoint lists and restores them.
-☐ **Trash instead of delete** (PROMOTED from P3) — `/delete` moves to
-   `.fb-trash/<ts>/` preserving tree; /trash/list + /trash/restore; auto-purge
+   to an existing file copies original to the versions store first;
+   /versions/list + /versions/restore endpoints.
+☐ **Trash instead of delete** (PROMOTED from P3) — `/delete` moves to the
+   trash store preserving tree; /trash/list + /trash/restore; auto-purge
    after N days (default 30). "Delete" is never a real unlink via the API.
+
+**STORAGE PLACEMENT DECISION (resolved 2026-08-27, from user review):**
+trash and versions live OUTSIDE all shared roots, in
+`state_dir()/trash/<root-hash>/<ts>/` and `state_dir()/versions/<root-hash>/…`
+— NOT as `.fb-trash/` inside the root. Rationale:
+  a) **Structural unreachability beats ignore-listing**: the path resolver
+     only resolves inside roots, so the model can never address these files
+     — no whitelist/ignore interplay exists at all. Ignore entries are
+     policy (configurable, missable); placement is architecture.
+  b) **Old/deleted content must not re-enter model reach**: versions hold
+     data the user just edited OUT (e.g. removed credentials); trash holds
+     files they removed entirely. Neither may be readable via the file API.
+  c) No pollution of user folders (sync services, backups, user globs).
+Cost: cross-filesystem moves become verified-copy-then-unlink (only when
+root and state dir are on different devices; same-device stays a rename).
+
+**Visibility rules**: /trash/list + /versions/list return METADATA only
+(path, ts, size) — never contents. Restore counts as a write (rate-limit +
+audit + snapshot-first if target exists now). Manual purge = settings page
+only. Model MAY offer "restore the previous version" (anti-accident UX) but
+must never read old contents. If any bridge-owned file ever must live
+inside a root (none planned): hard structural ignore, not user-configurable.
 ☐ **Write-rate circuit breaker** — bridge-side quota: max K writes per
    rolling 60 s window (default 20) + max total MB written per window;
    exceeding triggers 429 with "ask user to confirm mass edit" message the
