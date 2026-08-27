@@ -123,10 +123,10 @@ recommended when copying non-trivial blocks.
 Design stance (validated by OpenWorker source): **no delete endpoint, ever.**
 Deletion only as trash-move. Writes are the remaining blast surface — guards:
 
-☐ **Snapshots (P0 item, restated here as part of the system)** — every write
+✅ **Snapshots (P0 item, restated here as part of the system)** — every write
    to an existing file copies original to the versions store first;
    /versions/list + /versions/restore endpoints.
-☐ **Trash instead of delete** (PROMOTED from P3) — `/delete` moves to the
+✅ **Trash instead of delete** (PROMOTED from P3) — `/delete` moves to the
    trash store preserving tree; /trash/list + /trash/restore; auto-purge
    after N days (default 30). "Delete" is never a real unlink via the API.
 
@@ -151,15 +151,15 @@ audit + snapshot-first if target exists now). Manual purge = settings page
 only. Model MAY offer "restore the previous version" (anti-accident UX) but
 must never read old contents. If any bridge-owned file ever must live
 inside a root (none planned): hard structural ignore, not user-configurable.
-☐ **Write-rate circuit breaker** — bridge-side quota: max K writes per
+✅ **Write-rate circuit breaker** — bridge-side quota: max K writes per
    rolling 60 s window (default 20) + max total MB written per window;
    exceeding triggers 429 with "ask user to confirm mass edit" message the
    skill relays. A runaway model hits the brake, not the folder.
-☐ **Mass-edit detection** — `/write_many` requires an explicit
+✅ **Mass-edit detection** — `/write_many` requires an explicit
    `confirmed: true` second call when batch size is over 5 files (token
    pattern from openapi-servers). Skill rule: for over 5 file changes, list
    the plan first, get user OK, then batch.
-☐ **Read-only mode toggle** (settings page, per root or global): disables
+✅ **Read-only mode toggle** (settings page, per root or global): disables
    /write, /edit, /delete entirely — for demo/paranoid mode. Env override
    too (FILE_BRIDGE_READONLY=1).
 ☐ **Git-tracked folders: optional safety** — detect .git in root, settings

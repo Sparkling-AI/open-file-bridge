@@ -622,6 +622,164 @@ def confirmation_consume(tok: str, params: dict) -> tuple[bool, str]:
         return True, ""
 
 
+
+
+# ------------------------------------------- trash + write guards (P0b)
+
+TRASH_DIR = STATE_DIR / "trash"
+TRASH_PURGE_DAYS = 30
+
+# ---- rate circuit breaker: max writes per rolling window ----
+_WRITE_LOG_LOCK = threading.Lock()
+_WRITE_LOG: list = []          # (monotonic_ts, nbytes)
+RATE_MAX_WRITES = 20          # per 60 s window (env-tunable)
+RATE_MAX_BYTES = 50 * 1024 * 1024
+
+
+def _rate_limits():
+    mw = os.environ.get("FILE_BRIDGE_MAX_WRITES")
+    mb = os.environ.get("FILE_BRIDGE_MAX_WRITE_MB")
+    return (int(mw) if mw and mw.isdigit() else RATE_MAX_WRITES,
+            int(mb) * 1024 * 1024 if mb and mb.isdigit() else RATE_MAX_BYTES)
+
+
+def rate_check(nbytes: int) -> tuple[bool, str]:
+    """Record a prospective write; False when the rolling window is over
+    budget. A runaway model hits the brake, not the folder."""
+    now = time.monotonic()
+    max_w, max_b = _rate_limits()
+    with _WRITE_LOG_LOCK:
+        global _WRITE_LOG
+        _WRITE_LOG = [t for t in _WRITE_LOG if now - t[0] < 60]
+        w_count = sum(1 for t in _WRITE_LOG if t[1] >= 0)
+        w_bytes = sum(max(t[1], 0) for t in _WRITE_LOG)
+        if w_count + 1 > max_w or w_bytes + nbytes > max_b:
+            return False, (f"write-rate circuit breaker: {w_count} writes / "
+                           f"{w_bytes // 1024} KiB in the last 60 s (limits "
+                           f"{max_w} / {max_b // 1024 // 1024} MiB). STOP and ask "
+                           f"the user to confirm the mass edit before continuing.")
+        _WRITE_LOG.append((now, nbytes))
+    return True, ""
+
+
+def _readonly_for(cfg: dict) -> bool:
+    if _is_readonly():
+        return True
+    return bool(cfg.get("readonly"))
+
+
+def trash_store_for(root: Path) -> Path:
+    d = TRASH_DIR / _root_key(root)
+    d.mkdir(parents=True, exist_ok=True)
+    _restrict_to_user(d, is_dir=True)
+    return d
+
+
+def trash_move(root: Path, target: Path) -> dict:
+    """Move target into the trash store preserving the tree. Cross-device
+    fallback: verified copy-then-unlink (user decision note in roadmap)."""
+    rel = target.relative_to(root).as_posix()
+    ts = time.strftime("%Y%m%d-%H%M%S") + "-" + _secrets.token_hex(2)
+    dest = trash_store_for(root) / ts / rel.lstrip("/")
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.rename(target, dest)            # same device: atomic
+    except OSError:
+        if target.is_dir():
+            shutil.copytree(target, dest)
+            n_src = sum(1 for _ in target.rglob("*"))
+            n_dst = sum(1 for _ in dest.rglob("*"))
+            if n_src != n_dst:
+                shutil.rmtree(dest, ignore_errors=True)
+                raise RuntimeError("trash copy verification failed — aborting, "
+                                   "original untouched")
+            shutil.rmtree(target)
+        else:
+            shutil.copy2(target, dest)
+            if dest.stat().st_size != target.stat().st_size:
+                dest.unlink(missing_ok=True)
+                raise RuntimeError("trash copy verification failed — aborting, "
+                                   "original untouched")
+            target.unlink()
+    mf = trash_store_for(root) / "manifest.jsonl"
+    with open(mf, "a", encoding="utf-8") as fh:
+        fh.write(json.dumps({"ts": ts, "path": rel,
+                             "type": "dir" if dest.is_dir() else "file",
+                             "size": _tree_size(dest)}) + "\n")
+    return {"ts": ts, "path": rel, "trashed_to": str(dest)}
+
+
+def _tree_size(p: Path) -> int:
+    try:
+        return sum(f.stat().st_size for f in p.rglob("*") if f.is_file()) if p.is_dir() \
+            else p.stat().st_size
+    except OSError:
+        return 0
+
+
+def trash_purge(root: Path | None = None):
+    """Drop entries older than TRASH_PURGE_DAYS (opportunistic, called on
+    trash ops; manual purge = settings page only)."""
+    import datetime
+    cutoff = time.time() - TRASH_PURGE_DAYS * 86400
+    bases = [trash_store_for(root)] if root else \
+            [d for d in TRASH_DIR.glob("*/") if d.is_dir()]
+    for base in bases:
+        for snap in base.glob("*/"):
+            try:
+                if snap.stat().st_mtime < cutoff:
+                    shutil.rmtree(snap, ignore_errors=True)
+            except OSError:
+                pass
+
+
+def trash_list(root: Path, rel_filter: str = "") -> list:
+    """METADATA ONLY — same never-re-enter-model-reach rule as versions."""
+    out = []
+    mf = trash_store_for(root) / "manifest.jsonl"
+    try:
+        for line in open(mf, encoding="utf-8").read().splitlines():
+            try:
+                e = json.loads(line)
+            except Exception:
+                continue
+            if rel_filter and rel_filter not in e.get("path", ""):
+                continue
+            e["restore"] = "POST /trash/restore {path: %r, ts: %r}" % (e["path"], e["ts"])
+            out.append(e)
+    except FileNotFoundError:
+        pass
+    out.reverse()
+    return out[:200]
+
+
+def trash_restore(root: Path, rel: str, ts: str) -> tuple[bool, str]:
+    src = trash_store_for(root) / ts / rel.lstrip("/")
+    if not src.exists():
+        cands = list((trash_store_for(root) / ts).rglob(Path(rel).name))
+        if len(cands) != 1:
+            return False, f"no unique trash entry for {rel} @ {ts}"
+        src = cands[0]
+    target = (root / rel).resolve()
+    if os.path.commonpath([str(root), str(target)]) != str(root):
+        return False, "restore target escapes root"
+    if target.exists():
+        return False, ("target exists — trash/restore refuses to overwrite; "
+                       "delete or rename it first")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        os.rename(src, target)
+    except OSError:
+        if src.is_dir():
+            shutil.copytree(src, target)
+            shutil.rmtree(src)
+        else:
+            shutil.copy2(src, target)
+            src.unlink()
+    return True, str(target)
+
+
+
 # ------------------------------------------------------- multi-root (P0b)
 
 class ExcludedPath(Exception):
@@ -857,7 +1015,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "allowed_origin": get_allowed_origin(),
                 "security": security_mode(),
                 "readonly": _is_readonly(),
-                "ignore_global": _global_ignore()})
+                "ignore_global": _global_ignore(),
+                "rate_limits": _rate_limits()})
 
         # ---- wheel hosting (token-free by design: static public wheels) ----
         if u.path == "/wheels":
@@ -1154,6 +1313,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     okc, err = confirmation_consume(confirm_token, confirm_params)
                     if not okc:
                         return self._json(400, {"error": err})
+                if _readonly_for(cfg):
+                    return self._json(403, {"error": "read-only mode is active — "
+                                                     "writes are disabled"})
+                okr, err = rate_check(len(content))
+                if not okr:
+                    return self._json(429, {"error": err, "rate_limited": True,
+                                            "hint": "relay this to the user and wait "
+                                                    "for their confirmation"})
                 snap = snapshot_before_write(root, p) if p.exists() else None
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(content, encoding="utf-8")
@@ -1181,6 +1348,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     okc, err = confirmation_consume(confirm_token, confirm_params)
                     if not okc:
                         return self._json(400, {"error": err})
+                if _readonly_for(cfg):
+                    return self._json(403, {"error": "read-only mode is active — "
+                                                     "writes are disabled"})
+                okr, err = rate_check(len(raw))
+                if not okr:
+                    return self._json(429, {"error": err, "rate_limited": True,
+                                            "hint": "relay this to the user and wait "
+                                                    "for their confirmation"})
                 snap = snapshot_before_write(root, p) if p.exists() else None
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_bytes(raw)
@@ -1215,6 +1390,100 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not okr:
                     return self._json(404, {"error": mes})
                 return self._json(200, {"ok": True, "restored": mes})
+
+            if u.path == "/delete":
+                # NO unlink ever: delete = move to trash (structural isolation
+                # outside all roots). Two-step confirmation like overwrites.
+                rel = body.get("path", "")
+                if not rel:
+                    return self._json(400, {"error": "need path"})
+                p, root, cfg = resolve_guarded(unquote(rel), for_write=True)
+                if not p.exists():
+                    return self._json(404, {"error": f"not found: {rel}"})
+                if _readonly_for(cfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                confirm_params = {"op": "delete", "path": rel}
+                confirm_token = body.get("confirmation_token")
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    desc = f"{p.stat().st_size} bytes" if p.is_file() else "directory"
+                    return self._json(409, {
+                        "error": f"deletion needs confirmation ({desc}) — the file "
+                                 f"goes to the trash store, not unrecoverable",
+                        "confirmation_required": True, **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
+                okr, err = rate_check(0)
+                if not okr:
+                    return self._json(429, {"error": err, "rate_limited": True})
+                info = trash_move(root, p)
+                trash_purge(root)
+                return self._json(200, {"ok": True, "trashed": info,
+                                        "recover": "POST /trash/restore"})
+
+            if u.path == "/trash/list":
+                rel = body.get("path", "")
+                rel = unquote(rel) if isinstance(rel, str) else ""
+                _rp, _rr, _rc = resolve_guarded(rel or ".")
+                return self._json(200, {"trash": trash_list(_rr, rel)})
+
+            if u.path == "/trash/restore":
+                rel = body.get("path", "")
+                ts = str(body.get("ts", ""))
+                if not rel or not ts:
+                    return self._json(400, {"error": "need path + ts (from /trash/list)"})
+                _rp, _rr, _rc = resolve_guarded(rel)
+                if _readonly_for(_rc):
+                    return self._json(403, {"error": "read-only mode is active"})
+                okr, mes = trash_restore(_rr, rel, ts)
+                if not okr:
+                    return self._json(409, {"error": mes})
+                return self._json(200, {"ok": True, "restored": mes})
+
+            if u.path == "/trash/purge":
+                return self._json(403, {"error": "manual purge is a settings-page "
+                                                 "action, not an API call"})
+
+            if u.path == "/write_many":
+                # batch writes; >5 files needs {"confirmed": true} (mass-edit
+                # detection, roadmap P0b)
+                items = body.get("items", [])
+                if not isinstance(items, list) or not items or len(items) > 50:
+                    return self._json(400, {"error": "items must be a 1-50 list"})
+                if len(items) > 5 and not body.get("confirmed"):
+                    return self._json(409, {
+                        "error": f"batch of {len(items)} files needs explicit "
+                                 f"confirmation",
+                        "confirmation_required": True,
+                        "confirm_op": "list the plan to the user; on approval "
+                                      "re-send with confirmed:true",
+                        "plan": [{"path": it.get("path"),
+                                  "bytes": len(it.get("content", ""))}
+                                 for it in items]})
+                results = []
+                for it in items:
+                    path = it.get("path", "")
+                    content = it.get("content", "")
+                    try:
+                        p, root, cfg = resolve_guarded(unquote(path), for_write=True)
+                        if _readonly_for(cfg):
+                            raise PermissionError("read-only mode")
+                        okr, err = rate_check(len(content))
+                        if not okr:
+                            return self._json(429, {"error": err, "rate_limited": True,
+                                                    "hint": "batch aborted — files "
+                                                            "written so far are listed",
+                                                    "results": results})
+                        snap = snapshot_before_write(root, p) if p.exists() else None
+                        p.parent.mkdir(parents=True, exist_ok=True)
+                        p.write_text(content, encoding="utf-8")
+                        results.append({"path": path, "ok": True, "bytes": len(content),
+                                        "snapshot": snap})
+                    except (PermissionError, ExcludedPath) as e:
+                        results.append({"path": path, "ok": False, "error": str(e)})
+                return self._json(200, {"ok": all(r.get("ok") for r in results),
+                                        "results": results})
         except ExcludedPath as e:
             return self._json(403, {"error": str(e), "excluded": True,
                                     "hint": "write into an ignored path is refused; "
@@ -1275,6 +1544,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             okr, err = set_roots(body["roots"])
             if not okr:
                 return self._json(400, {"ok": False, "error": err}, cors=False)
+        if "readonly" in body:
+            _state_update(readonly=bool(body["readonly"]))
         if isinstance(body.get("ignore_global"), list):
             _state_update(ignore_global=[str(x)[:200] for x in body["ignore_global"]][:200])
         if body.get("root") and not isinstance(body.get("roots"), list):

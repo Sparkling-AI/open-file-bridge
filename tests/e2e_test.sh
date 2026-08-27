@@ -171,6 +171,54 @@ check "state-inside-root rejected" 'cannot\|error' "$(curl -s -X POST $BRIDGE/ap
 # back to single root for the remaining assertions
 curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d "{\"roots\":[{\"id\":\"main\",\"path\":\"$TESTDIR\",\"ignore\":[\".git/\",\"secrets/\",\"*.tmp\"]}]}" >/dev/null
 
+# ---------- trash + rate breaker + write_many + readonly (P0b) ----------
+# delete = trash-move with confirmation
+DEL=$(curl -s -X POST $BRIDGE/delete -H 'Content-Type: application/json' $T -d '{"path":"delme.txt"}' 2>/dev/null)
+echo "trash-me" > "$TESTDIR/delme.txt"
+DEL=$(curl -s -X POST $BRIDGE/delete -H 'Content-Type: application/json' $T -d '{"path":"delme.txt"}')
+check "delete demands confirm" 'confirmation_required' "$DEL"
+DT=$(echo "$DEL" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+DR=$(curl -s -X POST $BRIDGE/delete -H 'Content-Type: application/json' $T -d "{\"path\":\"delme.txt\",\"confirmation_token\":\"$DT\"}")
+check "delete to trash ok"    '"trashed"'   "$DR"
+if [ -e "$TESTDIR/delme.txt" ]; then echo "  FAIL: file not moved"; fail=1; else echo "  PASS: file gone from root"; fi
+if find "$STATEDIR/trash" -name delme.txt | grep -q delme; then echo "  PASS: in trash store"; else echo "  FAIL: not in trash store"; fail=1; fi
+# trash list metadata only + restore
+TL=$(curl -s -X POST $BRIDGE/trash/list -H 'Content-Type: application/json' $T -d '{}')
+check "trash lists entry"     '"path": *"delme.txt"' "$TL"
+TTS=$(echo "$TL" | python3 -c "import json,sys; print(json.load(sys.stdin)['trash'][0]['ts'])")
+check "trash restore"         '"ok": *true' "$(curl -s -X POST $BRIDGE/trash/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"delme.txt\",\"ts\":\"$TTS\"}")"
+check "trash restored content" 'trash-me'  "$(cat "$TESTDIR/delme.txt")"
+check "trash purge is local"  'settings-page' "$(curl -s -X POST $BRIDGE/trash/purge -H 'Content-Type: application/json' $T -d '{}')"
+
+# write_many small batch (≤5 → no confirmation)
+WM=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d '{"items":[{"path":"w1.txt","content":"a"},{"path":"w2.txt","content":"b"}]}')
+check "write_many small ok"   '"ok": *true' "$WM"
+check "write_many landed"     'a'           "$(cat "$TESTDIR/w1.txt")"
+# write_many big batch without confirmation
+python3 -c "import json; print(json.dumps({'items':[{'path':f'b{i}.txt','content':'x'} for i in range(7)]}))" > /tmp/many.json
+WMB=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d @/tmp/many.json)
+check "write_many mass gated" 'needs explicit confirmation' "$WMB"
+# with confirmed:true it goes through
+WMBC=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d "$(python3 -c "import json; d=json.load(open('/tmp/many.json')); d['confirmed']=True; print(json.dumps(d))")")
+check "write_many confirmed"  '"ok": *true' "$WMBC"
+
+# readonly mode blocks writes
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"readonly":true}' >/dev/null
+check "readonly blocks write" 'read-only mode' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"ro.txt","content":"x"}')"
+check "readonly blocks delete" 'read-only mode' "$(curl -s -X POST $BRIDGE/delete -H 'Content-Type: application/json' $T -d '{"path":"delme.txt"}')"
+check "readonly allows read"  'test content'  "$(curl -s "$BRIDGE/read?path=notes.txt" $T)"
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"readonly":false}' >/dev/null
+
+# rate circuit breaker (low limit via env would need restart; assert the
+# response carries the breaker fields by bursting writes)
+BURST=0; BRK=""
+for i in $(seq 1 25); do
+  R=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"burst-new-$i.txt\",\"content\":\"x\"}")
+  if echo "$R" | grep -q rate_limited; then BRK="$R"; break; fi
+done
+check "rate breaker trips"    'circuit breaker' "$BRK"
+rm -f "$TESTDIR"/burst-new-*.txt 2>/dev/null
+
 # ---------- state dir isolation & permissions ----------
 if [ -f "$STATEDIR/state.json" ]; then echo "  PASS: state in FILE_BRIDGE_STATE_DIR"; else echo "  FAIL: state.json not in STATEDIR"; fail=1; fi
 PERM=$(stat -c '%a' "$STATEDIR/state.json" 2>/dev/null || echo "?")
