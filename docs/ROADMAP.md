@@ -53,10 +53,21 @@ recommended when copying non-trivial blocks.
    (TODO.md #1 has the full rationale.)
 
 ☐ **Bearer token auth** — defense in depth against local pages/processes
-   (Firefox does not enforce PNA). Token generated on first run, stored
-   0600 (OpenWorker secrets.py pattern), shown in settings page, sent by
-   the skill as a header; **never echoed in chat/context** (their hard rule).
+   (Firefox does not enforce PNA). Token stored 0600 (OpenWorker secrets.py
+   pattern), sent by the skill as a header; **never echoed in chat/context**.
    OpenWorker independently converged on the same 8765+token design.
+
+   **TOKEN DISTRIBUTION DESIGN (resolved 2026-08-27):** per-user random
+   tokens CANNOT work — the OWUI skill is org-public static markdown, it
+   can't know each user's token. Resolution: two tiers.
+   - Tier 1 (default, zero-config): CORS origin lock ONLY. Browser-enforced,
+     no secret in the skill. Sufficient for internal rollout.
+   - Tier 2 (opt-in enterprise hardening): org-wide token set by admin
+     (installer config or setup script), embedded in the skill by
+     setup_owui.py, checked by bridge. Acceptable leak surface: skill is
+     org-internal; the token only guards each user's OWN localhost bridge.
+   If Tier 2 active AND request has no/wrong token → 401. Bridge refuses
+   "production mode" (see below) only when BOTH tiers are off.
 
 ☐ **Binary read whitelist + /peek + windowed reads** — `/read` on binary
    files today yields mojibake; `/read_b64` can push 8 MB into context.
