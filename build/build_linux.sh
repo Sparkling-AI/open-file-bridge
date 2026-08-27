@@ -19,9 +19,10 @@ if [[ "${1:-}" == "--container" ]]; then
       src/file_bridge.py &&
     chmod +x dist/FileBridge'
 else
-  pip install --quiet pyinstaller
+  pip install --quiet pyinstaller pymupdf
   pyinstaller --onefile --clean --name FileBridge \
     --exclude-module tkinter --exclude-module unittest \
+    --collect-all pymupdf --collect-all fitz \
     src/file_bridge.py
 fi
 

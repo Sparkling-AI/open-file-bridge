@@ -9,14 +9,21 @@
 
 from PyInstaller.utils.hooks import collect_submodules
 
+from PyInstaller.utils.hooks import collect_all
+
+datas, binaries, hiddenimports = [], [], []
+for pkg in ('pymupdf', 'fitz'):
+    d, b, h = collect_all(pkg)
+    datas += d; binaries += b; hiddenimports += h
+
 block_cipher = None
 
 a = Analysis(
     ['../src/file_bridge.py'],
     pathex=['../src'],
-    binaries=[],
-    datas=[],
-    hiddenimports=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=['tkinter', 'unittest', 'pydoc_data'],

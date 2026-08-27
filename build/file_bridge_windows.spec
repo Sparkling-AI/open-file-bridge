@@ -1,30 +1,39 @@
 # File Bridge — Windows build spec (PyInstaller)
+# ============================================================
 # Build on a Windows machine (or Windows runner) with:
-#   pip install pyinstaller
+#   pip install pyinstaller pymupdf
 #   pyinstaller --noconfirm file_bridge_windows.spec
 #
 # Output: dist/FileBridge/FileBridge.exe  (one-folder bundle)
-# Zip dist/FileBridge -> FileBridge-windows-x64.zip for distribution.
+# Zip dist/FileBridge -> FileBridge-windows-x64.zip for distribution,
+# or compile installer_windows.iss (Inno Setup) for the full installer
+# that also bundles wheels/ + tessdata/ + the tesseract engine.
 
-import sys
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_all
+
+datas, binaries, hiddenimports = [], [], []
+for pkg in ('pymupdf', 'fitz'):
+    d, b, h = collect_all(pkg)
+    datas += d; binaries += b; hiddenimports += h
 
 block_cipher = None
 
 a = Analysis(
     ['../src/file_bridge.py'],
     pathex=['../src'],
-    binaries=[],
-    datas=[],
-    hiddenimports=[],
+    binaries=binaries,
+    datas=datas,
+    hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],
     excludes=['tkinter', 'unittest', 'pydoc_data'],
     cipher=block_cipher,
 )
 
-# --onefile: single self-extracting exe. Simpler for non-technical users
-# (one file to download, one to double-click), slower startup (~1-2s) is fine here.
+# --onefile: single self-extracting exe. Slower startup (~1-2s) is fine here.
+# PDF support (pymupdf) is frozen INTO the exe via collect_all below, so the
+# installed app has /pdf_text + PDF-rendering-for-OCR out of the box.
+# OCR itself uses the external tesseract binary bundled by the installer.
 pyz = PYZ(a.pure)
 
 exe = EXE(
@@ -33,7 +42,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     name='FileBridge',
-    console=False,          # no black console window; logs go to ~/.file-bridge.log
+    console=False,          # no console window; runs quietly in background
     icon=None,              # add icon='filebridge.ico' when you have one
     uac_admin=False,        # normal user rights, no admin needed
 )

@@ -98,18 +98,40 @@ pyinstaller ... --collect-all pymupdf ...
 
 **OCR** (`/ocr`): the **tesseract binary**, not a pip package —
 
+- **Windows — everything is in the Inno Setup installer.** Compile
+  `build/installer_windows.iss`; it bundles the exe + `wheels/` + `tessdata/`
+  + the tesseract engine itself (see PREP notes inside the script). The
+  bridge auto-detects `{app}\tesseract\tesseract.exe` — the user needs
+  nothing on PATH.
 - Bundle `src/tessdata/` (eng/swe/chi_sim/osd, ~20 MB) **next to the bridge
   executable** — auto-detected, zero config.
-- Bundle a tesseract build (Windows: UB-Mannheim build; macOS: `brew`-style
-  dylibs) and set `TESSERACT_CMD` in the launcher — or rely on the system
-  `tesseract` on PATH (Linux distro package is fine).
+- Other platforms: bundle a tesseract build as `tesseract/bin/tesseract`
+  next to the exe, or set `TESSERACT_CMD`, or rely on system PATH
+  (Linux distro package is fine).
 - Extra languages: drop `.traineddata` files from
   https://github.com/tesseract-ocr/tessdata_fast into `tessdata/`.
   Users select them at runtime in the settings page — no rebuild needed.
+  (On Windows: `%LOCALAPPDATA%\Programs\File Bridge\tessdata\`)
+
+**Frozen-build notes (verified on Linux with PyInstaller 6.22):**
+
+- pymupdf is frozen into the binary via `--collect-all pymupdf --collect-all
+  fitz` (the .spec files do this) → binary grows to ~82 MB, `/pdf_text` and
+  PDF-page-rendering-for-OCR work with zero pip installs.
+- The bridge resolves bundled assets via the **executable's directory**
+  (PyInstaller's `sys.frozen`), NOT `__file__` — so `wheels/`, `tessdata/`,
+  `tesseract/` next to the installed exe are found correctly. Layout:
+
+```
+<FileBridge install>/
+├── FileBridge(.exe)      # everything python baked in (82 MB)
+├── wheels/               # browser-side Office libs (8 .whl)
+├── tessdata/             # eng swe chi_sim osd (.traineddata)
+└── tesseract/            # engine binary (Windows installer only)
+```
 
 Without the add-ons the endpoints return 501 with a clear message; everything
-else works. The *browser-side* wheels live in `src/wheels/` — bundle that
-directory alongside the binary in installers.
+else works.
 
 ## Smoke-testing a build
 

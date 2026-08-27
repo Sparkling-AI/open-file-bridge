@@ -29,7 +29,7 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
 # Wheel hosting: serve pure-Python wheels bundled next to this file in ./wheels/
 # so Pyodide installs them from localhost instead of PyPI (fast + offline).
-WHEELS_DIR = Path(__file__).resolve().parent / "wheels"
+# (WHEELS_DIR is set after _app_dir() is defined, for frozen-build support)
 
 # Optional PDF/OCR add-on. Two parts, each auto-detected:
 #   PDF: `pip install pymupdf` (importable)          -> /pdf_text, + /ocr for PDFs
@@ -43,29 +43,52 @@ except ImportError:
     HAVE_PYMUPDF = False
 
 
+def _app_dir() -> Path:
+    """Directory where the app's bundled assets live (wheels/, tessdata/,
+    tesseract/). Under PyInstaller --onefile, __file__ points into a throwaway
+    extraction dir, so frozen apps must use the executable's directory."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
 def _find_tesseract():
-    """Locate the tesseract binary. Honors TESSERACT_CMD env override.
+    """Locate the tesseract binary. Order:
+    1. TESSERACT_CMD env override
+    2. bundled: <app>/tesseract/tesseract.exe      (Windows installer layout)
+       or      <app>/tesseract/bin/tesseract        (unix layout)
+    3. `tesseract` on PATH
     Returns (path, version_str) or (None, None)."""
     import shutil as _sh
-    cand = os.environ.get("TESSERACT_CMD") or _sh.which("tesseract")
-    if not cand:
-        return None, None
-    try:
-        out = subprocess.run([cand, "--version"], capture_output=True, text=True,
-                             timeout=10)
-        ver = (out.stdout or out.stderr).splitlines()[0] if (out.stdout or out.stderr) else ""
-        return cand, ver
-    except Exception:
-        return None, None
+    cands = []
+    if os.environ.get("TESSERACT_CMD"):
+        cands.append(os.environ["TESSERACT_CMD"])
+    cands += [str(_app_dir() / "tesseract" / "tesseract.exe"),
+              str(_app_dir() / "tesseract" / "bin" / "tesseract")]
+    wh = _sh.which("tesseract")
+    if wh:
+        cands.append(wh)
+    for cand in cands:
+        if cand and os.path.isfile(cand) and os.access(cand, os.X_OK):
+            try:
+                out = subprocess.run([cand, "--version"], capture_output=True,
+                                     text=True, timeout=10)
+                ver = (out.stdout or out.stderr).splitlines()[0] if (out.stdout or out.stderr) else ""
+                return cand, ver
+            except Exception:
+                continue
+    return None, None
 
 
 TESSERACT_BIN, TESSERACT_VER = _find_tesseract()
 # tessdata dir override (bundled langs next to the app, or system default).
-# Order: env TESSDATA_PREFIX > ./tessdata next to this file > tesseract default.
-_app_dir = Path(__file__).resolve().parent
-_TESSDATA_LOCAL = _app_dir / "tessdata"
+# Order: env TESSDATA_PREFIX > <app>/tessdata > <app>/tesseract/tessdata
+# (bundled-engine layout) > tesseract compiled-in default.
+_ad = _app_dir()
+WHEELS_DIR = _ad / "wheels"
 TESSDATA_DIR = (Path(os.environ["TESSDATA_PREFIX"]) if os.environ.get("TESSDATA_PREFIX")
-                else _TESSDATA_LOCAL if (_TESSDATA_LOCAL / "eng.traineddata").exists()
+                else _ad / "tessdata" if (_ad / "tessdata" / "eng.traineddata").exists()
+                else _ad / "tesseract" / "tessdata" if (_ad / "tesseract" / "tessdata" / "eng.traineddata").exists()
                 else None)  # None = let tesseract use its compiled-in default
 
 
