@@ -15,9 +15,9 @@ if curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1; then
   echo "ERROR: something already listens on $BRIDGE — stop it first." >&2
   exit 1
 fi
-FILE_BRIDGE_STATE_DIR="$STATEDIR" python3 src/file_bridge.py "$TESTDIR" &
+FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_MAX_WRITES=500 python3 src/file_bridge.py "$TESTDIR" &
 BRIDGE_PID=$!
-trap 'kill $BRIDGE_PID 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR"' EXIT
+trap 'kill $BRIDGE_PID 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR" ${BRKDIR:-} ${BRKSTATE:-}' EXIT
 sleep 1.5
 
 fail=0
@@ -209,15 +209,8 @@ check "readonly blocks delete" 'read-only mode' "$(curl -s -X POST $BRIDGE/delet
 check "readonly allows read"  'test content'  "$(curl -s "$BRIDGE/read?path=notes.txt" $T)"
 curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"readonly":false}' >/dev/null
 
-# rate circuit breaker (low limit via env would need restart; assert the
-# response carries the breaker fields by bursting writes)
-BURST=0; BRK=""
-for i in $(seq 1 25); do
-  R=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"burst-new-$i.txt\",\"content\":\"x\"}")
-  if echo "$R" | grep -q rate_limited; then BRK="$R"; break; fi
-done
-check "rate breaker trips"    'circuit breaker' "$BRK"
-rm -f "$TESTDIR"/burst-new-*.txt 2>/dev/null
+# rate circuit breaker: moved to END of script (needs its own low-limit
+# instance; see bottom).
 
 # ---------- state dir isolation & permissions ----------
 if [ -f "$STATEDIR/state.json" ]; then echo "  PASS: state in FILE_BRIDGE_STATE_DIR"; else echo "  FAIL: state.json not in STATEDIR"; fail=1; fi
@@ -240,6 +233,26 @@ page.insert_text((72,72), "E2E INVOICE 42", fontname="helv", fontsize=12)
 doc.save("$TESTDIR/inv.pdf"); doc.close()
 PY
 fi
+
+# ---------- rate circuit breaker (own low-limit instance) ----------
+# The main suite bridge runs with FILE_BRIDGE_MAX_WRITES=500, so a burst can
+# never trip it there. This runs LAST because it reclaims port 8765.
+kill $BRIDGE_PID 2>/dev/null || true
+wait $BRIDGE_PID 2>/dev/null || true
+for _ in $(seq 1 20); do ss -tln | grep -q ':8765 ' || break; sleep 0.25; done
+BRKDIR=$(mktemp -d); BRKSTATE=$(mktemp -d)
+echo "b1" > "$BRKDIR/f.txt"
+FILE_BRIDGE_STATE_DIR="$BRKSTATE" FILE_BRIDGE_MAX_WRITES=3 python3 src/file_bridge.py "$BRKDIR" &
+BRIDGE_PID=$!
+sleep 1.5
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"allowed_origin":"http://owui.test:8080"}' >/dev/null
+BRK=""
+for i in $(seq 1 6); do
+  R=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"burst-$i.txt\",\"content\":\"x\"}")
+  if echo "$R" | grep -q rate_limited; then BRK="$R"; break; fi
+done
+check "rate breaker trips"    'circuit breaker' "$BRK"
+check "breaker err mentions limit" 'limits 3 /' "$BRK"
 
 echo
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ✅"; else echo "SOME TESTS FAILED ❌"; exit 1; fi
