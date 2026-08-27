@@ -516,6 +516,38 @@ KNOWN_BASENAMES = {
 }
 OFFICE_ZIP_EXTS = {".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub"}
 
+# Sensitive-name blacklist (P2): matched against the BASENAME, case-insensitive,
+# for reads AND writes. Complements per-root ignore lists (which the user
+# configures) with a floor the model can never talk its way past. Entries
+# deliberately broad — a false positive costs one "ask the user", a false
+# negative leaks credentials into model context.
+SENSITIVE_NAMES = {
+    ".env", ".env.local", ".env.production", ".env.development",
+    "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ecdsa_sk", "id_ed25519_sk",
+    "authorized_keys", "known_hosts", "ssh_config", "config.ssh",
+    "credentials", "credentials.json", "credentials.xml", "secrets",
+    "secrets.json", "secrets.yaml", "secrets.yml", "secrets.toml",
+    ".npmrc", ".pypirc", ".netrc", ".htpasswd", ".git-credentials",
+    "serviceaccount.json", "firebase-adminsdk",
+}
+SENSITIVE_EXTS = {".pem", ".key", ".p12", ".pfx", ".keystore", ".kdbx", ".env"}
+SENSITIVE_PATTERNS = re.compile(
+    r"(^|[-_])(id_rsa|id_dsa|id_ecdsa|id_ed25519|authorized_keys|"
+    r"credentials|secret|token|\.htpasswd|\.netrc|\.pypirc|\.npmrc)",
+    re.IGNORECASE,
+)
+
+
+def sensitive_name(name: str) -> bool:
+    """True if the basename looks like a credential/secret carrier."""
+    base = name.rsplit("/", 1)[-1].lower()
+    if base in SENSITIVE_NAMES:
+        return True
+    stem, dot, ext = base.rpartition(".")
+    if dot and ("." + ext) in SENSITIVE_EXTS:
+        return True
+    return bool(SENSITIVE_PATTERNS.search(base))
+
 # magic-byte signatures → coarse kind (checked BEFORE the extension whitelist:
 # a .txt that is really a PNG gets rejected with the right routing hint)
 _MAGIC = [
@@ -1668,6 +1700,12 @@ def resolve_any(rel: str):
     p = (root / rel).resolve()
     if os.path.commonpath([str(root), str(p)]) != str(root):
         raise PermissionError("path escapes shared root")
+    # sensitive-name floor (P2): .env / id_rsa / *.pem / credentials… never
+    # readable or writable via the API, regardless of ignore lists
+    if sensitive_name(p.name):
+        raise PermissionError(
+            f"'{p.name}' looks like a credential/secret file — the bridge "
+            f"refuses to serve it. Ask the user to handle it manually.")
     # symlink guard: no component of p may be a symlink (a link to a dir
     # INSIDE the same root still resolves inside, but mixed trust — refuse
     # uniformly; the model can address the real path instead)

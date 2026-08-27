@@ -151,7 +151,7 @@ check "health lists roots" '"id": *"second"' "$(curl -s $BRIDGE/health)"
 check "read root2 by id"   'second root file' "$(curl -s "$BRIDGE/read?path=second/other/deep.txt" $T)"
 check "default root intact" 'test content'   "$(curl -s "$BRIDGE/read?path=notes.txt" $T)"
 mkdir -p "$TESTDIR/secrets" "$TESTDIR/.git"
-echo "TOPSECRET" > "$TESTDIR/secrets/key.pem"
+echo "TOPSECRET" > "$TESTDIR/secrets/hidden.dat"
 echo "ref" > "$TESTDIR/.git/config"
 echo "tmp" > "$TESTDIR/junk.tmp"
 check "list omits ignored"  'clean' "$(curl -s "$BRIDGE/list?path=." $T | python3 -c "
@@ -160,7 +160,7 @@ d=json.load(sys.stdin)
 paths=[e['path'] for e in d['entries']]
 bad=[p for p in paths if 'secrets/' in p or '.git/' in p or p.endswith('.tmp')]
 print('LEAKED:'+str(bad) if bad else 'clean')")"
-check "read ignored 404s"   'excluded by settings' "$(curl -s "$BRIDGE/read?path=secrets/key.pem" $T)"
+check "read ignored 404s"   'excluded by settings' "$(curl -s "$BRIDGE/read?path=secrets/hidden.dat" $T)"
 check "read dotgit 404s"    'excluded' "$(curl -s "$BRIDGE/read?path=.git/config" $T)"
 check "write ignored refused" 'refused\|excluded' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"secrets/new.txt","content":"x"}')"
 check "pdf-like ignored too" 'excluded\|no such' "$(curl -s "$BRIDGE/read?path=junk.tmp" $T)"
@@ -389,16 +389,29 @@ if [ "$RPERM" = "640" ] || [ "$RPERM" = "600" ]; then echo "  PASS: restore pres
 
 # ---------- symlink protection (P2, Linux) ----------
 mkdir -p "$TESTDIR/realdir"
-echo "outside data" > "$TESTDIR/realdir/secret.txt"
+echo "outside data" > "$TESTDIR/realdir/outside.txt"
 ln -sfn "$TESTDIR/realdir" "$TESTDIR/linkdir"
-ln -sf "$TESTDIR/realdir/secret.txt" "$TESTDIR/linkfile.txt"
+ln -sf "$TESTDIR/realdir/outside.txt" "$TESTDIR/linkfile.txt"
 check "write via dir-symlink blocked"  'escapes\|not found\|symlink' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"linkdir/newfile.txt","content":"x"}')"
-check "read via dir-symlink blocked"   'symlink' "$(curl -s "$BRIDGE/read?path=linkdir/secret.txt" $T)"
+check "read via dir-symlink blocked"   'symlink' "$(curl -s "$BRIDGE/read?path=linkdir/outside.txt" $T)"
 check "write through file-symlink refused" 'symlink' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"linkfile.txt","content":"x"}')"
 if [ -L "$TESTDIR/linkfile.txt" ]; then echo "  PASS: symlink not clobbered by replace"; else echo "  FAIL: symlink was replaced"; fail=1; fi
-if grep -q "outside data" "$TESTDIR/realdir/secret.txt" 2>/dev/null; then echo "  PASS: symlink target untouched"; else echo "  FAIL: secret.txt via symlink was modified"; fail=1; fi
+if grep -q "outside data" "$TESTDIR/realdir/outside.txt" 2>/dev/null; then echo "  PASS: symlink target untouched"; else echo "  FAIL: secret.txt via symlink was modified"; fail=1; fi
 LEFT2=$(find "$TESTDIR" -maxdepth 1 -name '.fb-*' | wc -l)
 if [ "$LEFT2" = "0" ]; then echo "  PASS: still no temp leftovers after symlink tests"; else echo "  FAIL: $LEFT2 temp files left"; fail=1; fi
+
+# ---------- sensitive-name blacklist (P2) ----------
+printf 'AWS_KEY=AKIATEST\n' > "$TESTDIR/.env"
+printf '%s\n' '-----BEGIN PRIVATE KEY-----' > "$TESTDIR/cert.pem"
+check "read .env blocked"        'credential'  "$(curl -s "$BRIDGE/read?path=.env" $T)"
+check "read_b64 .env blocked"    'credential'  "$(curl -s "$BRIDGE/read_b64?path=.env" $T)"
+check "stat .pem blocked"        'credential'  "$(curl -s "$BRIDGE/stat?path=cert.pem" $T)"
+check "write .env blocked"       'credential'  "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":".env","content":"x"}')"
+check "write id_rsa blocked"     'credential'  "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"id_rsa","content":"x"}')"
+check "stat .env blocked"        'credential'  "$(curl -s "$BRIDGE/stat?path=.env" $T)"
+if grep -q 'AKIATEST' "$TESTDIR/.env" && [ "$(cat "$TESTDIR/.env")" = "AWS_KEY=AKIATEST" ]; then echo "  PASS: .env content untouched"; else echo "  FAIL: .env was modified"; fail=1; fi
+# normal files unaffected
+check "normal file still readable" 'test content' "$(curl -s "$BRIDGE/read?path=notes.txt" $T)"
 
 # ---------- /zip /unzip /directory_tree (P2, stdlib) ----------
 mkdir -p "$TESTDIR/pack/sub"

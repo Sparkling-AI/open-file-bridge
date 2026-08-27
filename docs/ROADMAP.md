@@ -243,7 +243,14 @@ final validation pass (not after every change). Do not block on either.
    placeholder filling — from OpenWorker issue #454 (real office demand).
 ☐ `/pdf_text?mode=text|images` — images mode rasters pages (pypdfium2,
    144dpi, ≤100pg) for vision models; capability fallback pattern.
-☐ Sensitive-name blacklist (.env, id_rsa, credentials) in bridge.
+✅ **Sensitive-name blacklist** — bridge-side floor in resolve_any (reads
+   AND writes): basename match against SENSITIVE_NAMES (.env, id_rsa*,
+   authorized_keys, credentials*, secrets*, .npmrc/.netrc/.pypirc,
+   serviceaccount.json…), SENSITIVE_EXTS (.pem .key .p12 .pfx .keystore
+   .kdbx .env) and a broad keyword pattern (secret/token/credentials).
+   Deliberately over-broad: false positive = "ask the user", false
+   negative = credentials in model context. Applies regardless of
+   per-root ignore lists; error tells the model to ask the user.
 ☐ Version endpoint + update nudge (keep skill & bridge in sync).
 ✅ **/zip, /unzip** (stdlib zipfile). /zip: members resolved through
    resolve_guarded individually (ignore lists + traversal apply per
