@@ -35,6 +35,9 @@ Deep-dive notes: RESEARCH-openworker.md · RESEARCH-owui-ecosystem.md ·
 | PPT template / docx merge (P2) | openworker #454 | issue thread (demand) | .potx layout matching, {{placeholder}} filling |
 | Attachment caps | openworker | `coworker/attachments.py` L17-20 | 200k text / 12M image / 15M pdf / 8 per turn |
 | Skill staging/preview (P3) | openworker | `coworker/skills/store.py` | parse→preview→confirm upload flow, disable-outside-folder rule |
+| Multi-root resolution (P0b) | openworker | `coworker/permissions.py` L314+ | `_resolved_roots()`, write_paths root scoping, fail-closed unlocatable |
+| Protected-paths floor (P0b) | openworker | `coworker/permissions.py` L93-135 | self-protection list + in-project markers (.git/hooks, CI files) |
+| Trust store per root (P0b) | openworker | `coworker/workspace_trust.py` | canonical paths, 0600 atomic writes, per-root grants |
 
 Licenses: openworker MIT · open-webui BSD-3 (check branding clause for code
 vs docs) · openapi-servers MIT — all permissive, attribution in NOTICE
@@ -78,6 +81,58 @@ recommended when copying non-trivial blocks.
    start; adopt the stance).
 
 ☐ Skill rule: never dump whole large files into chat; summarize + cite.
+
+## P0b — Scope configuration & accident protection (enterprise-critical)
+
+### Multi-root + ignore lists (scope control)
+
+☐ **Multi-folder roots** — settings page supports ONE OR MORE shared folders;
+   every endpoint takes a root-relative path + root id (or search across
+   roots by default). Each root stores: path, alias, enabled flag.
+   Pattern: OpenWorker `_resolved_roots()` (permissions.py L314) +
+   WorkspaceTrustStore (workspace_trust.py) — trust per canonical path,
+   atomic 0600 state writes.
+☐ **Ignore/exclude list per root (and global)** — gitignore-style patterns
+   (e.g. `.git/`, `node_modules/`, `*.tmp`, `secrets/`): /list omits, /read
+   + /pdf_text + /ocr + future /search return 404-with-hint ("excluded by
+   settings"), /write into ignored paths is refused. Enforced in the BRIDGE,
+   surfaced in skill ("if excluded, tell the user to adjust settings").
+☐ **Bridge self-protection floor** (OpenWorker permissions.py L93-123):
+   `~/.file-bridge.json`, token file, audit db, versions dir are NEVER
+   writable via any endpoint, in any mode. Prevents "one approved write
+   quietly widens future permissions".
+
+### Mass-operation damage limiting
+
+Design stance (validated by OpenWorker source): **no delete endpoint, ever.**
+Deletion only as trash-move. Writes are the remaining blast surface — guards:
+
+☐ **Snapshots (P0 item, restated here as part of the system)** — every write
+   to an existing file copies original to `.fb-versions/<root>/<relpath>/<ts>`
+   first; /restore endpoint lists and restores them.
+☐ **Trash instead of delete** (PROMOTED from P3) — `/delete` moves to
+   `.fb-trash/<ts>/` preserving tree; /trash/list + /trash/restore; auto-purge
+   after N days (default 30). "Delete" is never a real unlink via the API.
+☐ **Write-rate circuit breaker** — bridge-side quota: max K writes per
+   rolling 60 s window (default 20) + max total MB written per window;
+   exceeding triggers 429 with "ask user to confirm mass edit" message the
+   skill relays. A runaway model hits the brake, not the folder.
+☐ **Mass-edit detection** — `/write_many` requires an explicit
+   `confirmed: true` second call when batch size is over 5 files (token
+   pattern from openapi-servers). Skill rule: for over 5 file changes, list
+   the plan first, get user OK, then batch.
+☐ **Read-only mode toggle** (settings page, per root or global): disables
+   /write, /edit, /delete entirely — for demo/paranoid mode. Env override
+   too (FILE_BRIDGE_READONLY=1).
+☐ **Git-tracked folders: optional safety** — detect .git in root, settings
+   offer "auto-commit before AI writes" (user.name="File Bridge"); opt-in,
+   off by default (noise for office folders); gives `git diff` review after
+   long sessions. Not a substitute for snapshots — big binary files make
+   git fat; snapshots cover those.
+
+Reference index additions: permissions.py L93-213 (protected paths,
+write_paths root scoping), workspace_trust.py (trust store), readonly.py
+(mode classification). NOTE file when copying.
 
 ## P0.5 — Standing strategic items (from ecosystem research)
 
@@ -151,8 +206,7 @@ through the model anyway).
 ☐ Mail-merge: docx template {{placeholders}} + xlsx rows → batch PDFs.
 ☐ .eml parsing (stdlib email); .msg via extract-msg.
 ☐ PDF split/merge/rotate (pymupdf, nearly free).
-☐ Safe delete (move to .fb-trash).
-☐ `/reveal` (Explorer/Finder locate — PROMOTED to P1, cheap + high perceived value).
+☐ `/reveal` (Explorer/Finder locate).
 ☐ rclone recipe: bridge folder = cloud-drive mount (answers demand in
    OWUI #5872 data sources, 52+) — docs only.
 ☐ /image_info (dimensions/EXIF; PIL optional plugin).
