@@ -6,15 +6,36 @@ double-click binaries on Windows/macOS/Linux.
 
 Usage: python file_bridge.py [folder]      (default: ~/file-bridge-shared)
 Then:  pick a folder at http://127.0.0.1:8765 (opens in browser)
+
+Security model (v2, roadmap P0):
+  Tier 1 (default): CORS origin lock. Only the configured Open WebUI origin
+      may call the bridge from a browser. Set on first run via the picker.
+  Tier 2 (opt-in):  org-wide bearer token (X-Bridge-Token header), set by
+      the admin (installer / setup script / picker). Checked in addition.
+  "Production mode" hard-fail: file endpoints refuse to serve while BOTH
+      tiers are unconfigured — the local picker stays reachable so setup
+      can be completed. (Stance adopted from Open Terminal v0.11.30.)
+
+State lives in a per-OS state dir (env FILE_BRIDGE_STATE_DIR overrides):
+  Linux: ~/.local/state/file-bridge   macOS: ~/Library/Application Support/file-bridge
+  Windows: %APPDATA%\\file-bridge     (pattern: OpenWorker coworker/secrets.py)
+  state.json    — root, ocr_lang, allowed_origin, token hash (0600)
+  bridge-token  — plaintext token (0600, owner-only; never sent in responses)
 """
 import base64
 import binascii
+import hashlib
+import hmac
 import http.server
 import json
 import os
+import re
+import secrets as _secrets
+import shutil
 import socketserver
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import webbrowser
@@ -22,10 +43,217 @@ from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
 PORT = 8765
-STATE_FILE = Path.home() / ".file-bridge.json"
 MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
+
+VERSION = "2.0"
+
+_IS_WINDOWS = sys.platform == "win32"
+
+
+# ---------------------------------------------------------------- state dir
+
+def state_dir() -> Path:
+    """Per-OS state directory (pattern borrowed from OpenWorker secrets.py:
+    env override > native app-data location)."""
+    base = os.environ.get("FILE_BRIDGE_STATE_DIR")
+    if base:
+        p = Path(base).expanduser()
+    elif _IS_WINDOWS:
+        appdata = os.environ.get("APPDATA")
+        p = Path(appdata) / "file-bridge" if appdata else Path.home() / ".file-bridge"
+    elif sys.platform == "darwin":
+        p = Path.home() / "Library" / "Application Support" / "file-bridge"
+    else:
+        p = Path.home() / ".local" / "state" / "file-bridge"
+    p.mkdir(parents=True, exist_ok=True)
+    return p
+
+
+def _restrict_to_user(path: Path, *, is_dir: bool) -> None:
+    """Owner-only permissions. POSIX: mode bits (0700/0600). Windows has no
+    mode bits — strip inherited ACLs and grant the current user alone
+    (best-effort; pattern from OpenWorker secrets.py)."""
+    if _IS_WINDOWS:
+        user = os.environ.get("USERNAME")
+        if not user:
+            return
+        domain = os.environ.get("USERDOMAIN")
+        account = f"{domain}\\{user}" if domain else user
+        grant = f"{account}:(OI)(CI)F" if is_dir else f"{account}:F"
+        try:
+            subprocess.run(["icacls", str(path), "/inheritance:r", "/grant:r", grant],
+                           capture_output=True, check=False)
+        except OSError:
+            pass
+        return
+    try:
+        os.chmod(path, 0o700 if is_dir else 0o600)
+    except OSError:
+        pass
+
+
+STATE_DIR = state_dir()
+STATE_FILE = STATE_DIR / "state.json"
+TOKEN_FILE = STATE_DIR / "bridge-token"
+
+_STATE_LOCK = threading.RLock()  # reentrant: set_token holds it while calling _state_update
+
+
+def _state_load() -> dict:
+    try:
+        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def _state_update(**kv) -> dict:
+    """Merge-update state atomically (v1 lost keys by rewriting the whole
+    file — e.g. save_root wiped a previously saved ocr_lang)."""
+    with _STATE_LOCK:
+        st = _state_load()
+        st.update(kv)
+        tmp = STATE_FILE.with_suffix(".tmp")
+        tmp.write_text(json.dumps(st, indent=2), encoding="utf-8")
+        _restrict_to_user(tmp, is_dir=False)   # chmod BEFORE the rename
+        os.replace(tmp, STATE_FILE)
+        return st
+
+
+# ------------------------------------------------------------- token store
+
+def _hash_token(tok: str) -> str:
+    return "sha256:" + hashlib.sha256(tok.encode()).hexdigest()
+
+
+def get_configured_token() -> str | None:
+    """Plaintext token for internal checks only (env override > token file).
+    NEVER returned in any HTTP response."""
+    env = os.environ.get("FILE_BRIDGE_TOKEN")
+    if env:
+        return env
+    try:
+        t = TOKEN_FILE.read_text(encoding="utf-8").strip()
+        # ignore stale token file if state has no matching hash
+        if t and _state_load().get("token_hash") == _hash_token(t):
+            return t
+    except Exception:
+        pass
+    return None
+
+
+def set_token(tok: str | None) -> bool:
+    """Store (or clear) the org-wide token. Returns success."""
+    with _STATE_LOCK:
+        if tok:
+            tok = tok.strip()
+            if not 8 <= len(tok) <= 256:
+                return False
+            TOKEN_FILE.write_text(tok, encoding="utf-8")
+            _restrict_to_user(TOKEN_FILE, is_dir=False)
+            _state_update(token_hash=_hash_token(tok))
+        else:
+            TOKEN_FILE.unlink(missing_ok=True)
+            _state_update(token_hash=None)
+    return True
+
+
+def generate_token() -> str:
+    tok = _secrets.token_urlsafe(24)
+    set_token(tok)
+    return tok
+
+
+# ---------------------------------------------------------- origin (tier 1)
+
+def _normalize_origin(o: str) -> str | None:
+    """scheme://host[:port] with default ports made explicit, or None."""
+    try:
+        u = urlparse(o.strip())
+        if u.scheme not in ("http", "https") or not u.hostname:
+            return None
+        port = u.port or (443 if u.scheme == "https" else 80)
+        return f"{u.scheme}://{u.hostname.lower()}:{port}"
+    except Exception:
+        return None
+
+
+def get_allowed_origin() -> str | None:
+    env = os.environ.get("FILE_BRIDGE_ALLOWED_ORIGIN")
+    raw = env or _state_load().get("allowed_origin")
+    return _normalize_origin(raw) if raw else None
+
+
+def set_allowed_origin(o: str | None) -> tuple[bool, str | None]:
+    """Validate + persist. Returns (ok, normalized)."""
+    if not o:
+        _state_update(allowed_origin=None)
+        return True, None
+    n = _normalize_origin(o)
+    if not n:
+        return False, None
+    _state_update(allowed_origin=o.strip())
+    return True, n
+
+
+def _request_origin(headers) -> str | None:
+    """Normalize the Origin header (empty/`null` → None)."""
+    raw = headers.get("Origin")
+    if not raw or raw.strip().lower() == "null":
+        return None
+    return _normalize_origin(raw)
+
+
+# ------------------------------------------------------------ security gate
+
+def security_mode() -> str:
+    """'token+origin' | 'token' | 'origin' | 'UNLOCKED' (both tiers off)."""
+    has_tok = get_configured_token() is not None
+    has_org = get_allowed_origin() is not None
+    if has_tok and has_org:
+        return "token+origin"
+    if has_tok:
+        return "token"
+    if has_org:
+        return "origin"
+    return "UNLOCKED"
+
+
+def check_request(headers) -> tuple[bool, int | None, str]:
+    """Gate for FILE endpoints (not the local picker).
+
+    Returns (allowed, http_status_if_denied, reason).
+      - production hard-fail: both tiers off → deny 503
+      - token tier: token configured → every request must carry it (401)
+      - origin tier: browser Origin must match when present (403);
+        non-browser callers without Origin are served (local tools) —
+        that residual risk is exactly what the token tier closes.
+    """
+    mode = security_mode()
+    if mode == "UNLOCKED":
+        return False, 503, ("bridge unlocked — open the File Bridge settings page "
+                            "(picker) and set the allowed Open WebUI origin "
+                            "(and optionally a token) before serving files")
+    tok = get_configured_token()
+    if tok:
+        supplied = headers.get("X-Bridge-Token", "")
+        if not supplied:
+            supplied = ""
+            auth = headers.get("Authorization", "")
+            if auth.lower().startswith("bearer "):
+                supplied = auth[7:]
+        if not hmac.compare_digest(supplied.encode(), tok.encode()):
+            return False, 401, "missing or invalid bridge token"
+    allowed = get_allowed_origin()
+    origin = _request_origin(headers)
+    if allowed and origin and origin != allowed:
+        return False, 403, (f"origin {origin} is not the configured Open WebUI "
+                            f"origin")
+    return True, None, ""
+
+
+# ------------------------------------------------------------- add-on setup
 
 # Wheel hosting: serve pure-Python wheels bundled next to this file in ./wheels/
 # so Pyodide installs them from localhost instead of PyPI (fast + offline).
@@ -110,30 +338,14 @@ def _ocr_langs_available():
 
 def _get_ocr_lang():
     """Configured OCR language(s), e.g. 'swe+eng'. Saved in state file."""
-    try:
-        return json.loads(STATE_FILE.read_text()).get("ocr_lang", "eng")
-    except Exception:
-        return "eng"
+    return _state_load().get("ocr_lang", "eng")
 
 
 def _set_ocr_lang(lang: str):
-    st = {}
-    try:
-        st = json.loads(STATE_FILE.read_text())
-    except Exception:
-        pass
-    st["ocr_lang"] = lang
-    STATE_FILE.write_text(json.dumps(st))
+    _state_update(ocr_lang=lang)
 
-# CORS headers allowing the Open WebUI page to call us.
-# NOTE: In production, replace * with your actual OWUI origin for safety.
-CORS_HEADERS = [
-    ("Access-Control-Allow-Origin", "*"),
-    ("Access-Control-Allow-Private-Network", "true"),
-    ("Access-Control-Allow-Methods", "GET, POST, OPTIONS"),
-    ("Access-Control-Allow-Headers", "Content-Type"),
-]
 
+# ------------------------------------------------------------------- paths
 
 def safe_child(base: Path, rel: str) -> Path:
     """Resolve rel under base with traversal protection (for tmp files)."""
@@ -143,9 +355,9 @@ def safe_child(base: Path, rel: str) -> Path:
     return p
 
 
-def load_root() -> Path | None:
+def load_root():
     try:
-        p = json.loads(STATE_FILE.read_text())["root"]
+        p = _state_load()["root"]
         p = Path(p)
         return p if p.is_dir() else None
     except Exception:
@@ -153,7 +365,7 @@ def load_root() -> Path | None:
 
 
 def save_root(p: Path):
-    STATE_FILE.write_text(json.dumps({"root": str(p.resolve())}))
+    _state_update(root=str(p.resolve()))
 
 
 def resolve_safe(root: Path, rel: str) -> Path:
@@ -163,28 +375,45 @@ def resolve_safe(root: Path, rel: str) -> Path:
     return p
 
 
+# ------------------------------------------------------------------ server
+
 class Handler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         sys.stderr.write(f"[bridge] {self.address_string()} {fmt % args}\n")
 
-    def _cors(self):
-        for k, v in CORS_HEADERS:
-            self.send_header(k, v)
+    # ---- CORS / auth plumbing ----
 
-    def _json(self, code, obj):
+    def _add_matching_cors(self):
+        """Emit CORS headers ONLY when the request origin matches the lock
+        (or no lock is configured — picker/setup phase). v1 echoed `*`."""
+        origin = _request_origin(self.headers)
+        allowed = get_allowed_origin()
+        if allowed is None or (origin and origin == allowed):
+            self.send_header("Access-Control-Allow-Origin", origin or "*")
+            self.send_header("Access-Control-Allow-Private-Network", "true")
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers",
+                             "Content-Type, X-Bridge-Token, Authorization")
+        # mismatched/foreign origins get NO CORS headers — the browser
+        # refuses to expose the response even before our 403 body.
+
+    def _json(self, code, obj, cors=True):
         body = json.dumps(obj).encode()
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
-        self._cors()
+        if cors:
+            self._add_matching_cors()
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
 
     def do_OPTIONS(self):
         self.send_response(204)
-        self._cors()
+        self._add_matching_cors()
         self.send_header("Access-Control-Max-Age", "86400")
         self.end_headers()
+
+    # ---- GET ----
 
     def do_GET(self):
         root = load_root()
@@ -192,19 +421,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
 
         if u.path == "/health":
-            info = {"ok": True, "root": str(root), "version": "1.1"} if root else \
+            info = {"ok": True, "root": str(root), "version": VERSION} if root else \
                    {"ok": False, "hint": "no folder chosen yet"}
             info["addons"] = {"pdf": HAVE_PYMUPDF, "ocr": bool(TESSERACT_BIN)}
             info["ocr_lang"] = _get_ocr_lang()
             info["ocr_langs_available"] = _ocr_langs_available()
             info["wheels"] = len(list(WHEELS_DIR.glob("*.whl"))) if WHEELS_DIR.is_dir() else 0
+            mode = security_mode()
+            info["security"] = mode
+            info["locked"] = mode != "UNLOCKED"
             return self._json(200, info)
 
         if u.path == "/state":
             return self._json(200, {"root": str(root) if root else None, "port": PORT,
-                                    "ocr_lang": _get_ocr_lang()})
+                                    "ocr_lang": _get_ocr_lang(),
+                                    "allowed_origin": get_allowed_origin(),
+                                    "security": security_mode(),
+                                    "readonly": _is_readonly()})
 
-        # ---- wheel hosting (works regardless of chosen folder) ----
+        # ---- wheel hosting (token-free by design: static public wheels) ----
         if u.path == "/wheels":
             if WHEELS_DIR.is_dir():
                 names = sorted(f.name for f in WHEELS_DIR.glob("*.whl"))
@@ -221,11 +456,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
             data = wf.read_bytes()
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
-            self._cors()
+            self._add_matching_cors()
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
             self.wfile.write(data)
             return
+
+        # ---- security gate: everything below serves files ----
+        ok, status, reason = check_request(self.headers)
+        if not ok:
+            return self._json(status, {"error": reason})
 
         if root is None:
             return self._json(409, {"error": "No folder chosen. Open http://127.0.0.1:%d to pick one." % PORT})
@@ -338,16 +578,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 p = resolve_safe(root, unquote(q.get("path", "")))
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
-                import re as _re
                 raw = q.get("lang") or _get_ocr_lang()
                 # URL '+' decodes to space; treat space and ',' as separators
-                parts = [p for p in _re.split(r"[\s,+]+", raw) if p and _re.fullmatch(r"[a-zA-Z_]{2,8}", p)]
+                parts = [p for p in re.split(r"[\s,+]+", raw) if p and re.fullmatch(r"[a-zA-Z_]{2,8}", p)]
                 lang = "+".join(parts) if parts else "eng"
                 ext = p.suffix.lower()
                 max_pages = int(q.get("max_pages", "5"))
                 dpi = q.get("dpi", "200")
                 results = []
-                import tempfile, shutil
                 tmpdir = tempfile.mkdtemp(prefix="fb-ocr-")
 
                 def run_tesseract(img_path):
@@ -401,9 +639,22 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(500, {"error": str(e)})
         return self._json(404, {"error": "unknown endpoint"})
 
+    # ---- POST ----
+
     def do_POST(self):
-        root = load_root()
         u = urlparse(self.path)
+
+        # /api/root is the LOCAL picker API — loopback only, no bridge token
+        # (the picker is how you set the token in the first place).
+        if u.path == "/api/root":
+            if not self._is_loopback():
+                return self._json(403, {"error": "picker API is local only"}, cors=False)
+            return self._do_api_root()
+
+        root = load_root()
+        ok, status, reason = check_request(self.headers)
+        if not ok:
+            return self._json(status, {"error": reason})
         if root is None:
             return self._json(409, {"error": "No folder chosen yet."})
         try:
@@ -428,28 +679,99 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_bytes(raw)
                 return self._json(200, {"ok": True, "written": str(p), "bytes": len(raw)})
-            if u.path == "/choose":
-                # from the local picker UI (same machine only)
-                return self._json(404, {"error": "use the web picker"})
         except PermissionError as e:
             return self._json(400, {"error": str(e)})
         except Exception as e:
             return self._json(500, {"error": str(e)})
         return self._json(404, {"error": "unknown endpoint"})
 
+    def _is_loopback(self):
+        try:
+            ip = self.client_address[0]
+            return ip in ("127.0.0.1", "::1", "localhost")
+        except Exception:
+            return False
+
+    # ---- local picker API (/api/root) ----
+
+    def _do_api_root(self):
+        length = int(self.headers.get("Content-Length", 0))
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except Exception:
+            return self._json(400, {"ok": False, "error": "invalid JSON"}, cors=False)
+
+        if "ocr_lang" in body:
+            _set_ocr_lang(str(body["ocr_lang"]).strip())
+
+        # security settings ------------------------------------------------
+        if "allowed_origin" in body:
+            val = body["allowed_origin"]
+            if val is None or (isinstance(val, str) and val.strip().lower() in ("", "none", "off")):
+                set_allowed_origin(None)
+            else:
+                okn, norm = set_allowed_origin(str(val))
+                if not okn:
+                    return self._json(400, {"ok": False,
+                                            "error": "invalid origin (want e.g. http://owui.internal:8080)"},
+                                      cors=False)
+
+        tok_action = body.get("token")
+        new_token = None
+        if isinstance(tok_action, dict):  # {"set": "..."} | {"clear": true} | {"generate": true}
+            if tok_action.get("clear"):
+                set_token(None)
+            elif tok_action.get("generate"):
+                new_token = generate_token()
+            elif tok_action.get("set"):
+                if not set_token(str(tok_action["set"])):
+                    return self._json(400, {"ok": False, "error": "token must be 8-256 chars"},
+                                      cors=False)
+                new_token = str(tok_action["set"])  # show back once to the local admin
+        elif tok_action is None and "token" in body:
+            set_token(None)
+
+        if body.get("root"):
+            p = Path(body["root"]).expanduser()
+            if not p.is_dir():
+                return self._json(400, {"ok": False, "error": f"not a folder: {p}"}, cors=False)
+            save_root(p)
+            resp = {"ok": True, "root": str(p.resolve()), "ocr_lang": _get_ocr_lang()}
+        else:
+            resp = {"ok": True, "ocr_lang": _get_ocr_lang()}
+        resp["allowed_origin"] = get_allowed_origin()
+        resp["security"] = security_mode()
+        if new_token:
+            resp["token"] = new_token  # shown ONCE in the local picker only
+        return self._json(200, resp, cors=False)
+
     # ---- local picker UI (served only to localhost browser) ----
     PICKER_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>File Bridge</title>
-<style>body{font-family:system-ui;max-width:640px;margin:60px auto;padding:0 20px;color:#222}
+<style>body{font-family:system-ui;max-width:680px;margin:50px auto;padding:0 20px;color:#222}
 input{width:100%;padding:10px;font-size:16px;box-sizing:border-box}
 button{padding:10px 22px;font-size:16px;margin-top:12px;cursor:pointer}
-.ok{color:#0a7d32;font-weight:bold}.hint{color:#666;font-size:14px}</style></head><body>
+.ok{color:#0a7d32;font-weight:bold}.hint{color:#666;font-size:14px}
+.warn{color:#b00;font-weight:bold}.sec{background:#f4f6f8;padding:14px 18px;border-radius:8px;margin:14px 0}
+code{background:#eee;padding:2px 6px;border-radius:4px}</style></head><body>
 <h2>📁 File Bridge</h2>
 <p>This little service lets <b>Open WebUI in your browser</b> read &amp; write files
 in <b>one folder you choose</b> on this computer. Nothing else is exposed.</p>
 <p>Shared folder:</p>
-<input id="root" placeholder="C:\\Users\\you\\Documents\\my-folder" value="__ROOT__">
+<input id="root" placeholder="C:\\\\Users\\\\you\\\\Documents\\\\my-folder" value="__ROOT__">
 <button onclick="setRoot()">Save folder</button>
 <p class="ok" id="status"></p>
+<div class="sec">
+<h3>🔒 Security</h3>
+<p class="hint">Lock the bridge to your Open WebUI address (required — until set,
+file endpoints stay disabled):</p>
+<input id="origin" placeholder="http://owui.yourcompany.com:8080" value="__ORIGIN__">
+<button onclick="setOrigin()">Lock to this origin</button>
+<p class="hint">Optional extra: org-wide token (Tier&nbsp;2). Generate one and give it to
+your OWUI admin (it is embedded in the skill by setup_owui.py).</p>
+<button onclick="genToken()">Generate token</button>
+<button onclick="clearToken()">Clear token</button>
+<p class="hint" id="secstatus"></p>
+</div>
 <hr>
 <p>OCR language (for reading scanned PDFs / photos):</p>
 <input id="ocrlang" placeholder="swe+eng" value="__OCRLANG__" style="max-width:200px">
@@ -461,6 +783,8 @@ You can close this browser tab — the service keeps running.</p>
 <script>
 async function refresh(){const s=await (await fetch('/state')).json();
 document.getElementById('root').value=s.root||'';
+document.getElementById('origin').value=s.allowed_origin||'';
+document.getElementById('secstatus').textContent='Security mode: '+s.security;
 const c=await (await fetch('/ocr/config')).json();
 document.getElementById('ocrlang').value=c.lang||'eng';
 document.getElementById('langs').textContent='Installed: '+(c.available||[]).join(', ')+' — engine: '+(c.engine||'?');}
@@ -474,36 +798,29 @@ async function setRoot(){
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({root:r})});
  const d=await res.json();
  document.getElementById('status').textContent=d.ok?'✓ Saved: '+d.root:'✗ '+d.error;
-}
+ refresh();}
+async function setOrigin(){
+ const o=document.getElementById('origin').value.trim();
+ const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({allowed_origin:o})});
+ const d=await res.json();
+ document.getElementById('secstatus').textContent = d.ok?('Security mode: '+d.security+(d.error?' — '+d.error:'')):('✗ '+(d.error||'failed'));
+ if(d.ok&&d.security==='UNLOCKED')document.getElementById('secstatus').textContent+=' ⚠ set an origin to unlock file serving';}
+async function genToken(){
+ const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:{generate:true}})});
+ const d=await res.json();
+ document.getElementById('secstatus').textContent = d.ok?('Token (copy now, shown once): '+d.token+' — mode: '+d.security):('✗ '+(d.error||'failed'));}
+async function clearToken(){
+ const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:{clear:true}})});
+ const d=await res.json();
+ document.getElementById('secstatus').textContent='Security mode: '+d.security;}
 refresh();
 </script></body></html>"""
 
-    def do_POST_picker(self):  # /api/root — sets root and/or ocr_lang
-        length = int(self.headers.get("Content-Length", 0))
-        body = json.loads(self.rfile.read(length) or b"{}")
-        if "ocr_lang" in body:
-            lang = str(body["ocr_lang"]).strip()
-            _set_ocr_lang(lang)
-        if body.get("root"):
-            p = Path(body["root"]).expanduser()
-            if not p.is_dir():
-                return self._json(400, {"ok": False, "error": f"not a folder: {p}"})
-            save_root(p)
-            return self._json(200, {"ok": True, "root": str(p.resolve()),
-                                    "ocr_lang": _get_ocr_lang()})
-        return self._json(200, {"ok": True, "ocr_lang": _get_ocr_lang()})
 
-
-def serve_picker_api(handler_cls):
-    # extend do_POST to handle /api/root locally
-    orig_do_POST = handler_cls.do_POST
-
-    def do_POST(self):
-        if urlparse(self.path).path == "/api/root":
-            return Handler.do_POST_picker(self)
-        return orig_do_POST(self)
-
-    handler_cls.do_POST = do_POST
+def _is_readonly() -> bool:
+    if os.environ.get("FILE_BRIDGE_READONLY", "").lower() in ("1", "true", "yes"):
+        return True
+    return bool(_state_load().get("readonly"))
 
 
 def main():
@@ -516,16 +833,18 @@ def main():
         print(f"Sharing: {p}")
 
     root = load_root()
-    serve_picker_api(Handler)
 
-    # serve picker page
+    # serve picker page (local setup UI)
     orig_do_GET = Handler.do_GET
-    def do_GET(self):
+    def do_GET_picker(self):
         if urlparse(self.path).path in ("/", "/picker"):
             root = load_root()
             html = Handler.PICKER_HTML.replace("__ROOT__", str(root) if root else "")
+            html = html.replace("__ORIGIN__", get_allowed_origin() or "")
             html = html.replace("__OCRLANG__", _get_ocr_lang())
-            html = html.replace("__STATUS__", f"sharing {root}" if root else "no folder chosen yet")
+            html = html.replace("__STATUS__",
+                                f"sharing {root} · security {security_mode()}" if root
+                                else f"no folder chosen yet · security {security_mode()}")
             body = html.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -534,12 +853,17 @@ def main():
             self.wfile.write(body)
             return
         return orig_do_GET(self)
-    Handler.do_GET = do_GET
+    Handler.do_GET = do_GET_picker
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     with socketserver.ThreadingTCPServer(("127.0.0.1", PORT), Handler) as httpd:
         url = f"http://127.0.0.1:{PORT}"
-        print(f"File Bridge running at {url}  (Ctrl+C to stop)")
+        mode = security_mode()
+        print(f"File Bridge v{VERSION} running at {url}  (Ctrl+C to stop)")
+        print(f"Security mode: {mode}")
+        if mode == "UNLOCKED":
+            print("⚠ UNLOCKED: file endpoints are DISABLED until you set the allowed")
+            print("  Open WebUI origin (and optionally a token) in the settings page.")
         if not root:
             print("No folder set — opening folder picker in your browser...")
             threading.Timer(0.5, lambda: webbrowser.open(url)).start()
