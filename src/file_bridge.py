@@ -7,6 +7,8 @@ double-click binaries on Windows/macOS/Linux.
 Usage: python file_bridge.py [folder]      (default: ~/file-bridge-shared)
 Then:  pick a folder at http://127.0.0.1:8765 (opens in browser)
 """
+import base64
+import binascii
 import http.server
 import json
 import os
@@ -21,7 +23,8 @@ from urllib.parse import urlparse, parse_qs, unquote
 PORT = 8765
 STATE_FILE = Path.home() / ".file-bridge.json"
 MAX_LIST = 500
-MAX_READ = 200_000  # chars
+MAX_READ = 200_000      # chars (text)
+MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
 # CORS headers allowing the Open WebUI page to call us.
 # NOTE: In production, replace * with your actual OWUI origin for safety.
@@ -118,6 +121,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 data = p.read_text(encoding="utf-8", errors="replace")[:MAX_READ]
                 return self._json(200, {"path": q.get("path"), "content": data})
 
+            if u.path == "/read_b64":
+                # binary-safe read: returns base64. For Office files, images,
+                # PDFs. Capped at MAX_BINARY bytes.
+                p = resolve_safe(root, unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                raw = p.read_bytes()
+                if len(raw) > MAX_BINARY:
+                    return self._json(413, {"error": f"file too large: {len(raw)} > {MAX_BINARY} bytes"})
+                return self._json(200, {
+                    "path": q.get("path"),
+                    "size": len(raw),
+                    "b64": base64.b64encode(raw).decode("ascii"),
+                })
+
+            if u.path == "/stat":
+                p = resolve_safe(root, unquote(q.get("path", "")))
+                if not p.exists():
+                    return self._json(404, {"error": f"not found: {q.get('path')}"})
+                st = p.stat()
+                ext = p.suffix.lower()
+                kind = ("image" if ext in {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+                        else "pdf" if ext == ".pdf"
+                        else "zip" if ext in {".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp"}
+                        else "legacy" if ext in {".doc", ".xls", ".ppt"}
+                        else "text" if ext in {".txt", ".md", ".csv", ".json", ".xml", ".yml", ".yaml", ".log", ".py", ".js", ".html", ".css"}
+                        else "other")
+                return self._json(200, {
+                    "path": q.get("path"), "size": st.st_size,
+                    "mtime": int(st.st_mtime), "kind": kind, "ext": ext or None,
+                })
+
         except PermissionError as e:
             return self._json(400, {"error": str(e)})
         except Exception as e:
@@ -138,6 +173,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(content, encoding="utf-8")
                 return self._json(200, {"ok": True, "written": str(p), "bytes": len(content)})
+
+            if u.path == "/write_b64":
+                # binary-safe write: takes base64. For Office/PDF/image files.
+                p = resolve_safe(root, unquote(body.get("path", "")))
+                try:
+                    raw = base64.b64decode(body.get("b64", ""), validate=True)
+                except (binascii.Error, ValueError) as e:
+                    return self._json(400, {"error": f"invalid base64: {e}"})
+                if len(raw) > MAX_BINARY:
+                    return self._json(413, {"error": f"payload too large: {len(raw)} > {MAX_BINARY} bytes"})
+                p.parent.mkdir(parents=True, exist_ok=True)
+                p.write_bytes(raw)
+                return self._json(200, {"ok": True, "written": str(p), "bytes": len(raw)})
             if u.path == "/choose":
                 # from the local picker UI (same machine only)
                 return self._json(404, {"error": "use the web picker"})
