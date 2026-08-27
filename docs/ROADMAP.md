@@ -193,15 +193,15 @@ through the model anyway).
 ✅ `/pptx_read?path=` → per-slide title + text boxes.
    Side effect: pure-read tasks need NO wheel install → first interaction
    drops from ~3 s to ~0 s.
-☐ `/html_text?path=` — strip tags via stdlib html.parser (today /read
+✅ `/html_text?path=` — strip tags via stdlib html.parser (today /read
    returns raw HTML source = tag noise per token).
-☐ `/csv_head?rows=20` + `/csv_stats` (row count, columns, type sampling,
+✅ `/csv_head?rows=20` + `/csv_stats` (row count, columns, type sampling,
    numeric ranges) — stdlib csv; prevents whole-CSV context dumps.
-☐ `/search?q=&glob=&exclude=` — cross-file grep with context lines,
+✅ `/search?q=&glob=&exclude=` — cross-file grep with context lines,
    file-pattern + exclusion patterns (param design adopted from OWUI
    openapi-servers /search_content + /search_files). "Which contract
    mentions termination clause" is THE top office query.
-☐ `/edit?dry_run=1` — surgical text replacements with unified-diff preview;
+✅ `/edit?dry_run=1` — surgical text replacements with unified-diff preview;
    on confirm applies. (Borrowed from openapi-servers /edit_file.)
 
 ## P2 — Reliability & rollout
@@ -267,8 +267,8 @@ final validation pass (not after every change). Do not block on either.
 | Format | Read | Write | Notes |
 |---|---|---|---|
 | txt/md/code | ✅ /read | ✅ /write | |
-| csv | ✅ /read (whole) | ✅ | P1: head/stats endpoints |
-| html | ⚠ raw source | ✅ | P1: /html_text |
+| csv | ✅ /read, /csv_head, /csv_stats | ✅ | |
+| html | ✅ /html_text (tags stripped) | ✅ | |
 | xlsx/docx/pptx | ✅ /xlsx_read /docx_read /pptx_read | ✅ via Pyodide | |
 | pdf (text layer) | ✅ /pdf_text | ✅ fpdf2 (Pyodide) | |
 | pdf (scanned) | ✅ /ocr (tesseract) | — | swe+eng combo verified |
