@@ -884,6 +884,177 @@ def _pptx_read(path: Path, q: dict):
 
 
 
+# ------------------------------------------------ search + edit (P1)
+
+def _search(root: Path, cfg: dict, q: dict):
+    """Cross-file grep with context lines, glob filter, exclusions,
+    case-insensitivity (param design from openapi-servers /search_content)."""
+    import fnmatch
+    query = q.get("q", "")
+    if not query:
+        return {"error": "need q= search term"}
+    glob_pat = q.get("glob") or "*"
+    case_sensitive = q.get("case", "insensitive") == "sensitive"
+    needle = query if case_sensitive else query.lower()
+    ctx = min(int(q.get("context", "1") or 1), 5)
+    max_matches = min(int(q.get("max", "50") or 50), 200)
+    excl = [x for x in (q.get("exclude") or "").split(",") if x.strip()]
+    pats = list(cfg.get("ignore", [])) + _global_ignore() + excl
+    matches, scanned = [], 0
+    for f in sorted(root.rglob("*")):
+        if len(matches) >= max_matches:
+            break
+        if not f.is_file():
+            continue
+        rel = f.relative_to(root).as_posix()
+        if not fnmatch.fnmatch(rel, glob_pat):
+            continue
+        if _ignore_match(rel, False, pats):
+            continue
+        if f.suffix.lower() not in TEXT_EXTS and f.name.lower() not in KNOWN_BASENAMES:
+            continue  # text files only (binary grep = noise)
+        try:
+            lines = f.read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            continue
+        scanned += 1
+        for i, line in enumerate(lines):
+            hay = line if case_sensitive else line.lower()
+            if needle in hay:
+                lo, hi = max(0, i - ctx), min(len(lines), i + ctx + 1)
+                matches.append({
+                    "path": rel, "line": i + 1,
+                    "context": [f"{j+1}: {lines[j][:MAX_LINE_CHARS]}"
+                                for j in range(lo, hi)],
+                })
+                if len(matches) >= max_matches:
+                    break
+    return {"query": query, "scanned_files": scanned, "matches": matches,
+            "truncated": len(matches) >= max_matches}
+
+
+def _edit_file(root: Path, cfg: dict, body: dict, confirm_func):
+    """Surgical replacements with dry-run unified diff (pattern:
+    openapi-servers /edit_file). Applies via the standard write path
+    (snapshot + confirmation) — never a raw overwrite."""
+    import difflib
+    rel = body.get("path", "")
+    if not rel:
+        return 400, {"error": "need path"}
+    p, _root, _cfg = resolve_guarded(unquote(rel), for_write=True)
+    if not p.is_file():
+        return 404, {"error": f"no such file: {rel}"}
+    if p.suffix.lower() not in TEXT_EXTS and p.name.lower() not in KNOWN_BASENAMES:
+        return 415, {"error": "/edit is for text files (see /read whitelist)"}
+    if _readonly_for(cfg):
+        return 403, {"error": "read-only mode is active"}
+    edits = body.get("edits", [])
+    if not isinstance(edits, list) or not edits:
+        return 400, {"error": "need edits: [{old_text, new_text}, ...]"}
+    original = p.read_text(encoding="utf-8", errors="replace")
+    modified = original
+    for e in edits:
+        old, new = e.get("old_text", ""), e.get("new_text", "")
+        count = e.get("count", 1)
+        if old not in modified:
+            return 400, {"error": f"old_text not found: {old[:60]!r}"}
+        modified = modified.replace(old, new, int(count) if count else -1)
+    if body.get("dry_run"):
+        diff = "".join(difflib.unified_diff(
+            original.splitlines(keepends=True),
+            modified.splitlines(keepends=True),
+            fromfile=f"a/{rel}", tofile=f"b/{rel}"))
+        return 200, {"dry_run": True, "diff": diff,
+                     "changed": modified != original}
+    # real write: same guarded path as /write (confirmation + snapshot)
+    code, resp = confirm_func({"op": "edit", "path": rel,
+                               "bytes": len(modified)})
+    if code:
+        return code, resp
+    return 200, {"ok": True, "path": rel, "edited": modified != original}
+
+
+def _html_text(path: Path, q: dict):
+    from html.parser import HTMLParser
+
+    class Extractor(HTMLParser):
+        SKIP = {"script", "style", "noscript", "head", "meta", "title"}
+        BLOCK = {"p", "div", "br", "li", "tr", "h1", "h2", "h3", "h4", "h5",
+                 "h6", "section", "article", "table", "ul", "ol"}
+
+        def __init__(self):
+            super().__init__()
+            self.parts = []
+            self.skip_depth = 0
+
+        def handle_starttag(self, tag, attrs):
+            if tag in self.SKIP:
+                self.skip_depth += 1
+            elif tag in self.BLOCK and self.parts and not self.parts[-1].endswith("\n"):
+                self.parts.append("\n")
+
+        def handle_endtag(self, tag):
+            if tag in self.SKIP and self.skip_depth:
+                self.skip_depth -= 1
+            elif tag in self.BLOCK:
+                self.parts.append("\n")
+
+        def handle_data(self, data):
+            if not self.skip_depth and data.strip():
+                self.parts.append(data)
+
+    ex = Extractor()
+    ex.feed(path.read_text(encoding="utf-8", errors="replace"))
+    text = "".join(ex.parts)
+    text = re.sub(r"[ \t]+", " ", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    max_chars = int(q.get("max_chars", "60000") or 60000)
+    return {"path": q.get("path"), "chars": len(text),
+            "truncated": len(text) > max_chars, "text": text[:max_chars]}
+
+
+def _csv_head_stats(path: Path, q: dict, want_stats: bool):
+    import csv
+    import io as _io
+    nrows = min(int(q.get("rows", "20") or 20), 200)
+    delim = q.get("delim") or ","
+    if delim in ("tab", "\\t", "t"):
+        delim = "\t"
+    rows, widths = [], set()
+    with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+        reader = csv.reader(fh, delimiter=delim)
+        for i, row in enumerate(reader):
+            widths.add(len(row))
+            if i < nrows:
+                rows.append(row)
+    out = {"path": q.get("path"), "delimiter": delim,
+           "ragged": len(widths) > 1, "widths": sorted(widths)[:10],
+           "head": rows}
+    if want_stats:
+        with open(path, newline="", encoding="utf-8", errors="replace") as fh:
+            all_rows = list(csv.reader(fh, delimiter=delim))
+        total = len(all_rows)
+        ncols = max(widths) if widths else 0
+        cols = []
+        for c in range(min(ncols, 100)):
+            vals = [r[c] for r in all_rows if len(r) > c and r[c] != ""]
+            nums = []
+            for v in vals:
+                try:
+                    nums.append(float(v))
+                except ValueError:
+                    pass
+            col = {"col": c, "non_empty": len(vals)}
+            if nums and len(nums) >= max(1, len(vals) // 2):
+                col["type"] = "numeric"
+                col["min"] = min(nums)
+                col["max"] = max(nums)
+            else:
+                col["type"] = "text"
+                col["samples"] = vals[:3]
+            cols.append(col)
+        out.update({"row_count": total, "column_count": ncols, "columns": cols})
+    return out
 
 
 
@@ -1518,9 +1689,39 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json(200, {"path": q.get("path"), "lang": lang,
                                         "pages": results})
 
+            if u.path == "/search":
+                base = unquote(q.get("path", "."))
+                p, root, cfg = resolve_guarded(base)
+                if not p.is_dir():
+                    return self._json(400, {"error": f"not a directory: {base}"})
+                return self._json(200, _search(p, cfg, q))
 
+            if u.path == "/html_text":
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                if p.suffix.lower() not in {".html", ".htm"}:
+                    return self._json(400, {"error": f"not html: {p.suffix}"})
+                try:
+                    return self._json(200, _html_text(p, q))
+                except Exception as e:
+                    return self._json(500, {"error": f"html parse failed: {e}"})
 
+            if u.path == "/csv_head":
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                if p.suffix.lower() not in {".csv", ".tsv"}:
+                    return self._json(400, {"error": f"not a csv: {p.suffix}"})
+                return self._json(200, _csv_head_stats(p, q, want_stats=False))
 
+            if u.path == "/csv_stats":
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                if p.suffix.lower() not in {".csv", ".tsv"}:
+                    return self._json(400, {"error": f"not a csv: {p.suffix}"})
+                return self._json(200, _csv_head_stats(p, q, want_stats=True))
 
             if u.path == "/xlsx_read":
                 p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
@@ -1668,6 +1869,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json(200, {"ok": True, "written": str(p), "bytes": len(raw),
                                         "snapshot": snap})
 
+            if u.path == "/edit":
+                _ep, _er, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
+                def _confirm_edit(confirm_params):
+                    # returns (http_code_or_0, resp) — mirrors /write flow
+                    tok = body.get("confirmation_token")
+                    if not tok:
+                        iss = confirmation_issue(confirm_params)
+                        return 409, {"error": "edit needs confirmation",
+                                     "confirmation_required": True, **iss}
+                    okc, err = confirmation_consume(tok, confirm_params)
+                    if not okc:
+                        return 400, {"error": err}
+                    return 0, {}
+
+                code, resp = _edit_file(root, cfg, body, _confirm_edit)
+                if code >= 400 or resp.get("dry_run"):
+                    return self._json(code, resp)
+                # apply: snapshot + write via the guarded helper
+                p, root, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
+                edits = body.get("edits", [])
+                modified = p.read_text(encoding="utf-8", errors="replace")
+                for e in edits:
+                    modified = modified.replace(e.get("old_text", ""),
+                                                e.get("new_text", ""),
+                                                int(e.get("count", 1) or 1) if e.get("count") else -1)
+                okr, err = rate_check(len(modified))
+                if not okr:
+                    return self._json(429, {"error": err, "rate_limited": True})
+                snap = snapshot_before_write(root, p)
+                p.write_text(modified, encoding="utf-8")
+                return self._json(200, {"ok": True, "path": body.get("path"),
+                                        "snapshot": snap})
 
             if u.path == "/versions/list":
                 rel = body.get("path", "")

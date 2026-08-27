@@ -259,6 +259,52 @@ check "pptx texts"         'Revenue up 17' "$(curl -s "$BRIDGE/pptx_read?path=de
 check "pptx wrong type"    'not a pptx' "$(curl -s "$BRIDGE/pptx_read?path=report.docx" $T)"
 fi
 
+# ---------- P1: /search /edit /html_text /csv ----------
+cat > "$TESTDIR/contract.txt" <<'EOC'
+This agreement is made 2026-01-15.
+Section 4: termination clause requires 30 days notice.
+Payment terms: net 30.
+EOC
+mkdir -p "$TESTDIR/docs2"
+cp "$TESTDIR/contract.txt" "$TESTDIR/docs2/termination-policy.txt"
+printf '<html><head><style>x</style><title>T</title></head><body><h1>Big Title</h1><script>bad()</script><p>Hello <b>world</b></p></body></html>' > "$TESTDIR/page.html"
+printf 'name,age,score\nanna,41,9.5\nbob,35,7.25\ncarla,28,8.0\n' > "$TESTDIR/people.csv"
+
+SR=$(curl -s "$BRIDGE/search?q=termination" $T)
+check "search finds match"     'termination clause' "$SR"
+check "search context lines"   '30 days notice'     "$SR"
+check "search path cited"      'contract.txt'       "$SR"
+SR2=$(curl -s "$BRIDGE/search?q=TERMINATION" $T)
+check "search case-insensitive" 'termination-policy' "$SR2"
+SR3=$(curl -s "$BRIDGE/search?q=carla&glob=*.csv" $T)
+check "search glob filter"    'people.csv'         "$SR3"
+SR4=$(curl -s "$BRIDGE/search?q=TOPSECRET" $T)
+check "search respects ignore" 'TOPSECRET' "$SR4" # must NOT appear
+if echo "$SR4" | grep -q '"path": "secrets'; then echo "  FAIL: search leaked ignored path"; fail=1; else echo "  PASS: search skips ignored"; fi
+
+HT=$(curl -s "$BRIDGE/html_text?path=page.html" $T)
+check "html_text strips tags"  'Hello world'       "$(echo "$HT" | python3 -c "import json,sys; print(json.load(sys.stdin)['text'])")"
+check "html_text drops script" 'CLEAN'  "$(echo "$HT" | python3 -c "import json,sys; t=json.load(sys.stdin)['text']; print('CLEAN' if 'bad()' not in t else 'LEAKED')")"
+CH=$(curl -s "$BRIDGE/csv_head?path=people.csv&rows=2" $T)
+check "csv_head rows"          'anna'    "$CH"
+check "csv_head not all rows"  '"head"'  "$CH"
+CS=$(curl -s "$BRIDGE/csv_stats?path=people.csv" $T)
+check "csv_stats count"        '"row_count": *4' "$CS"
+check "csv_stats numeric"      '"type": *"numeric"' "$CS"
+
+# /edit dry-run then real
+ED=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"30 days","new_text":"60 days"}],"dry_run":true}')
+check "edit dry-run diff"      'clause requires 30 days' "$(echo "$ED" | python3 -c "import json,sys; print(json.load(sys.stdin)['diff'])")"
+check "edit dry-run diff new"  'requires 60 days notice' "$(echo "$ED" | python3 -c "import json,sys; print(json.load(sys.stdin)['diff'])")"
+check "edit dry-run no write"  'termination clause requires 30 days notice' "$(cat "$TESTDIR/contract.txt")"
+ED2=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"30 days","new_text":"60 days"}]}')
+check "edit needs confirm"     'confirmation_required' "$ED2"
+ECT=$(echo "$ED2" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+ED3=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d "{\"path\":\"contract.txt\",\"edits\":[{\"old_text\":\"30 days\",\"new_text\":\"60 days\"}],\"confirmation_token\":\"$ECT\"}")
+check "edit applied"           '"ok": *true'   "$ED3"
+check "edit landed"            '60 days'       "$(cat "$TESTDIR/contract.txt")"
+check "edit bad old_text"      'not found'     "$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"zzz-not-there","new_text":"x"}],"dry_run":true}')"
+
 # ---------- state dir isolation & permissions ----------
 if [ -f "$STATEDIR/state.json" ]; then echo "  PASS: state in FILE_BRIDGE_STATE_DIR"; else echo "  FAIL: state.json not in STATEDIR"; fail=1; fi
 PERM=$(stat -c '%a' "$STATEDIR/state.json" 2>/dev/null || echo "?")
