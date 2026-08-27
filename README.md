@@ -51,6 +51,7 @@ a model and ask.
 └── docs/
     ├── user-guide.md             # give this to your users
     ├── admin-guide.md            # setup, architecture, hardening
+    ├── TODO.md                   # open items: CORS lock rationale, signing, guardrails
     ├── BUILDING.md               # how to build each OS package
     └── screenshots/              # proof: the working end-to-end run
 ```
