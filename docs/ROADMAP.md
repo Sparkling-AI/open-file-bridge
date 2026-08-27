@@ -26,11 +26,24 @@ Priorities: P0 = production gate · P1 = high value · P2 = later · P3 = option
       ~5 lines of tokens before choosing the right reader.
    Enforcement lives in the BRIDGE (hard), skill rules are advisory only.
 
-☐ **Write-before-overwrite snapshots** — before any write to an existing
-   file, copy original to `.fb-versions/<name>.<timestamp>`. Makes model
-   edits reversible — trust foundation for office use.
+☐ **Write-before-overwrite snapshots + confirmation tokens** — before any
+   write to an existing file, copy original to `.fb-versions/<name>.<ts>`;
+   destructive ops get a two-step confirmation token (60 s validity — design
+   borrowed from OWUI openapi-servers filesystem server). Makes model edits
+   reversible and deliberate — trust foundation for office use.
+☐ **"Production mode" hard-fail** — bridge refuses to serve with CORS `*`
+   AND no token simultaneously (Open Terminal v0.11.30 refuses keyless
+   start; adopt the stance).
 
 ☐ Skill rule: never dump whole large files into chat; summarize + cite.
+
+## P0.5 — Standing strategic items (from ecosystem research)
+
+☐ **Pyodide deprecation watch** — OWUI officially calls Pyodide CI "legacy,
+may be deprecated". Pin OWUI version in production; re-verify the
+two-switch preset (`capabilities` + `defaultFeatureIds`) on every upgrade;
+keep the Jupyter/Open-Terminal fallback documented (see
+RESEARCH-owui-ecosystem.md §1).
 
 ## P1 — Office reads move to the bridge (big UX win)
 
@@ -49,8 +62,12 @@ through the model anyway).
    returns raw HTML source = tag noise per token).
 ☐ `/csv_head?rows=20` + `/csv_stats` (row count, columns, type sampling,
    numeric ranges) — stdlib csv; prevents whole-CSV context dumps.
-☐ `/search?q=&glob=` — cross-file grep with context lines. "Which contract
+☐ `/search?q=&glob=&exclude=` — cross-file grep with context lines,
+   file-pattern + exclusion patterns (param design adopted from OWUI
+   openapi-servers /search_content + /search_files). "Which contract
    mentions termination clause" is THE top office query.
+☐ `/edit?dry_run=1` — surgical text replacements with unified-diff preview;
+   on confirm applies. (Borrowed from openapi-servers /edit_file.)
 
 ## P2 — Reliability & rollout
 
@@ -64,7 +81,10 @@ through the model anyway).
 ☐ `/ocr_pdf` — tesseract PDF output → searchable PDF (scan → archive).
 ☐ Sensitive-name blacklist (.env, id_rsa, credentials) in bridge.
 ☐ Version endpoint + update nudge (keep skill & bridge in sync).
-☐ `/zip`, `/unzip` (stdlib zipfile); `/reveal` (Explorer/Finder locate).
+☐ `/zip`, `/unzip` (stdlib zipfile).
+☐ `/directory_tree?format=tree` (from openapi-servers).
+☐ Local preview tab in settings page (what the AI can see) — Open Terminal
+   file-browser inspiration.
 
 ## P3 — Optional / bigger bets
 
@@ -82,6 +102,9 @@ through the model anyway).
 ☐ .eml parsing (stdlib email); .msg via extract-msg.
 ☐ PDF split/merge/rotate (pymupdf, nearly free).
 ☐ Safe delete (move to .fb-trash).
+☐ `/reveal` (Explorer/Finder locate — PROMOTED to P1, cheap + high perceived value).
+☐ rclone recipe: bridge folder = cloud-drive mount (answers demand in
+   OWUI #5872 data sources, 52+) — docs only.
 ☐ /image_info (dimensions/EXIF; PIL optional plugin).
 ☐ OWUI version-compat window documented (tested 0.11.1).
 ☐ Multi-model smoke tests (only GLM tested; weak models may need stronger
