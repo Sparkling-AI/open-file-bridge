@@ -10,9 +10,10 @@ modes when the compatibility assumptions break.
 | Component | Depends on OWUI version via | Status |
 |---|---|---|
 | Pyodide Code Interpreter | default feature, still shipping | works on 0.11.1; officially "legacy" per OWUI docs — watch release notes |
+| Pyodide sandbox host | WHERE the interpreter runs → request `Origin` | DRIFTED WITHIN 0.11.x: `:main` now uses a `sandbox="allow-scripts"` srcdoc iframe → `Origin: null` → tier-1 CORS-blocked (see next section) |
 | Skills API (`/api/v1/skills/*`) | v1 REST surface | works on 0.11.1 (create, id access/update) |
 | Model preset with code_interpreter | `meta.capabilities` + `meta.defaultFeatureIds` | works on 0.11.1 — THE regression risk |
-| Browser fetch to `http://127.0.0.1:8765` | PNA behavior per browser | not OWUI-version-dependent (bridge sends `Access-Control-Allow-Private-Network: true`) |
+| Browser fetch to `http://127.0.0.1:8765` | PNA behavior per browser | PNA itself is fine (bridge sends `Access-Control-Allow-Private-Network: true`); the CORS failure mode is the sandbox origin above, not PNA |
 
 **Support policy: current + one minor** — we treat the latest OWUI 0.11.x
 and the 0.10.x line it descends from as supported; anything older or a
@@ -47,6 +48,38 @@ frontend reads (it has drifted before: `src/lib/components/chat/Chat.svelte`
    If Pyodide mode is removed, the fallback path is Direct Tool
    connections (browser-direct calls, roadmap Plan B) — not Jupyter.
 
+## Pyodide sandbox origin drift (the `Origin: null` CORS block)
+
+**Discovered 2026-08-28 on the `:main` image (self-labeled 0.11.1).** OWUI
+moved the Pyodide Code Interpreter into a `sandbox="allow-scripts"` srcdoc
+iframe (`src/lib/pyodide/pyodideSandboxHost.ts` L210-215 in the owui-src
+tree) — no `allow-same-origin`, so the iframe gets an **opaque origin**
+and every bridge fetch arrives with `Origin: null`. The bridge's tier-1
+origin lock emits CORS headers only on an exact origin match, so the
+browser blocks the response: the bridge log shows 200s the page never
+receives, and the browser console shows "No 'Access-Control-Allow-Origin'
+header". A silent, confusing failure — the model-side code "works" while
+the user gets nothing.
+
+**Verified escape hatch: tier-2 pure token mode.** Configure ONLY the org
+token, no allowed_origin:
+
+```
+POST /api/root {"token": {"generate": true}}     # loopback-only endpoint
+```
+
+With no origin set, the bridge echoes ACAO (`*` for null origins) and the
+token carries auth. Probe-verified on the current build: **401** without
+the header, **200 + working write flow** with `X-Bridge-Token`. The token
+must then reach the model — the skill bootstrap block accepts a
+`BRIDGE_HEADERS = {"X-Bridge-Token": "…"}` line (that is exactly what
+`mm_smoke_strict.py` injects per run; `setup_owui.py` does NOT inject it —
+see the note in its help/admin guide about distributing the token
+yourself).
+
+Note this changed WITHIN the 0.11.x line (the two-switch preset above
+kept working) — exactly why the upgrade checklist now has an origin check.
+
 ## Skills API surface we rely on
 
 | Call | Endpoint | Notes |
@@ -69,7 +102,14 @@ that version is supported.
 2. Pull new image, recreate `owui-test` container (see
    `scripts/rebuild_testenv.sh --help`; it pins nothing — uses `:main`).
 3. **Two-switch check** (section above) — the one that actually breaks.
-4. Full chat round-trip: $-mention the skill → model runs Python →
+4. **Sandbox-origin check** (section above): run one chat that calls the
+   bridge; watch the browser console for "No 'Access-Control-Allow-Origin'
+   header" while the bridge log shows 200s — that signature means the
+   interpreter moved again. Also grep the new OWUI source for the sandbox
+   host (`src/lib/pyodide/pyodideSandboxHost.ts`): if the iframe regains
+   `allow-same-origin`, tier-1 origin mode works again and is preferable
+   to token mode; if a new sandbox shape appears, re-verify tier 2.
+5. Full chat round-trip: $-mention the skill → model runs Python →
    `/list` + `/read` + one write with confirmation round-trip.
-5. If a Jupyter interpreter option appeared or Pyodide was demoted:
+6. If a Jupyter interpreter option appeared or Pyodide was demoted:
    STOP, document in DEVNOTES, decide Plan B timing (do not roll out).

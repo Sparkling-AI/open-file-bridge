@@ -241,3 +241,48 @@ Add every new gotcha here, not to memory.
   bridge now sets FILE_BRIDGE_MAX_WRITES=500 (same headroom as e2e);
   the breaker itself stays covered by e2e's dedicated
   FILE_BRIDGE_MAX_WRITES=3 instance at the end of that suite.
+
+## Pitfalls found this session (strict-variant validation + CORS, 2026-08-28)
+
+- **Z.AI burst exhaustion surfaces as OWUI-backend 500s, NOT 429s**:
+  after ~10 real-browser smoke chats in one day, every chat completion
+  returns 500 from the OWUI backend (upstream Z.AI endpoint refusing);
+  recovery = wait for the quota to reset, not retry harder. Probe FIRST
+  before blaming skill or harness — one tiny non-stream chat
+  (`POST /api/chat/completions`, model glm-4.5-air, "reply with
+  exactly: ok", timeout 120 s); if it errors, stop for the day; if it
+  answers, run.
+- **`kill $(pgrep -f file_bridge)` self-matches too** (upgrade of the
+  P3-finish pkill pitfall): the hermes terminal wrapper's OWN command
+  line contains the pattern literal, so even the "safe" kill-by-pgrep
+  form kills the caller (exit -15, empty output). Write the pattern
+  with a character-class split — `pgrep -af "file_bridg[e]"` — so the
+  regex cannot match its own literal; kill the listed PIDs, then verify
+  with `ss -tln | grep 8765`.
+- **OWUI skills LIST omits the `content` field**: `GET /api/v1/skills/`
+  items carry no body; fetch the full record via
+  `GET /api/v1/skills/id/<id>` before diffing or re-using a skill
+  object as an update base — else you diff against "" and can WIPE the
+  live skill body (setup_owui.py fixed in 54e9a93; bit us once live).
+- **Playwright selectors on the current `:main` build**: auth =
+  `localStorage.setItem('token', …)` on /auth then goto /; What's New
+  modal = `div[role="dialog"]` LAST button; model selector =
+  `button[id^="model-selector"]`; picker entries =
+  `button[role="option"][data-value="<preset-id>"]`; chat input =
+  `div[contenteditable='true']` (type with delay). The old
+  `div[aria-label*="Selected model"]` resolves but is NOT the clickable
+  element.
+- **Smoke verdict polling needs ≥300 s**: model thinking + Pyodide cold
+  boot + Z.AI latency routinely exceed 180 s — a 180 s window yields
+  false negatives (the chat completes after the harness gave up; the
+  P3 session's "still in flight" run proved it).
+- **Pyodide sandbox origin drift → tier-1 CORS-blocked** (full write-up
+  + upgrade-checklist item in docs/OWUI-COMPAT.md): the `:main` image
+  runs Pyodide in a `sandbox="allow-scripts"` srcdoc iframe (no
+  allow-same-origin) → every bridge fetch sends `Origin: null` → the
+  tier-1 origin lock emits no CORS headers and the browser drops the
+  response (bridge log shows 200s the page never gets). VERIFIED
+  escape: tier-2 token-only mode — `POST /api/root
+  {"token":{"generate":true}}`, no origin set → ACAO echoed, 401
+  without `X-Bridge-Token`, 200 + working write flow with it.
+
