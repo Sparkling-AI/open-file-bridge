@@ -122,8 +122,11 @@ ENDPOINT_RISK = {
     "/unzip": RiskClass.WRITE_LOCAL,
     "/ocr_pdf": RiskClass.WRITE_LOCAL,       # spawns tesseract → writes a PDF
     "/pdf_op": RiskClass.WRITE_LOCAL,
+    "/pdf_from_text": RiskClass.WRITE_LOCAL,
     "/docx_merge": RiskClass.WRITE_LOCAL,
+    "/docx_write": RiskClass.WRITE_LOCAL,
     "/pptx_from_template": RiskClass.WRITE_LOCAL,
+    "/xlsx_append": RiskClass.WRITE_LOCAL,
 }
 
 _IS_WINDOWS = sys.platform == "win32"
@@ -1874,6 +1877,173 @@ def pptx_from_template(src: Path, out: Path, out_root: Path, slides: list,
 
 
 
+# ---------------------- structured writes: pdf_from_text/docx_write/xlsx_append (P3)
+# Bridge-native document WRITES (roadmap P3). Optional add-on libs (fpdf2,
+# python-docx, openpyxl) — 501 when missing, same as the P2 office writes.
+# All three run the standard pipeline: validate-cheap-first → confirmation
+# (always, they write NEW files) → build → atomic write + snapshot + breaker.
+
+def _sanitize_pdf_text(s: str) -> str:
+    """fpdf2 core fonts are latin-1: map the common Windows-1252 range and
+    drop anything else (replacement '?') so a stray emoji can't 500 the
+    write. Honest lossiness beats a broken document."""
+    repl = {"→": "->", "←": "<-", "–": "-", "—": "-", "‘": "'", "’": "'",
+            "“": '"', "”": '"', "•": "*", "…": "...", "×": "x", "≈": "~",
+            "\u00a0": " ", "\t": "    "}
+    for k, v in repl.items():
+        s = s.replace(k, v)
+    return s.encode("latin-1", "replace").decode("latin-1")
+
+
+def _pdf_font_for(style: str):
+    from fpdf import FPDF
+    return {"title": ("helvetica", "B", 20),
+            "h1": ("helvetica", "B", 16),
+            "h2": ("helvetica", "B", 13),
+            "body": ("helvetica", "", 11)}.get(style)
+
+
+def pdf_from_text(out: Path, out_root: Path, title: str, blocks: list,
+                  page_size: str) -> tuple[int, dict]:
+    try:
+        from fpdf import FPDF
+    except ImportError:
+        return 501, {"error": "pdf_from_text needs the fpdf2 add-on "
+                              "(pip install fpdf2)"}
+    if not blocks:
+        return 400, {"error": "no blocks given"}
+    fmt = "A4" if page_size == "a4" else "letter"
+    pdf = FPDF(format=fmt)
+    pdf.set_auto_page_break(True, margin=18)
+    pdf.set_title(_sanitize_pdf_text(title)[:200] if title else "")
+    used = 0
+    try:
+        for blk in blocks:
+            style = blk.get("style", "body")
+            if style == "pagebreak":
+                pdf.add_page(); used += 1
+                continue
+            if style not in ("title", "h1", "h2", "body"):
+                return 400, {"error": f"unknown style {style!r} "
+                                      f"(title|h1|h2|body|pagebreak)"}
+            text = _sanitize_pdf_text(str(blk.get("text", "")))
+            if not text.strip() and style == "body":
+                text = ""
+            if used == 0:
+                pdf.add_page()
+            font = _pdf_font_for(style)
+            pdf.set_font(font[0], font[1], font[2])
+            if style == "body":
+                pdf.multi_cell(0, font[2] * 0.55, text)
+                pdf.ln(2)
+            else:
+                pdf.multi_cell(0, font[2] * 0.6, text)
+                pdf.ln(3)
+            used += 1
+            if used > 5000:
+                return 413, {"error": "too many blocks (5000 cap)"}
+        data = bytes(pdf.output())
+    except Exception as e:
+        return 500, {"error": f"pdf build failed: {e}"}
+    if len(data) > MAX_BINARY:
+        return 413, {"error": f"PDF too large (> {MAX_BINARY} bytes)"}
+    snap = snapshot_before_write(out_root, out) if out.exists() else None
+    okr, err = rate_check(len(data))
+    if not okr:
+        return 429, {"error": err, "rate_limited": True}
+    atomic_write_bytes(out, data)
+    return 200, {"ok": True, "written": str(out), "bytes": len(data),
+                 "blocks": len(blocks), "page_size": fmt, "snapshot": snap}
+
+
+_DOCX_LIST_STYLES = ("list", "bullets", "bullet", "numbered", "numbers", "ul", "ol")
+
+
+def docx_write(out: Path, out_root: Path, title: str, sections: list) -> tuple[int, dict]:
+    try:
+        from docx import Document
+    except ImportError:
+        return 501, {"error": "docx_write needs python-docx "
+                              "(pip install python-docx)"}
+    if not sections:
+        return 400, {"error": "no sections given"}
+    doc = Document()
+    if title:
+        doc.add_heading(title, 0)
+    counters = {"h1": 0, "h2": 0}
+    try:
+        for sec in sections:
+            st = sec.get("style", "paragraph")
+            text = str(sec.get("text", ""))
+            if st == "h1":
+                doc.add_heading(text, 1); counters["h1"] += 1
+            elif st == "h2":
+                doc.add_heading(text, 2); counters["h2"] += 1
+            elif st == "pagebreak":
+                doc.add_page_break()
+            elif st in _DOCX_LIST_STYLES:
+                numbered = st in ("numbered", "numbers", "ol")
+                for item in ([text] if text and not isinstance(sec.get("items"), list)
+                             else sec.get("items", [])):
+                    doc.add_paragraph(str(item),
+                                      style="List Number" if numbered else "List Bullet")
+            else:
+                doc.add_paragraph(text)
+        bio = io.BytesIO()
+        doc.save(bio)
+        data = bio.getvalue()
+    except Exception as e:
+        return 500, {"error": f"docx build failed: {e}"}
+    if len(data) > MAX_BINARY:
+        return 413, {"error": f"docx too large (> {MAX_BINARY} bytes)"}
+    snap = snapshot_before_write(out_root, out) if out.exists() else None
+    okr, err = rate_check(len(data))
+    if not okr:
+        return 429, {"error": err, "rate_limited": True}
+    atomic_write_bytes(out, data)
+    return 200, {"ok": True, "written": str(out), "bytes": len(data),
+                 "sections": len(sections), "headings": counters, "snapshot": snap}
+
+
+def xlsx_append(path: Path, rows: list, sheet: str | None, out_root: Path,
+                header: list | None) -> tuple[int, dict]:
+    """Append rows to an existing .xlsx (or create it). openpyxl add-on."""
+    try:
+        import openpyxl
+    except ImportError:
+        return 501, {"error": "xlsx_append needs openpyxl (pip install openpyxl)"}
+    if not rows:
+        return 400, {"error": "no rows given"}
+    created = not path.exists()
+    try:
+        wb = openpyxl.load_workbook(path) if not created else openpyxl.Workbook()
+        ws = wb[sheet] if (sheet and sheet in wb.sheetnames) else \
+             (wb.create_sheet(sheet) if sheet else wb.active)
+        if created and header:
+            ws.append(header)
+        start_row = ws.max_row or 0
+        for r in rows:
+            ws.append(r)
+        bio = io.BytesIO()
+        wb.save(bio)
+        data = bio.getvalue()
+    except Exception as e:
+        return 500, {"error": f"xlsx append failed: {e}"}
+    if len(data) > MAX_BINARY:
+        return 413, {"error": f"workbook too large (> {MAX_BINARY} bytes)"}
+    snap = snapshot_before_write(out_root, path) if not created else None
+    okr, err = rate_check(len(data))
+    if not okr:
+        return 429, {"error": err, "rate_limited": True}
+    atomic_write_bytes(path, data)
+    resp = {"ok": True, "written": str(path), "bytes": len(data),
+            "rows_appended": len(rows), "sheet": ws.title,
+            "created": created, "row_count": ws.max_row, "snapshot": snap}
+    if created and header:
+        resp["header"] = header
+    return 200, resp
+
+
 # ------------------------------------------------ search + edit (P1)
 
 def _search(root: Path, cfg: dict, q: dict):
@@ -3307,6 +3477,147 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(400, {"error": err})
                 code, resp = pptx_from_template(p, op, oroot, slides, values)
                 return self._json(code, resp)
+
+            if u.path == "/pdf_from_text":
+                # bridge-native PDF authoring (P3) — no Pyodide shim needed
+                out_rel = body.get("out", "")
+                if not out_rel or Path(out_rel).suffix.lower() != ".pdf":
+                    return self._json(400, {"error": "need out (root-relative "
+                                                     ".pdf)"})
+                blocks = body.get("blocks")
+                if not isinstance(blocks, list) or not blocks:
+                    return self._json(400, {"error": "blocks must be a list of "
+                                                     "{style: title|h1|h2|body|"
+                                                     "pagebreak, text}"})
+                if len(blocks) > 5000:
+                    return self._json(413, {"error": "blocks capped at 5000"})
+                for b in blocks:
+                    if not isinstance(b, dict) or \
+                       (b.get("style", "body") not in
+                            ("title", "h1", "h2", "body", "pagebreak")) or \
+                       ("text" in b and not isinstance(b.get("text"), str)):
+                        return self._json(400, {"error": "each block is "
+                                                         "{style, text} (style "
+                                                         "title|h1|h2|body|"
+                                                         "pagebreak)"})
+                if len(json.dumps(blocks, default=str)) > MAX_READ:
+                    return self._json(413, {"error": "payload too large"})
+                page_size = str(body.get("page_size", "a4")).lower()
+                if page_size not in ("a4", "letter"):
+                    return self._json(400, {"error": "page_size must be a4|letter"})
+                title = body.get("title", "")
+                if title and not isinstance(title, str):
+                    return self._json(400, {"error": "title must be a string"})
+                op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
+                if _readonly_for(ocfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "pdf_from_text", "out": out_rel}
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "pdf_from_text writes a new file — needs "
+                                 "confirmation",
+                        "confirmation_required": True, **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
+                code, resp = pdf_from_text(op, oroot, title, blocks, page_size)
+                return self._json(code, resp)
+
+            if u.path == "/docx_write":
+                # structured Word authoring by sections (P3)
+                out_rel = body.get("out", "")
+                if not out_rel or Path(out_rel).suffix.lower() != ".docx":
+                    return self._json(400, {"error": "need out (root-relative "
+                                                     ".docx)"})
+                sections = body.get("sections")
+                if not isinstance(sections, list) or not sections:
+                    return self._json(400, {"error": "sections must be a list of "
+                                                     "{style: h1|h2|paragraph|list|"
+                                                     "numbered|pagebreak, text, "
+                                                     "items?}"})
+                if len(sections) > 2000:
+                    return self._json(413, {"error": "sections capped at 2000"})
+                for s in sections:
+                    if not isinstance(s, dict) or \
+                       (s.get("style", "paragraph") not in
+                            ("h1", "h2", "paragraph", "pagebreak") +
+                            _DOCX_LIST_STYLES) or \
+                       ("text" in s and not isinstance(s.get("text"), str)):
+                        return self._json(400, {"error": "each section is {style, "
+                                                         "text, items?}"})
+                    if "items" in s and not isinstance(s.get("items"), list):
+                        return self._json(400, {"error": "items must be a list of "
+                                                         "strings"})
+                if len(json.dumps(sections, default=str)) > MAX_READ:
+                    return self._json(413, {"error": "payload too large"})
+                title = body.get("title", "")
+                if title and not isinstance(title, str):
+                    return self._json(400, {"error": "title must be a string"})
+                op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
+                if _readonly_for(ocfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "docx_write", "out": out_rel}
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "docx_write writes a new file — needs "
+                                 "confirmation",
+                        "confirmation_required": True, **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
+                code, resp = docx_write(op, oroot, title, sections)
+                return self._json(code, resp)
+
+            if u.path == "/xlsx_append":
+                # append rows to an existing .xlsx or create it (P3)
+                rel = body.get("path", "")
+                if not rel or Path(rel).suffix.lower() != ".xlsx":
+                    return self._json(400, {"error": "need path (root-relative "
+                                                     ".xlsx; created if absent)"})
+                rows = body.get("rows")
+                if not isinstance(rows, list) or not rows:
+                    return self._json(400, {"error": "rows must be a list of "
+                                                     "lists (cell values)"})
+                if len(rows) > 1000:
+                    return self._json(413, {"error": "rows capped at 1000 per call"})
+                for r in rows:
+                    if not isinstance(r, list) or len(r) > 256 or \
+                       any(isinstance(v, (dict, list)) for v in r):
+                        return self._json(400, {"error": "each row is a flat list "
+                                                         "of cell values (≤256)"})
+                if len(json.dumps(rows, default=str)) > MAX_READ:
+                    return self._json(413, {"error": "payload too large"})
+                sheet = body.get("sheet") or None
+                if sheet is not None and (not isinstance(sheet, str) or
+                                          len(sheet) > 64):
+                    return self._json(400, {"error": "sheet must be a short string"})
+                header = body.get("header")
+                if header is not None and (not isinstance(header, list) or
+                                           len(header) > 256):
+                    return self._json(400, {"error": "header must be a flat list "
+                                                     "(used only when creating)"})
+                p, proot, pcfg = resolve_guarded(unquote(rel), for_write=True)
+                if _readonly_for(pcfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "xlsx_append", "path": rel}
+                if p.exists() and not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "target exists — appending modifies it, "
+                                 "needs confirmation",
+                        "confirmation_required": True, **iss})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
+                code, resp = xlsx_append(p, rows, sheet, proot, header)
+                return self._json(code, resp)
+
 
             if u.path == "/write_many":
                 # batch writes; >5 files needs {"confirmed": true} (mass-edit
