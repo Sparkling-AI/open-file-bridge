@@ -1,24 +1,58 @@
 #!/usr/bin/env bash
 # End-to-end test: starts the bridge, exercises every endpoint incl. security.
 # Run:  ./tests/e2e_test.sh
+# Optional: FILE_BRIDGE_CMD="<path-to-frozen-binary> bash tests/e2e_test.sh"
+# runs the SAME suite against a PyInstaller build (default: python3 source).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
 BRIDGE="http://127.0.0.1:8765"
+BRIDGE_CMD=${FILE_BRIDGE_CMD:-python3 src/file_bridge.py}
 TESTDIR=$(mktemp -d)
 STATEDIR=$(mktemp -d)
 TOKEN="test-token-1234"
+
+# octal permission of a file, GNU coreutils OR macOS/BSD stat
+stat_mode() {
+  stat -c '%a' "$1" 2>/dev/null || stat -f '%Lp' "$1" 2>/dev/null || echo '?'
+}
+
+# true when something is ACCEPTING connections on the bridge port (a live
+# bridge or any leftover listener; connect_ex avoids curl's connect-timeout
+# ambiguity, where a stuck listener reads as "free")
+port_accepting() {
+  python3 -c "import socket,sys
+s = socket.socket(); s.settimeout(1)
+sys.exit(0 if s.connect_ex(('127.0.0.1', 8765)) == 0 else 1)"
+}
+
+# true when the port is BINDABLE by a new bridge instance (superseded by
+# nothing; a dying process that still holds the listener reads as busy)
+port_bindable() {
+  python3 -c "import socket,sys
+s = socket.socket()
+s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    s.bind(('127.0.0.1', 8765)); sys.exit(0)
+except OSError:
+    sys.exit(1)
+finally:
+    s.close()"
+}
+
 echo "test content $(date)" > "$TESTDIR/notes.txt"
 mkdir -p "$TESTDIR/sub" && echo "nested" > "$TESTDIR/sub/n.txt"
 
-if curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1; then
+if port_accepting; then
   echo "ERROR: something already listens on $BRIDGE — stop it first." >&2
   exit 1
 fi
-FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_MAX_WRITES=500 python3 src/file_bridge.py "$TESTDIR" &
+FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_MAX_WRITES=500 $BRIDGE_CMD "$TESTDIR" &
 BRIDGE_PID=$!
 trap 'kill $BRIDGE_PID 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR" ${BRKDIR:-} ${BRKSTATE:-}' EXIT
-sleep 1.5
+# readiness poll (not a blind sleep): frozen onefile binaries take ~2 s to
+# self-extract before the listener comes up
+for _ in $(seq 1 60); do curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1 && break; sleep 0.5; done
 
 fail=0
 check() { # name, expected_substring, actual
@@ -81,7 +115,13 @@ check "health reports addons" 'addons'            "$(curl -s $BRIDGE/health)"
 
 # ---------- binary endpoints ----------
 printf 'PNG\x89fake-binary-data' > "$TESTDIR/blob.bin"
-check "b64 write ok"        '"ok": *true'          "$(curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(base64 -w0 < "$TESTDIR/blob.bin")\"}")"
+# NOTE: macOS still ships bash 3.2, whose parser mangles `-d "{\"k\":\"$V\"}"`
+# bodies inside a *quoted command-substitution argument* (check "... $(curl ...)").
+# Assignment context ($X=$(curl ...)) parses correctly, so JSON bodies with
+# escaped quotes + variables always go through a variable first.
+BLOB64=$(base64 < "$TESTDIR/blob.bin" | tr -d '\n')
+BWR=$(curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$BLOB64\"}")
+check "b64 write ok"        '"ok": *true'          "$BWR"
 check "b64 read roundtrip"  '0000000'              "$(curl -s "$BRIDGE/read_b64?path=out.bin" $T | python3 -c "import json,sys,base64; d=json.load(sys.stdin); sys.stdout.write(base64.b64decode(d['b64']).decode('latin1')[:7])" | od -c | head -1 | grep -o '0000000' || echo MISS)"
 check "b64 traversal blk"   'escapes'              "$(curl -s "$BRIDGE/read_b64?path=../../etc/shadow" $T)"
 check "stat kind text"      '"kind": *"text"'      "$(curl -s "$BRIDGE/stat?path=notes.txt" $T)"
@@ -122,10 +162,11 @@ OW=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"
 check "overwrite demands confirm" 'confirmation_required' "$OW"
 CT=$(echo "$OW" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
 # overwrite with WRONG params (different content length) → token mismatch
-check "confirm params mismatch" 'do not match' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2-CHANGED\",\"confirmation_token\":\"$CT\"}")"
 # token was consumed by the failed attempt → now invalid
-check "token one-shot" 'invalid or expired' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT\"}")"
-# fresh token, correct params → success + snapshot recorded
+CPM=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2-CHANGED\",\"confirmation_token\":\"$CT\"}")
+check "confirm params mismatch" 'do not match' "$CPM"
+CPM2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT\"}")
+check "token one-shot" 'invalid or expired' "$CPM2"
 OW2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
 CT2=$(echo "$OW2" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
 W2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT2\"}")
@@ -141,7 +182,8 @@ VTS=$(echo "$VL" | python3 -c "import json,sys; print(json.load(sys.stdin)['vers
 RV=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"ts\":\"$VTS\"}")
 check "restore demands confirm" 'confirmation_required' "$RV"
 RCT=$(echo "$RV" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-check "restore confirmed"       '"ok": *true' "$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"ts\":\"$VTS\",\"confirmation_token\":\"$RCT\"}")"
+RCR=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"ts\":\"$VTS\",\"confirmation_token\":\"$RCT\"}")
+check "restore confirmed"       '"ok": *true' "$RCR"
 check "restore brought v1 back" 'v1'          "$(cat "$TESTDIR/snapme.txt")"
 # versions store is OUTSIDE the root
 if [ -d "$TESTDIR"/.fb-versions ]; then echo "  FAIL: versions inside root"; fail=1; else echo "  PASS: versions stored outside root"; fi
@@ -171,7 +213,8 @@ check "pdf-like ignored too" 'excluded\|no such' "$(curl -s "$BRIDGE/read?path=j
 # self-protection: state dir never reachable even if a root were to overlap
 check "state file unreadable" 'escapes shared root\|never accessible' "$(curl -s "$BRIDGE/read?path=../../../.local/state/file-bridge/state.json" $T 2>/dev/null || echo unreachable)"
 # root-in-state rejected by set_roots
-check "state-inside-root rejected" 'cannot\|error' "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d "{\"roots\":[{\"id\":\"x\",\"path\":\"$STATEDIR\"}]}")"
+SIR=$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d "{\"roots\":[{\"id\":\"x\",\"path\":\"$STATEDIR\"}]}")
+check "state-inside-root rejected" 'cannot\|error' "$SIR"
 # back to single root for the remaining assertions
 curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d "{\"roots\":[{\"id\":\"main\",\"path\":\"$TESTDIR\",\"ignore\":[\".git/\",\"secrets/\",\"*.tmp\"]}]}" >/dev/null
 
@@ -190,7 +233,8 @@ if find "$STATEDIR/trash" -name delme.txt | grep -q delme; then echo "  PASS: in
 TL=$(curl -s -X POST $BRIDGE/trash/list -H 'Content-Type: application/json' $T -d '{}')
 check "trash lists entry"     '"path": *"delme.txt"' "$TL"
 TTS=$(echo "$TL" | python3 -c "import json,sys; print(json.load(sys.stdin)['trash'][0]['ts'])")
-check "trash restore"         '"ok": *true' "$(curl -s -X POST $BRIDGE/trash/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"delme.txt\",\"ts\":\"$TTS\"}")"
+TRS=$(curl -s -X POST $BRIDGE/trash/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"delme.txt\",\"ts\":\"$TTS\"}")
+check "trash restore"         '"ok": *true' "$TRS"
 check "trash restored content" 'trash-me'  "$(cat "$TESTDIR/delme.txt")"
 check "trash purge is local"  'settings-page' "$(curl -s -X POST $BRIDGE/trash/purge -H 'Content-Type: application/json' $T -d '{}')"
 
@@ -311,7 +355,7 @@ check "edit bad old_text"      'not found'     "$(curl -s -X POST $BRIDGE/edit -
 
 # ---------- state dir isolation & permissions ----------
 if [ -f "$STATEDIR/state.json" ]; then echo "  PASS: state in FILE_BRIDGE_STATE_DIR"; else echo "  FAIL: state.json not in STATEDIR"; fail=1; fi
-PERM=$(stat -c '%a' "$STATEDIR/state.json" 2>/dev/null || echo "?")
+PERM=$(stat_mode "$STATEDIR/state.json")
 if [ "$PERM" = "600" ]; then echo "  PASS: state.json is 0600"; else echo "  FAIL: state.json perm $PERM != 600"; fail=1; fi
 if grep -q "test-token-1234" "$STATEDIR/state.json" 2>/dev/null; then
   echo "  FAIL: plaintext token leaked into state.json"; fail=1
@@ -353,7 +397,7 @@ print(bad)
 PY
 )
 if [ "$AJ" = "0" ]; then echo "  PASS: audit.log is valid JSONL with ts/endpoint/status"; else echo "  FAIL: $AJ malformed audit lines"; fail=1; fi
-APER=$(stat -c '%a' "$STATEDIR/audit.log" 2>/dev/null || echo "?")
+APER=$(stat_mode "$STATEDIR/audit.log")
 if [ "$APER" = "600" ]; then echo "  PASS: audit.log is 0600"; else echo "  FAIL: audit.log perm $APER != 600"; fail=1; fi
 # api/root settings changes audited with values redacted
 if grep -q '"endpoint": "/api/root"' "$STATEDIR/audit.log" && ! grep -q 'owui.test:8080' "$STATEDIR/audit.log"; then
@@ -364,31 +408,36 @@ fi
 
 # ---------- atomic writes (P2): mode preserved, no tmp leftovers ----------
 chmod 640 "$TESTDIR/notes.txt" 2>/dev/null || true
-check "overwrite keeps mode" '600\|640' "$(OWT=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"notes.txt","content":"v2 atomic"}'); OCT=$(echo "$OWT" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo ""); curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"content\":\"v2 atomic\",\"confirmation_token\":\"$OCT\"}" >/dev/null; stat -c '%a' "$TESTDIR/notes.txt")"
+OWT=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"notes.txt","content":"v2 atomic"}')
+OCT=$(echo "$OWT" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
+OWM=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"content\":\"v2 atomic\",\"confirmation_token\":\"$OCT\"}")
+check "overwrite confirmed"  '"ok": *true' "$OWM"
+check "overwrite keeps mode" '600\|640' "$(stat_mode "$TESTDIR/notes.txt")"
 check "atomic write landed"  'v2 atomic'  "$(cat "$TESTDIR/notes.txt")"
-LEFT=$(find "$TESTDIR" -maxdepth 1 -name '.fb-tmp-*' -o -maxdepth 1 -name '.fb-restore-*' | wc -l)
+LEFT=$(find "$TESTDIR" -maxdepth 1 -name '.fb-tmp-*' -o -maxdepth 1 -name '.fb-restore-*' | wc -l | tr -d ' ')
 if [ "$LEFT" = "0" ]; then echo "  PASS: no temp files left behind"; else echo "  FAIL: $LEFT temp files left in root"; fail=1; fi
 # edit path also atomic + mode-preserving
 chmod 640 "$TESTDIR/contract.txt" 2>/dev/null || true
 EDM=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"60 days","new_text":"90 days"}]}')
 ECT2=$(echo "$EDM" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
 curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d "{\"path\":\"contract.txt\",\"edits\":[{\"old_text\":\"60 days\",\"new_text\":\"90 days\"}],\"confirmation_token\":\"$ECT2\"}" >/dev/null
-if [ "$(stat -c '%a' "$TESTDIR/contract.txt")" = "640" ]; then echo "  PASS: edit preserves mode"; else echo "  FAIL: edit changed mode to $(stat -c '%a' "$TESTDIR/contract.txt")"; fail=1; fi
+if [ "$(stat_mode "$TESTDIR/contract.txt")" = "640" ]; then echo "  PASS: edit preserves mode"; else echo "  FAIL: edit changed mode to $(stat_mode "$TESTDIR/contract.txt")"; fail=1; fi
 check "edit atomic landed" '90 days' "$(cat "$TESTDIR/contract.txt")"
 # write_b64 preserves mode too
 chmod 640 "$TESTDIR/out.bin" 2>/dev/null || true
 OB=$(curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n x | base64)\"}")
 OBT=$(echo "$OB" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
 curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n y | base64)\",\"confirmation_token\":\"$OBT\"}" >/dev/null
-if [ "$(stat -c '%a' "$TESTDIR/out.bin")" = "640" ]; then echo "  PASS: write_b64 preserves mode"; else echo "  FAIL: write_b64 mode $(stat -c '%a' "$TESTDIR/out.bin")"; fail=1; fi
+if [ "$(stat_mode "$TESTDIR/out.bin")" = "640" ]; then echo "  PASS: write_b64 preserves mode"; else echo "  FAIL: write_b64 mode $(stat_mode "$TESTDIR/out.bin")"; fail=1; fi
 # versions/restore lands atomically with snapshot's mode
 VLN=$(curl -s -X POST $BRIDGE/versions/list -H 'Content-Type: application/json' $T -d '{"path":"notes.txt"}')
 VRT=$(echo "$VLN" | python3 -c "import json,sys; print(json.load(sys.stdin)['versions'][0]['ts'])")
 VRV=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"ts\":\"$VRT\"}")
 VRT2=$(echo "$VRV" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
-check "restore confirmed (atomic)" '"ok": *true' "$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"ts\":\"$VRT\",\"confirmation_token\":\"$VRT2\"}")"
+RCR2=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"ts\":\"$VRT\",\"confirmation_token\":\"$VRT2\"}")
+check "restore confirmed (atomic)" '"ok": *true' "$RCR2"
 check "restore landed original" 'test content' "$(cat "$TESTDIR/notes.txt")"
-RPERM=$(stat -c '%a' "$TESTDIR/notes.txt")
+RPERM=$(stat_mode "$TESTDIR/notes.txt")
 if [ "$RPERM" = "640" ] || [ "$RPERM" = "600" ]; then echo "  PASS: restore preserves mode ($RPERM)"; else echo "  FAIL: restore mode $RPERM"; fail=1; fi
 
 # ---------- symlink protection (P2, Linux) ----------
@@ -401,7 +450,7 @@ check "read via dir-symlink blocked"   'symlink' "$(curl -s "$BRIDGE/read?path=l
 check "write through file-symlink refused" 'symlink' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"linkfile.txt","content":"x"}')"
 if [ -L "$TESTDIR/linkfile.txt" ]; then echo "  PASS: symlink not clobbered by replace"; else echo "  FAIL: symlink was replaced"; fail=1; fi
 if grep -q "outside data" "$TESTDIR/realdir/outside.txt" 2>/dev/null; then echo "  PASS: symlink target untouched"; else echo "  FAIL: secret.txt via symlink was modified"; fail=1; fi
-LEFT2=$(find "$TESTDIR" -maxdepth 1 -name '.fb-*' | wc -l)
+LEFT2=$(find "$TESTDIR" -maxdepth 1 -name '.fb-*' | wc -l | tr -d ' ')
 if [ "$LEFT2" = "0" ]; then echo "  PASS: still no temp leftovers after symlink tests"; else echo "  FAIL: $LEFT2 temp files left"; fail=1; fi
 
 # ---------- sensitive-name blacklist (P2) ----------
@@ -585,12 +634,14 @@ if [ -n "$AL2" ] && echo "$AL2" | grep -q '"risk": *"read"'; then echo "  PASS: 
 # never trip it there. This runs LAST because it reclaims port 8765.
 kill $BRIDGE_PID 2>/dev/null || true
 wait $BRIDGE_PID 2>/dev/null || true
-for _ in $(seq 1 20); do ss -tln | grep -q ':8765 ' || break; sleep 0.25; done
+# wait until a new bridge could bind the port again (the old listener must
+# be fully gone; ss is Linux-only so we test bindability directly)
+for _ in $(seq 1 40); do port_bindable && break; sleep 0.25; done
 BRKDIR=$(mktemp -d); BRKSTATE=$(mktemp -d)
 echo "b1" > "$BRKDIR/f.txt"
-FILE_BRIDGE_STATE_DIR="$BRKSTATE" FILE_BRIDGE_MAX_WRITES=3 python3 src/file_bridge.py "$BRKDIR" &
+FILE_BRIDGE_STATE_DIR="$BRKSTATE" FILE_BRIDGE_MAX_WRITES=3 $BRIDGE_CMD "$BRKDIR" &
 BRIDGE_PID=$!
-sleep 1.5
+for _ in $(seq 1 60); do curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"allowed_origin":"http://owui.test:8080"}' >/dev/null
 BRK=""
 for i in $(seq 1 6); do

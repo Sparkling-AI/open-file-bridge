@@ -92,18 +92,25 @@ Bridge must be running during chats. Non-technical users will forget.
 
 ## 7. CI gaps
 
-- [ ] Windows/macOS smoke tests in Actions (currently Linux-only curl check)
-- [ ] Auto-attach artifacts to GitHub Releases on tag (needs repo push, see below)
+- [x] Windows/macOS smoke tests in Actions — done 2026-08-28: every matrix
+      leg now starts its own artifact, polls `/health`, and asserts
+      `addons.pdf` (pymupdf frozen in) + wheel count. Windows spec fixed to
+      one-folder output so `installer_windows.iss` finds the exe where it
+      expects; artifact upload paths corrected (macOS uploads the packaged
+      `.app` zip, Windows the onedir folder) with `if-no-files-found: error`
+      so an empty artifact can never pass silently again.
+- [ ] Auto-attach artifacts to GitHub Releases on tag (repo now lives at
+      github.com/Sparkling-AI/open-file-bridge, master pushed and in sync)
 
-## 8. Push to GitHub
+## 8. Windows real-machine desktop flows (remaining)
 
-Local repo is committed and ready (`git log` — 1 commit). Push blocked by
-expired gh credentials (`gh auth login` needed, or refresh the token in
-`~/.config/gh/hosts.yml`). SSH key `id_ed25519` authenticates fine as
-`chopperddw` — once the repo exists on github.com (created via web UI or a
-fresh token), it's just:
+CI smoke (GitHub Actions windows-latest) covers build + startup + health +
+frozen addons. Still needs a real Windows desktop, per the original plan:
 
-```bash
-git remote add origin git@github.com:chopperddw/owui-file-bridge.git
-git push -u origin main
-```
+- [ ] First real Inno Setup compile of `build/installer_windows.iss`
+      (spec output layout now matches its expected `dist\FileBridge\` path)
+- [ ] SmartScreen "More info → Run anyway" flow on first run
+- [ ] NTFS symlink/junction behavior of the resolve guards (POSIX paths,
+      drive letters `C:\`, UNC `\\server\share` and backslash traversal are
+      rejected by design and unit-checked on macOS; NTFS reparse points
+      need real-Windows confirmation)

@@ -65,7 +65,12 @@ pyinstaller --onefile --windowed --name FileBridge src/file_bridge.py
 ```
 
 `package_macos.sh` wraps the binary into a proper `.app` (with `LSUIElement`
-so it runs background-only, no Dock icon) and zips it.
+so it runs background-only, no Dock icon) and zips it. It also copies
+`src/wheels/` + `src/tessdata/` into the `.app` next to the executable, so
+the frozen bridge serves all 8 office wheels and offers the bundled OCR
+languages (eng/swe/chi_sim/osd) out of the box — verified on macOS 26/arm64:
+`/health` reports `wheels: 8`, `addons: {pdf: true, ocr: true}`,
+`ocr_langs_available: [chi_sim, eng, osd, swe]`.
 
 - Unsigned ⇒ Gatekeeper blocks first launch: **right-click → Open → Open** (once).
 - With an Apple Developer ID ($99/yr):
@@ -78,7 +83,9 @@ so it runs background-only, no Dock icon) and zips it.
 
 ## CI (recommended)
 
-`.github/workflows/build.yml` builds all three OSes on every `v*` tag:
+`.github/workflows/build.yml` builds **and smoke-tests** all three OSes
+(health + frozen-addons checks; Windows artifacts get `wheels/` + `tessdata/`
+layered in) on every `v*` tag:
 
 ```bash
 git tag v1.0.0 && git push --tags
@@ -143,4 +150,27 @@ kill %1
 ```
 
 The full endpoint/security test suite is `tests/e2e_test.sh` (also runs in CI
-on the Linux build).
+on the Linux build). It is portable across Linux and macOS (works with
+macOS's stock bash 3.2 and BSD userland) and can run against a **frozen
+binary** instead of the source:
+
+```bash
+FILE_BRIDGE_CMD="$PWD/dist/FileBridge.app/Contents/MacOS/FileBridge" \
+  uv run --with pymupdf bash tests/e2e_test.sh
+```
+
+Verified on macOS this way: the complete 216-check suite passes against the
+packaged `.app` binary (wheels served from inside the bundle, frozen-asset
+detection, all security layers). The suite polls for readiness, so the
+onefile binary's ~2 s self-extraction delay is handled.
+
+The PDF/OCR addon suite (`tests/addon_test.sh`, 127 checks) is likewise
+portable; it needs tesseract on PATH (e.g. `brew install tesseract`) — the
+bundled `tessdata/` supplies the languages, so `swe`/`chi_sim` work without
+any system language packs:
+
+```bash
+uv run --with pymupdf --with fpdf2 --with pypdfium2 \
+       --with python-docx --with python-pptx --with openpyxl \
+       bash tests/addon_test.sh
+```

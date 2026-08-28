@@ -4,10 +4,9 @@
 #   pip install pyinstaller pymupdf
 #   pyinstaller --noconfirm file_bridge_windows.spec
 #
-# Output: dist/FileBridge/FileBridge.exe  (one-folder bundle)
-# Zip dist/FileBridge -> FileBridge-windows-x64.zip for distribution,
-# or compile installer_windows.iss (Inno Setup) for the full installer
-# that also bundles wheels/ + tessdata/ + the tesseract engine.
+# Output: dist/FileBridge/FileBridge.exe  (one-folder bundle — the layout
+# installer_windows.iss expects; wheels/ + tessdata/ + the tesseract engine
+# are layered next to the exe by the installer).
 
 from PyInstaller.utils.hooks import collect_all
 
@@ -30,21 +29,28 @@ a = Analysis(
     cipher=block_cipher,
 )
 
-# --onefile: single self-extracting exe. Slower startup (~1-2s) is fine here.
-# PDF support (pymupdf) is frozen INTO the exe via collect_all below, so the
-# installed app has /pdf_text + PDF-rendering-for-OCR out of the box.
+# One-folder (not onefile): no repeated self-extraction of ~80 MB on every
+# start, faster launch, and the installer/uninstaller manages real files.
+# PDF support (pymupdf) is frozen IN via collect_all above, so the installed
+# app has /pdf_text + PDF-rendering-for-OCR out of the box.
 # OCR itself uses the external tesseract binary bundled by the installer.
 pyz = PYZ(a.pure)
 
 exe = EXE(
     pyz,
     a.scripts,
-    a.binaries,
-    a.datas,
+    exclude_binaries=True,
     name='FileBridge',
     console=False,          # no console window; runs quietly in background
     icon=None,              # add icon='filebridge.ico' when you have one
     uac_admin=False,        # normal user rights, no admin needed
+)
+
+coll = COLLECT(
+    exe,
+    a.binaries,
+    a.datas,
+    name='FileBridge',
 )
 
 # Windows Defender SmartScreen will warn on first run of an unsigned exe.

@@ -96,6 +96,60 @@ Add every new gotcha here, not to memory.
 - Roadmap P2 "Win/mac testing" items move AFTER everything else is done.
 - Tests before UI polish; small commits per roadmap item.
 
+## macOS build+verify session (2026-08-28, macOS 26 / arm64 / bash 3.2)
+
+The final-phase mac leg, done on Dandan's machine. Everything below is
+encoded in ROADMAP/TODO too; this section keeps the debugging lore.
+
+**bash 3.2 silently corrupts JSON bodies (root cause of the "Extra data:
+line 1 column 7" 500s).** macOS still ships bash 3.2 as /bin/bash. It
+MISPARSES `-d "{\"k\":\"$V\"}"` when the curl sits inside a *quoted
+command-substitution argument* — `check "x" 'y' "$(curl ... -d \"{...}\" ...)"`:
+the body arrives truncated to its last `"key":"value"` fragment (verified
+with a raw TCP dump proxy). Assignment context (`R=$(curl ...)`) parses
+correctly. All such curls in tests/e2e_test.sh now go through a variable.
+This also un-masked a false PASS: "state-inside-root rejected" matched
+`error` in ANY error response.
+
+**State-dir containment bypass via /var symlink (real security bug, fixed).**
+macOS symlinks /var → /private/var; mktemp returns /var/folders/…, the
+bridge resolved ROOTS but not STATE_DIR, so `os.path.commonpath` never
+matched and set_roots happily accepted the state dir itself as a shared
+root (dumped `{"ok": true}` instead of rejecting). STATE_DIR is
+`Path.resolve()`d at init now — all guards compare realpath to realpath.
+
+**Windowed-frozen guard.** `--windowed` PyInstaller builds can have
+sys.stdout/stderr None (no console); main() now substitutes devnull before
+any print/isatty. (macOS Finder launches give /dev/null fds so the guard
+is belt-and-braces there; Windows noconsole is where it bites.)
+
+**UNC-path ValueError.** On Windows, `\\server\share\…` after backslash
+normalization makes commonpath raise ValueError (different drives) — was
+an uncaught 500 in resolve_any; now a clean "path escapes shared root".
+
+**Other portability fixes:** `stat -c` → stat_mode() helper (GNU/BSD),
+`base64 -w0` → `base64 | tr -d '\n'`, `ss -tln` wait → port_bindable()
+bind probe + port_accepting() connect probe (a stuck listener reads as
+"free" to curl timeouts), BSD `wc -l` space padding stripped, blind
+`sleep 1.5` startup → /health readiness poll (onefile self-extraction
+takes ~2 s), addon_test bridge now installs the full dep set the suite
+exercises (standalone runs used to 501 on docx/pptx/pypdfium2 endpoints).
+
+**Frozen-build results:** PyInstaller 6.x onefile+windowed, 32 MB binary;
+package_macos.sh now layers src/wheels + src/tessdata into the .app
+(Contents/MacOS) → 55 MB app / 44 MB zip. `/health` from a Finder-style
+`open`: wheels 8, addons {pdf,ocr}, langs [chi_sim eng osd swe]. Full
+216-check e2e suite passes against the frozen binary via the new
+FILE_BRIDGE_CMD env hook. LaunchAgent round-trip verified (see ROADMAP).
+
+**Windows spec was onefile, installer expects onedir** — EXE had
+a.binaries/a.datas inline (onefile) while installer_windows.iss + CI +
+BUILDING.md all reference dist\FileBridge\FileBridge.exe. Spec fixed to
+exclude_binaries + COLLECT. CI now smoke-tests all three OSes and builds
+with pymupdf present (collect_all without it silently produced a
+PDF-less exe; artifact uploads had wrong paths for win/mac → empty
+artifacts, now `if-no-files-found: error`).
+
 ## Session handoff
 
 - Repo: `~/workspace/owui-file-bridge` (git, 3 research docs + roadmap).

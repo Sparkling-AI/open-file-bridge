@@ -150,6 +150,11 @@ def state_dir() -> Path:
         p = Path.home() / "Library" / "Application Support" / "file-bridge"
     else:
         p = Path.home() / ".local" / "state" / "file-bridge"
+    # Canonicalize (realpath) so the state-inside-root guards compare like
+    # for like: on macOS /var is a symlink to /private/var, and an unresolved
+    # state path (e.g. FILE_BRIDGE_STATE_DIR=/var/folders/...) would never
+    # match a resolved root path — the containment check would be bypassable.
+    p = p.resolve()
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -2844,7 +2849,12 @@ def resolve_any(rel: str):
         rel = rel[m.end():]
     root = Path(cfg["path"]).resolve()
     p = (root / rel).resolve()
-    if os.path.commonpath([str(root), str(p)]) != str(root):
+    try:
+        if os.path.commonpath([str(root), str(p)]) != str(root):
+            raise PermissionError("path escapes shared root")
+    except ValueError:
+        # commonpath ValueError = different drives (Windows UNC 'C:\' vs
+        # '\\server\share') — never inside the root, so it's an escape
         raise PermissionError("path escapes shared root")
     # sensitive-name floor (P2): .env / id_rsa / *.pem / credentials… never
     # readable or writable via the API, regardless of ignore lists
@@ -4438,6 +4448,14 @@ def main():
         print(f"Sharing: {p}")
 
     root = load_root()
+
+    # PyInstaller --windowed (the shipped Windows/macOS apps) may leave
+    # sys.stdout/sys.stderr as None when there is no console — print() or
+    # isatty() on None would crash the app at startup. Substitute devnull.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
 
     # console/request log → state_dir/bridge.log when running non-interactive
     # (service / nohup); interactive terminal keeps plain stderr.

@@ -12,7 +12,6 @@ jobs:
         include:
           - os: windows-latest
             artifact: FileBridge-windows-x64
-            run_windows: ${{ true }}
           - os: macos-latest
             artifact: FileBridge-macos
           - os: ubuntu-latest
@@ -25,26 +24,79 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install PyInstaller
-        run: pip install pyinstaller
+      # pymupdf must be present at build time: the specs freeze it in via
+      # collect_all, so /pdf_text + PDF-render-for-OCR work out of the box
+      - name: Install build deps
+        run: pip install pyinstaller pymupdf
 
+      # ---------------- Windows (one-folder via spec; installer layout) ----
       - name: Build (Windows)
         if: runner.os == 'Windows'
         working-directory: build
         run: pyinstaller --noconfirm file_bridge_windows.spec
 
-      - name: Build (macOS)
-        if: runner.os == 'macOS'
-        run: pyinstaller --onefile --windowed --name FileBridge src/file_bridge.py
+      - name: Bundle frozen assets (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Copy-Item -Recurse src\wheels dist\FileBridge\wheels
+          Copy-Item -Recurse src\tessdata dist\FileBridge\tessdata
 
+      - name: Smoke test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $env:FILE_BRIDGE_STATE_DIR = "$env:RUNNER_TEMP\fbstate"
+          $share = "$env:RUNNER_TEMP\fbshare"
+          New-Item -ItemType Directory -Force $share | Out-Null
+          "hello from ci" | Out-File "$share\notes.txt"
+          $p = Start-Process -PassThru -FilePath "dist\FileBridge\FileBridge.exe" -ArgumentList $share
+          $health = $null
+          foreach ($i in 1..40) {
+            try {
+              $health = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2
+              if ($health.ok) { break }
+            } catch {}
+            Start-Sleep -Seconds 1
+          }
+          if (-not $health -or -not $health.ok) { throw "bridge did not come up" }
+          if (-not $health.addons.pdf) { throw "pymupdf missing from frozen build" }
+          if ($health.wheels -ne 8) { throw "expected 8 bundled wheels, got $($health.wheels)" }
+          Write-Output "smoke OK: root=$($health.root) addons=$($health.addons) wheels=$($health.wheels)"
+          Stop-Process -Id $p.Id -Force
+
+      # ---------------- macOS (onefile binary -> .app + zip) ---------------
+      - name: Build + package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          pyinstaller --onefile --windowed --name FileBridge --noconfirm src/file_bridge.py
+          ./build/package_macos.sh
+
+      - name: Smoke test (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          SHARE="$RUNNER_TEMP/fbshare"; mkdir -p "$SHARE"; echo "hello from ci" > "$SHARE/notes.txt"
+          FILE_BRIDGE_STATE_DIR="$RUNNER_TEMP/fbstate" \
+            dist/FileBridge.app/Contents/MacOS/FileBridge "$SHARE" &
+          BP=$!
+          for _ in $(seq 1 40); do curl -sf -m 2 http://127.0.0.1:8765/health >/dev/null && break; sleep 1; done
+          H=$(curl -sf -m 2 http://127.0.0.1:8765/health) || { echo "bridge did not come up"; kill $BP; exit 1; }
+          echo "$H"
+          echo "$H" | grep -q '"ok": *true'  || { echo "FAIL: health not ok"; kill $BP; exit 1; }
+          echo "$H" | grep -q '"pdf": *true' || { echo "FAIL: pymupdf missing from frozen build"; kill $BP; exit 1; }
+          echo "$H" | grep -q '"wheels": *8' || { echo "FAIL: wheels not bundled"; kill $BP; exit 1; }
+          kill $BP
+          echo "smoke OK"
+
+      # ---------------- Linux (onefile console binary) ----------------------
       - name: Build (Linux)
         if: runner.os == 'Linux'
-        run: pyinstaller --onefile --name FileBridge src/file_bridge.py
+        run: pyinstaller --onefile --name FileBridge --noconfirm src/file_bridge.py
 
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
         run: |
-          ./dist/FileBridge /tmp &
+          FILE_BRIDGE_STATE_DIR="$RUNNER_TEMP/fbstate" ./dist/FileBridge /tmp &
           sleep 2
           curl -sf http://127.0.0.1:8765/health
           kill %1
@@ -54,6 +106,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            dist/FileBridge.exe
-            dist/FileBridge.app
+            dist/FileBridge/
             dist/FileBridge
+            FileBridge-macos.zip
+          if-no-files-found: error
