@@ -52,7 +52,9 @@ jobs:
           $share = "$env:RUNNER_TEMP\fbshare"
           New-Item -ItemType Directory -Force $share | Out-Null
           "hello from ci" | Out-File "$share\notes.txt"
-          $p = Start-Process -PassThru -FilePath "dist\FileBridge\FileBridge.exe" -ArgumentList $share
+          $p = Start-Process -PassThru -FilePath "dist\FileBridge\FileBridge.exe" -ArgumentList $share `
+            -RedirectStandardError "$env:RUNNER_TEMP\fb-stderr.txt" `
+            -RedirectStandardOutput "$env:RUNNER_TEMP\fb-stdout.txt"
           $health = $null
           foreach ($i in 1..40) {
             try {
@@ -70,6 +72,10 @@ jobs:
             if (Test-Path "$env:RUNNER_TEMP\fbstate\bridge.log") {
               Get-Content "$env:RUNNER_TEMP\fbstate\bridge.log" -Tail 40
             } else { Write-Output "(no bridge.log)" }
+            Write-Output "---- fb-stderr.txt ----"
+            if (Test-Path "$env:RUNNER_TEMP\fb-stderr.txt") { Get-Content "$env:RUNNER_TEMP\fb-stderr.txt" -Tail 40 }
+            Write-Output "---- fb-stdout.txt ----"
+            if (Test-Path "$env:RUNNER_TEMP\fb-stdout.txt") { Get-Content "$env:RUNNER_TEMP\fb-stdout.txt" -Tail 20 }
             throw "bridge did not come up"
           }
           if (-not $health.addons.pdf) { throw "pymupdf missing from frozen build" }
