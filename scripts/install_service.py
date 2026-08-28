@@ -4,7 +4,8 @@ File Bridge — service installer (P2 rollout item).
 
 Installs a per-user background service so the bridge starts at login:
   Linux:   systemd user unit  (~/.config/systemd/user/file-bridge.service)
-  macOS:   LaunchAgent plist  (~/Library/LaunchAgents/com.filebridge.bridge.plist)
+  macOS:   LaunchAgent plist  (~/Library/LaunchAgents/com.filebridge.bridge.plist),
+           loaded via launchctl (RunAtLoad + KeepAlive)
   Windows: writes a .bat + Startup shortcut instructions (real service
            registration — NSSM/Task Scheduler — is the user's final phase).
 
@@ -12,9 +13,11 @@ Usage:
   python scripts/install_service.py            # install + start now
   python scripts/install_service.py --status   # show unit + service state
   python scripts/install_service.py --remove   # stop + uninstall
+  python scripts/install_service.py --exec dist/FileBridge --arg ~/my-folder
 
 The service runs the bridge from its repo/source location with the CURRENT
-python. For the frozen binary, pass --exec /path/to/FileBridge.
+python. For the frozen binary, pass --exec /path/to/FileBridge (plus --arg
+<folder> to pre-select the shared folder).
 Idempotent: reinstall overwrites the unit file cleanly.
 """
 import argparse
@@ -99,6 +102,10 @@ def mac_plist_path() -> Path:
     return Path.home() / "Library" / "LaunchAgents" / PLIST_NAME
 
 
+def _launchctl(*args: str) -> subprocess.CompletedProcess:
+    return subprocess.run(["launchctl", *args], capture_output=True, text=True)
+
+
 def mac_install(cmd: list) -> bool:
     plist = mac_plist_path()
     plist.parent.mkdir(parents=True, exist_ok=True)
@@ -125,17 +132,35 @@ def mac_install(cmd: list) -> bool:
 </dict>
 </plist>
 """)
-    print(f"plist written: {plist} (NOT loaded — macOS untested, user's final phase)")
+    print(f"plist written: {plist}")
+    # replace any previously loaded instance, then load the new one
+    _launchctl("bootout", f"gui/{os.getuid()}/com.filebridge.bridge")
+    r = _launchctl("bootstrap", f"gui/{os.getuid()}", str(plist))
+    if r.returncode != 0:
+        print(f"FAILED: launchctl bootstrap\n{r.stderr.strip()}")
+        return False
+    print("ok: launchctl bootstrap (RunAtLoad + KeepAlive)")
     return True
 
 
 def mac_status() -> bool:
     p = mac_plist_path()
     print(f"plist: {p} ({'exists' if p.exists() else 'missing'})")
-    return p.exists()
+    r = _launchctl("print", f"gui/{os.getuid()}/com.filebridge.bridge")
+    loaded = r.returncode == 0
+    print(f"loaded: {loaded}")
+    if loaded:
+        for line in r.stdout.splitlines():
+            if "pid" in line.lower() or "state" in line.lower():
+                print(f"  {line.strip()}")
+                break
+    return p.exists() and loaded
 
 
 def mac_remove() -> bool:
+    r = _launchctl("bootout", f"gui/{os.getuid()}/com.filebridge.bridge")
+    if r.returncode != 0 and "No such process" not in (r.stderr or ""):
+        print(f"note: bootout: {(r.stderr or '').strip()}")
     p = mac_plist_path()
     if p.exists():
         p.unlink()
@@ -180,6 +205,9 @@ def main():
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--remove", action="store_true")
     ap.add_argument("--exec", help="frozen binary path (default: repo python)")
+    ap.add_argument("--arg", action="append", default=[],
+                    help="extra argument appended to the service command "
+                         "(repeatable, e.g. --arg /path/to/shared/folder)")
     args = ap.parse_args()
 
     system = platform.system()
@@ -193,7 +221,7 @@ def main():
     elif args.status:
         ok = status()
     else:
-        cmd = bridge_cmd(args.exec)
+        cmd = bridge_cmd(args.exec) + args.arg
         print(f"service command: {' '.join(cmd)}")
         ok = install(cmd)
     sys.exit(0 if ok else 1)

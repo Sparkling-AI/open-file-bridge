@@ -211,10 +211,31 @@ Windows/macOS build+verify is a FINAL phase done by the user personally
 after Linux is complete. Frozen-binary repackaging likewise deferred to one
 final validation pass (not after every change). Do not block on either.
 
-☐ **Windows + macOS real-machine testing** — everything so far verified on
-   Linux only: drive letters/backslashes, port-conflict UX, first real Inno
-   Setup compile, SmartScreen/Gatekeeper flows.
-☐ Inno Setup compile run on Windows (script written, never executed).
+🔵 **Windows + macOS real-machine testing** (macOS side ✅ 2026-08-28,
+   macOS 26/arm64 machine): drive letters/backslashes (blocked by design,
+   unit-checked), port-conflict UX, first real Inno Setup compile,
+   SmartScreen/Gatekeeper flows.
+   - ✅ macOS: e2e 216/216 from source AND against the packaged `.app`
+     binary (`FILE_BRIDGE_CMD=` hook added to e2e for frozen runs); addon
+     suite 127/127 incl. swe/chi_sim OCR via brew tesseract + bundled
+     tessdata; Finder-style `open` launch of the unsigned `.app` works
+     (Gatekeeper right-click flow unverifiable for local builds — no
+     quarantine attr — needs first external download); LaunchAgent
+     round-trip VERIFIED (install_service.py now bootstraps via launchctl:
+     install → running → /health → bootout → port freed).
+   - ✅ macOS bugs found & fixed: state-dir containment bypass via /var →
+     /private/var symlink (STATE_DIR now realpath'd); windowed-frozen
+     `sys.stdout=None` startup crash guard; test suite bash-3.2/BSD
+     portability (macOS ships bash 3.2 — `-d "{\"k\":\"$v\"}"` inside a
+     quoted `$()` argument gets MISPARSED, bodies arrived truncated; all
+     such curls now go through assignment context).
+   - 🔵 Windows: CI (windows-latest) now builds the one-folder exe and
+     smoke-tests startup/health/frozen-addons/wheels (spec was onefile,
+     contradicting installer_windows.iss — fixed to COLLECT layout).
+     Remaining for a real Windows desktop: Inno Setup compile,
+     SmartScreen first-run, NTFS symlink/junction confirmation.
+☐ Inno Setup compile run on Windows (script written, never executed;
+   spec output layout now matches its expected `dist\FileBridge\` path).
 ✅ **Audit log** — JSONL at `state_dir/audit.log` (from OpenWorker audit.py
    pattern): every file-touching call logs ts, endpoint, method, path, size,
    status + **secret-scrubbed args** (`_SECRET_KEYS` scrub list adopted;
@@ -236,11 +257,12 @@ final validation pass (not after every change). Do not block on either.
    stderr, size rotation to `.log.1`, default 5 MB, env
    FILE_BRIDGE_LOG_MAX_BYTES; the systemd service sets
    FILE_BRIDGE_NO_LOGFILE=1 and relies on the journal instead).
-   `scripts/install_service.py` (+`--status`/`--remove`/`--exec` for
+   `scripts/install_service.py` (+`--status`/`--remove`/`--exec`/`--arg` for
    frozen binaries): systemd user unit on Linux (VERIFIED round-trip:
    install → active → /health → remove → port freed), LaunchAgent plist
-   on macOS (written, not loaded — user's final phase), Startup-folder
-   .bat on Windows (write-only). FILE_BRIDGE_PORT env override added.
+   on macOS (VERIFIED round-trip 2026-08-28: launchctl bootstrap →
+   state=running → /health (8 wheels) → bootout → port freed), Startup-
+   folder .bat on Windows (write-only). FILE_BRIDGE_PORT env override added.
 ✅ **`/ocr_pdf`** — tesseract PDF renderer → searchable PDF (page image +
    invisible text layer; pymupdf merges per-page parts). Image and PDF
    inputs, 50-page cap, dpi 72-400, lang like /ocr. Confirm-BEFORE-OCR

@@ -15,8 +15,12 @@ if ! curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1; then
   # 500-write headroom like e2e (convert+pdf_op+mailmerge together exceed
   # the default 20/60s; the breaker itself is tested in e2e's dedicated
   # FILE_BRIDGE_MAX_WRITES=3 instance at the end there)
+  # full deps: the suite exercises pypdfium2 (pdf images mode), python-docx
+  # (docx_merge, mailmerge), python-pptx (templates) and openpyxl (xlsx rows)
   FILE_BRIDGE_MAX_WRITES=500 FILE_BRIDGE_STATE_DIR="$STATEDIR" \
-    uv run --with pymupdf --with fpdf2 python src/file_bridge.py "$TESTDIR" &
+    uv run --with pymupdf --with fpdf2 --with pypdfium2 \
+           --with python-docx --with python-pptx --with openpyxl \
+           python src/file_bridge.py "$TESTDIR" &
   BPID=$!
   started_here=1
   trap 'kill $BPID 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR"' EXIT
@@ -339,7 +343,7 @@ doc.add_paragraph("This body was authored as docx, round-tripped to .doc.")
 doc.save(d / "conv-src.docx")
 print("conv fixture ok")
 PYEOF
-  if command -v soffice >/dev/null 2>&1 || [ -n "$SOFFICE_CMD" ]; then
+  if command -v soffice >/dev/null 2>&1 || [ -n "${SOFFICE_CMD:-}" ]; then
     # legacy .doc fixture (built BY soffice from the docx above)
     soffice --headless --norestore --convert-to doc --outdir "$TESTDIR" "$TESTDIR/conv-src.docx" >/dev/null 2>&1 || true
     if [ -f "$TESTDIR/conv-src.doc" ]; then

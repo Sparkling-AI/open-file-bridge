@@ -15,6 +15,17 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp dist/FileBridge "$APP/Contents/MacOS/FileBridge"
 chmod +x "$APP/Contents/MacOS/FileBridge"
 
+# Frozen-build asset layout (docs/BUILDING.md): wheels/ (browser-side office
+# libs served by /wheels) and tessdata/ (OCR langs incl. swe/chi_sim) next to
+# the executable. The bridge resolves them via sys.executable's dir when
+# frozen, i.e. Contents/MacOS inside the .app. Skip gracefully if absent.
+for asset in wheels tessdata; do
+  if [ -d "src/$asset" ]; then
+    rm -rf "$APP/Contents/MacOS/$asset"
+    cp -R "src/$asset" "$APP/Contents/MacOS/$asset"
+  fi
+done
+
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
