@@ -34,6 +34,18 @@ SKILL_ID = "local-file-bridge"
 MODEL_ID = "local-files-assistant"
 STRICT_SKILL_ID = "local-file-bridge-strict"
 STRICT_MODEL_ID = "local-files-assistant-strict"
+# Strict skill description. Models are only guaranteed to SEE the
+# name+description (tool list); opening the body is optional. The
+# failure-mode wording is what makes weak models actually call the
+# skill — validated on glm-4.5-air 2026-08-28 (fabrication → full
+# bridge flow /list→/read→/write with this exact text; see ROADMAP
+# multi-model smoke + references/multi-model-smoke.md).
+STRICT_DESC = (
+    "MUST-CALL before ANY file task. User's real files are reachable "
+    "ONLY via the local bridge (http://127.0.0.1:8765) — call this "
+    "skill first and run its Bootstrap. Files written with open()/os "
+    "in this sandbox are LOST and INVISIBLE to the user; claiming "
+    "success without a bridge response is a failure.")
 SKILL_DIR = "skill/local-file-bridge"
 # keep in sync with VERSION/SKILL_VERSION in src/file_bridge.py and the
 # skill folder's CHANGELOG.md
@@ -200,9 +212,8 @@ def main():
     installed = []
     if args.variant == "strict":
         if upsert_skill(base, tok, STRICT_SKILL_ID,
-                        "Local File Bridge (strict)", 
-                        "[STRICT] Fixed recipes + verify-after-write for "
-                        "weaker models. " + "Bridge at 127.0.0.1:8765.",
+                        "Local File Bridge (strict)",
+                        STRICT_DESC,
                         strict_md, args.yes):
             installed.append(STRICT_SKILL_ID)
     else:
@@ -217,8 +228,7 @@ def main():
         if STRICT_SKILL_ID not in installed:
             if upsert_skill(base, tok, STRICT_SKILL_ID,
                             "Local File Bridge (strict)",
-                            "[STRICT] Fixed recipes + verify-after-write for "
-                            "weaker models. " + "Bridge at 127.0.0.1:8765.",
+                            STRICT_DESC,
                             strict_md, args.yes):
                 installed.append(STRICT_SKILL_ID)
 
