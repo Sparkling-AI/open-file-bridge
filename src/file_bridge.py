@@ -4439,6 +4439,17 @@ class _RotatingLog:
 
 
 def main():
+    # PyInstaller --windowed (shipped Windows exe; console=False) leaves
+    # sys.stdout/sys.stderr as None on Windows when there is no console —
+    # any print()/isatty() on None would crash at startup (and a windowed
+    # traceback dialog then hangs the process). This must run BEFORE the
+    # first print below. macOS .app launches get /dev/null fds instead, so
+    # only Windows hits the None case.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w")
+
     folder = sys.argv[1] if len(sys.argv) > 1 else None
     if folder:
         p = Path(folder).expanduser().resolve()
@@ -4448,14 +4459,6 @@ def main():
         print(f"Sharing: {p}")
 
     root = load_root()
-
-    # PyInstaller --windowed (the shipped Windows/macOS apps) may leave
-    # sys.stdout/sys.stderr as None when there is no console — print() or
-    # isatty() on None would crash the app at startup. Substitute devnull.
-    if sys.stdout is None:
-        sys.stdout = open(os.devnull, "w")
-    if sys.stderr is None:
-        sys.stderr = open(os.devnull, "w")
 
     # console/request log → state_dir/bridge.log when running non-interactive
     # (service / nohup); interactive terminal keeps plain stderr.
