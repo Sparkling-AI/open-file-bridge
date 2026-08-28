@@ -1,6 +1,6 @@
 ---
 name: local-file-bridge
-description: Read, write, edit and CREATE files — Word/Excel/PowerPoint/PDF, plus PDF text extraction and OCR of scanned documents — in the user's local folder via the File Bridge app (http://127.0.0.1:8765). Use with Code Interpreter (Pyodide engine) enabled.
+description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
 # Local File Bridge

@@ -361,6 +361,12 @@ final validation pass (not after every change). Do not block on either.
     untested; if a future model ignores the description too, the next
     lever is the bootstrap-restructure / system-prompt-embed ideas
     (kept as candidates above).
+    Follow-up same day: description UNIFIED across both variants
+    (same text on the standard skill too) at Dandan's suggestion —
+    discovery is the same mechanism for strong models, and the
+    failure-mode wording is a free safety net. glm-5.3 re-run on the
+    standard skill with the unified text: PASS (clean /list → /read
+    → /write). setup_owui.py now has a single UNIFIED_DESC.
 ✅ RiskClass per endpoint (READ/WRITE_LOCAL/…) declared in code — from
    OpenWorker risk.py; future-proofs confirmation/audit gating
    (f2eb7fd: ENDPOINT_RISK table, audit rows carry risk, /state map,

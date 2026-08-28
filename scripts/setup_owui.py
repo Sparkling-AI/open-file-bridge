@@ -34,13 +34,15 @@ SKILL_ID = "local-file-bridge"
 MODEL_ID = "local-files-assistant"
 STRICT_SKILL_ID = "local-file-bridge-strict"
 STRICT_MODEL_ID = "local-files-assistant-strict"
-# Strict skill description. Models are only guaranteed to SEE the
-# name+description (tool list); opening the body is optional. The
-# failure-mode wording is what makes weak models actually call the
-# skill — validated on glm-4.5-air 2026-08-28 (fabrication → full
-# bridge flow /list→/read→/write with this exact text; see ROADMAP
-# multi-model smoke + references/multi-model-smoke.md).
-STRICT_DESC = (
+# Skill description, shared by BOTH variants (standard + strict).
+# Models are only guaranteed to SEE the name+description (tool list);
+# opening the body is optional. The failure-mode wording is what makes
+# weak models actually call the skill — validated on glm-4.5-air
+# 2026-08-28 (fabrication → full bridge flow /list→/read→/write with
+# this exact text), and re-validated on glm-5.3 with the same text on
+# the standard skill (no regression for strong models). See ROADMAP
+# multi-model smoke + references/multi-model-smoke.md.
+UNIFIED_DESC = (
     "MUST-CALL before ANY file task. User's real files are reachable "
     "ONLY via the local bridge (http://127.0.0.1:8765) — call this "
     "skill first and run its Bootstrap. Files written with open()/os "
@@ -213,14 +215,12 @@ def main():
     if args.variant == "strict":
         if upsert_skill(base, tok, STRICT_SKILL_ID,
                         "Local File Bridge (strict)",
-                        STRICT_DESC,
+                        UNIFIED_DESC,
                         strict_md, args.yes):
             installed.append(STRICT_SKILL_ID)
     else:
         if upsert_skill(base, tok, SKILL_ID, "Local File Bridge",
-                        "Read/write files in the user's chosen local folder "
-                        "via the File Bridge app (http://127.0.0.1:8765). "
-                        "Needs Code Interpreter.",
+                        UNIFIED_DESC,
                         std_md, args.yes):
             installed.append(SKILL_ID)
     if args.variant_strict_model:
@@ -228,7 +228,7 @@ def main():
         if STRICT_SKILL_ID not in installed:
             if upsert_skill(base, tok, STRICT_SKILL_ID,
                             "Local File Bridge (strict)",
-                            STRICT_DESC,
+                            UNIFIED_DESC,
                             strict_md, args.yes):
                 installed.append(STRICT_SKILL_ID)
 
