@@ -162,4 +162,6 @@ user"), not list features. Both shipped skill variants carry this wording.
 
 ## License
 
-MIT — do what you like, no warranty.
+Apache-2.0 — open for any use, with patent grant. See [LICENSE](LICENSE),
+[NOTICE](NOTICE) (attributions to OpenWorker & Open WebUI openapi-servers),
+and [CLA.md](CLA.md) (contributions).
