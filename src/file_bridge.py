@@ -1292,6 +1292,103 @@ def ocr_pdf(src: Path, out: Path, out_root: Path, lang: str, dpi: int,
         shutil.rmtree(tmpdir, ignore_errors=True)
 
 
+# --------------------------------------------- /image_info (P3, stdlib)
+# Dimensions + format + EXIF orientation for png/jpg/gif/webp/bmp —
+# no Pillow needed (stdlib struct walk). Reports effective size after
+# orientation so vision-model planning knows the real aspect ratio.
+
+def _image_info(path: Path) -> tuple[int, dict]:
+    IMG_EXTS = {".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp"}
+    if path.suffix.lower() not in IMG_EXTS:
+        return 400, {"error": f"not a supported image type: {path.suffix} "
+                              f"(png/jpg/gif/webp/bmp)"}
+    import struct
+
+    def be(b, off, n):
+        return int.from_bytes(b[off:off + n], "big")
+
+    head = b""
+    try:
+        with open(path, "rb") as fh:
+            head = fh.read(64 * 1024)
+    except OSError as e:
+        return 500, {"error": f"read failed: {e}"}
+    if len(head) < 12:
+        return 400, {"error": "file too small to be an image"}
+
+    fmt = w = h = None
+    orientation = None
+    if head.startswith(b"\x89PNG\r\n\x1a\n"):
+        fmt = "png"
+        if head[12:16] == b"IHDR":
+            w, h = be(head, 16, 4), be(head, 20, 4)
+    elif head.startswith(b"GIF87a") or head.startswith(b"GIF89a"):
+        fmt = "gif"
+        # GIF logical screen descriptor is little-endian
+        w, h = struct.unpack("<HH", head[6:10])
+    elif head[:2] == b"BM":
+        fmt = "bmp"
+        w, h = struct.unpack("<ii", head[18:26])
+    elif head[:4] == b"RIFF" and head[8:12] == b"WEBP":
+        fmt = "webp"
+        if head[12:16] == b"VP8 " and head[23:26] == b"\x9d\x01\x2a":
+            w, h = struct.unpack("<HH", head[26:30])
+            w &= 0x3fff
+            h &= 0x3fff
+        elif head[12:16] == b"VP8L":
+            b0, b1, b2, b3 = head[21:25]
+            w = 1 + (((b1 & 0x3F) << 8) | b0)
+            h = 1 + (((b3 & 0xF) << 10) | (b2 << 2) | ((b1 & 0xC0) >> 6))
+        elif head[12:16] == b"VP8X":
+            w = 1 + (int.from_bytes(head[24:27], "little") << 0)
+            h = 1 + (int.from_bytes(head[27:30], "little") << 0)
+    elif head[:2] in (b"\xff\xd8",):
+        fmt = "jpeg"
+        off = 2
+        # walk markers for SOFn + EXIF orientation
+        while off + 4 < len(head):
+            if head[off] != 0xFF:
+                off += 1
+                continue
+            marker = head[off + 1]
+            if marker in (0xD8, 0x01) or 0xD0 <= marker <= 0xD7:
+                off += 2
+                continue
+            seglen = be(head, off + 2, 2)
+            if 0xC0 <= marker <= 0xCF and marker not in (0xC4, 0xC8, 0xCC):
+                h, w = be(head, off + 5, 2), be(head, off + 7, 2)
+                break
+            if marker == 0xE1 and head[off + 4:off + 10] == b"Exif\x00\x00":
+                # TIFF header inside EXIF; find tag 0x0112 (Orientation)
+                tiff = off + 10
+                endian = head[tiff:tiff + 2]
+                en = "<" if endian == b"II" else ">"
+                ifd0 = struct.unpack(en + "I", head[tiff + 4:tiff + 8])[0]
+                cnt_at = tiff + ifd0
+                n = struct.unpack(en + "H", head[cnt_at:cnt_at + 2])[0]
+                for k in range(n):
+                    ent = cnt_at + 2 + k * 12
+                    tag, typ, cnt = struct.unpack(en + "HHI", head[ent:ent + 8])
+                    if tag == 0x0112:
+                        val = struct.unpack(en + "H", head[ent + 8:ent + 10])[0]
+                        orientation = val
+                        break
+            off += 2 + seglen
+    if fmt is None or w is None:
+        return 400, {"error": "could not parse image header (corrupt or "
+                              "unsupported variant)"}
+    out = {"path": path.name, "format": fmt, "width": w, "height": h,
+           "megapixels": round(w * h / 1e6, 2),
+           "size": path.stat().st_size}
+    if orientation:
+        out["exif_orientation"] = orientation
+        swap = orientation in (5, 6, 7, 8)
+        out["effective_width"], out["effective_height"] = (h, w) if swap else (w, h)
+        out["note"] = "EXIF orientation present — effective dims swap w/h; " \
+                      "viewers auto-rotate but raw decoders may not"
+    return 200, out
+
+
 # ------------------------------------------------- office reads (P1)
 
 # Optional native readers; stdlib zipfile+XML fallbacks keep the bridge
@@ -2307,6 +2404,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "allowed_origin": get_allowed_origin(),
                 "security": security_mode(),
                 "readonly": _is_readonly(),
+                "allow_reveal": bool(_state_load().get("allow_reveal")),
                 "ignore_global": _global_ignore(),
                 "rate_limits": _rate_limits()})
 
@@ -2667,6 +2765,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "available": _ocr_langs_available(),
                     "engine": TESSERACT_VER or "tesseract",
                 })
+
+            if u.path == "/image_info":
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                code, out = _image_info(p)
+                return self._json(code, out)
+
+            if u.path == "/reveal":
+                # open the OS file manager at the file's location. Consent-
+                # gated: refuses unless the LOCAL user enabled it in the
+                # picker (allow_reveal in state) — a remote model must never
+                # pop windows on the user's desktop unasked.
+                if not _state_load().get("allow_reveal"):
+                    return self._json(403, {
+                        "error": "reveal is disabled on this machine — ask the "
+                                 "user to enable it in the File Bridge settings "
+                                 "page if they want file-manager popups"})
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.exists():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                import subprocess as _sp
+                if _IS_WINDOWS:
+                    r = _sp.run(["explorer", "/select,", str(p)], capture_output=True)
+                elif sys.platform == "darwin":
+                    r = _sp.run(["open", "-R", str(p)], capture_output=True)
+                else:
+                    r = _sp.run(["xdg-open", str(p.parent)], capture_output=True)
+                if r.returncode != 0:
+                    return self._json(500, {"error": "file manager failed to open "
+                                                     f"(rc={r.returncode})"})
+                return self._json(200, {"ok": True, "revealed": str(p),
+                                        "hint": "file manager opened on the user's "
+                                                "screen"})
 
         except ExcludedPath as e:
             return self._json(404, {"error": str(e), "excluded": True,
@@ -3198,6 +3330,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json(400, {"ok": False, "error": err}, cors=False)
         if "readonly" in body:
             _state_update(readonly=bool(body["readonly"]))
+        if "allow_reveal" in body:
+            _state_update(allow_reveal=bool(body["allow_reveal"]))
         if isinstance(body.get("ignore_global"), list):
             _state_update(ignore_global=[str(x)[:200] for x in body["ignore_global"]][:200])
         if body.get("root") and not isinstance(body.get("roots"), list):
