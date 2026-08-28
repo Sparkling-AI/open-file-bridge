@@ -46,7 +46,7 @@ import zipfile
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
-PORT = 8765
+PORT = int(os.environ.get("FILE_BRIDGE_PORT", "8765"))
 MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
@@ -3132,6 +3132,70 @@ def _is_readonly() -> bool:
     return bool(_state_load().get("readonly"))
 
 
+# --------------------------- stderr log + rotation (P2 rollout item)
+# The audit log already rotates; this covers the console/request log
+# (BaseHTTPRequestHandler writes every request line to sys.stderr). When
+# running as a service the journal captures stderr anyway — this is for
+# double-click / console / nohup launches. Disable with FILE_BRIDGE_NO_LOGFILE=1.
+
+BRIDGE_LOG_MAX = int(os.environ.get("FILE_BRIDGE_LOG_MAX_BYTES",
+                                    str(5 * 1024 * 1024)))
+
+
+class _RotatingLog:
+    """Minimal line-buffered stderr/stdout sink with size-based rotation
+    (same .1 shift semantics as the audit log)."""
+
+    def __init__(self, path: Path, max_bytes: int):
+        self.path = path
+        self.max = max(64 * 1024, max_bytes)
+        self._fh = None
+        self._writes = 0
+
+    def _rotate(self):
+        old = self.path.parent / (self.path.name + ".1")
+        try:
+            old.unlink()
+        except OSError:
+            pass
+        try:
+            self.path.rename(old)
+        except OSError:
+            pass
+
+    def _open(self):
+        try:
+            if self.path.exists() and self.path.stat().st_size > self.max:
+                self._rotate()
+            self._fh = open(self.path, "a", encoding="utf-8", buffering=1)
+            try:
+                os.chmod(self.path, 0o600)
+            except OSError:
+                pass
+        except OSError:
+            self._fh = None
+
+    def write(self, s):
+        if self._fh is None:
+            self._open()
+            if self._fh is None:
+                return
+        self._writes += 1
+        if self._writes % 64 == 0:
+            try:
+                if self.path.stat().st_size > self.max:
+                    self._fh.close()
+                    self._rotate()
+                    self._fh = open(self.path, "a", encoding="utf-8", buffering=1)
+            except OSError:
+                pass
+        self._fh.write(s)
+
+    def flush(self):
+        if self._fh:
+            self._fh.flush()
+
+
 def main():
     folder = sys.argv[1] if len(sys.argv) > 1 else None
     if folder:
@@ -3142,6 +3206,37 @@ def main():
         print(f"Sharing: {p}")
 
     root = load_root()
+
+    # console/request log → state_dir/bridge.log when running non-interactive
+    # (service / nohup); interactive terminal keeps plain stderr.
+    if (not sys.stdout.isatty() and not sys.stderr.isatty()
+            and not os.environ.get("FILE_BRIDGE_NO_LOGFILE")):
+        logf = _RotatingLog(STATE_DIR / "bridge.log", BRIDGE_LOG_MAX)
+        class _T:
+            def __init__(self, sink, orig):
+                self.sink, self.orig = sink, orig
+            def write(self, s):
+                try:
+                    self.sink.write(s)
+                except Exception:
+                    pass
+                try:
+                    self.orig.write(s)
+                except Exception:
+                    pass
+            def flush(self):
+                try:
+                    self.sink.flush()
+                except Exception:
+                    pass
+                try:
+                    self.orig.flush()
+                except Exception:
+                    pass
+            def isatty(self):
+                return False
+        sys.stderr = _T(logf, sys.stderr)
+        sys.stdout = _T(logf, sys.stdout)
 
     # serve picker page (local setup UI)
     orig_do_GET = Handler.do_GET
