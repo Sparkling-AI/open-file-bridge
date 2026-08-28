@@ -162,6 +162,20 @@ bridge.log + captured stderr on any future failure. ocr=False on runners
 is expected (no tesseract binary there — the Inno installer bundles the
 engine for real installs).
 
+**Picker UI fixes (found in Dandan's first manual test, 2026-08-29).**
+(a) OCR-language checkboxes rendered stacked/center-clipped: the global
+`input{width:100%;padding:10px}` rule also hit checkboxes — excluded via
+`input:not([type=checkbox])` and the langbox is now a flex-wrap chip row.
+(b) Tier-2 token UX only had Generate/Clear — the org flow (admin embeds
+token in the public skill via `setup_owui.py --bridge-token`, users PASTE
+it into their bridge) had no UI, even though the API always supported
+`{"token":{"set":…}}`. Added a paste field + Set button and help text
+describing both directions. Also clarified why an org-wide token is
+meaningful even though every OWUI user can read the skill: the trust
+boundary is the org's OWUI (its users can ask the model anyway); the
+token keeps every OTHER origin out, incl. the Origin:null sandbox case
+where tier-1 CORS cannot help.
+
 ## Session handoff
 
 - Repo: `~/workspace/owui-file-bridge` (git, 3 research docs + roadmap).
