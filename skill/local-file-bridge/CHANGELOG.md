@@ -7,17 +7,22 @@ skill-visible surface stay in ROADMAP/DEVNOTES.
 
 ## 2.3.1 — 2026-08-28
 
-- **Strict skill description rewritten (weak-model fix, validated)**:
-  the old text described features; the new one front-loads the failure
-  mode into the ONLY text a model is guaranteed to see (the tool-list
-  description — opening the skill body is optional). Chat-verified on
-  glm-4.5-air: with the old description the model ignored the skill
-  entirely and fabricated success in /mnt/uploads/ (zero bridge
-  requests); with the new one it called the skill, ran the Bootstrap,
-  and completed /list → /read → /write with the file landing on disk.
-  Applied to SKILL-STRICT.md frontmatter + setup_owui.py (single
-  STRICT_DESC constant now — was two diverging inline strings); setup
-  rerun verified idempotent (live description survives).
+- **Skill description unified across variants (weak-model fix,
+  validated both ways)**: models are only guaranteed to see
+  name+description — opening the skill body is optional. The new
+  shared description front-loads the failure mode ("MUST-CALL before
+  ANY file task… files written with open()/os are LOST and
+  INVISIBLE; claiming success without a bridge response is a
+  failure") instead of listing features. Chat-verified on glm-4.5-air
+  (strict skill): old description → ignored the skill, fabricated
+  success in /mnt/uploads/, zero bridge requests; new description →
+  called the skill, ran the Bootstrap, completed /list → /read →
+  /write with the file landing on disk. Re-verified on glm-5.3
+  (standard skill): no regression for strong models (clean bridge
+  flow, file on disk). Applied to both SKILL.md and SKILL-STRICT.md
+  frontmatter + setup_owui.py (single UNIFIED_DESC constant — was
+  three diverging inline strings); setup rerun verified idempotent
+  (live descriptions survive).
 
 ## 2.3 — 2026-08-28 (staged with bridge 2.3)
 
