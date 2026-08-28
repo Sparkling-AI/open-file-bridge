@@ -1,4 +1,4 @@
-# File Bridge — Roadmap
+# Open File Bridge — Roadmap
 
 Status legend: ☐ not started · ◐ in progress · ✅ done
 Priorities: P0 = production gate · P0b = scope/accident · P1 = high value · P2 = later · P3 = optional
@@ -163,7 +163,7 @@ inside a root (none planned): hard structural ignore, not user-configurable.
    /write, /edit, /delete entirely — for demo/paranoid mode. Env override
    too (FILE_BRIDGE_READONLY=1).
 ☐ **Git-tracked folders: optional safety** — detect .git in root, settings
-   offer "auto-commit before AI writes" (user.name="File Bridge"); opt-in,
+   offer "auto-commit before AI writes" (user.name="Open File Bridge"); opt-in,
    off by default (noise for office folders); gives `git diff` review after
    long sessions. Not a substitute for snapshots — big binary files make
    git fat; snapshots cover those.

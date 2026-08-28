@@ -6,7 +6,7 @@ Open WebUI issue #5872 ("data sources: Drive/OneDrive/Dropbox/Notion
 pickers", 52+ 👍) asks for exactly this; mounting an rclone remote as the
 shared folder answers it locally, privately, and today.
 
-**How it works:** the File Bridge only ever sees a normal local folder.
+**How it works:** the Open File Bridge only ever sees a normal local folder.
 rclone presents the cloud drive as a filesystem mount at that path; every
 `/read`, `/write`, `/pdf_text` … works unchanged. Files still never touch
 the Open WebUI server — they flow browser → bridge → (rclone) → cloud.
@@ -61,7 +61,7 @@ Flags that matter for the bridge:
 | `--vfs-cache-max-size 2G` | Office files + PDFs + OCR rasters can churn; cap the staging area. |
 | `--daemon` (Linux/macOS) | Survives the terminal. For boot-time: `--rc` + a systemd unit / Windows service / LaunchAgent (see rclone docs "Installing as service"). |
 
-## 3. Point the File Bridge at the mount
+## 3. Point the Open File Bridge at the mount
 
 Two options — both supported by the bridge's normal folder flow:
 

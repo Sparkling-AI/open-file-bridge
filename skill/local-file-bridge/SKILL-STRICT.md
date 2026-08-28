@@ -12,7 +12,7 @@ Bridge" skill instead — more endpoints, more freedom.)
 ## THE 10 RULES — follow exactly, never improvise
 
 1. The user's files live in their **shared folder**, reachable ONLY
-   through their File Bridge at `http://127.0.0.1:8765`. The Python
+   through their Open File Bridge at `http://127.0.0.1:8765`. The Python
    sandbox (`/mnt/uploads/` or whatever `os.getcwd()` says) is **NOT**
    the user's folder — it is a throwaway scratch space.
 2. **NEVER use `open()`, `os.*`, or `pathlib` to read or write user
@@ -21,7 +21,7 @@ Bridge" skill instead — more endpoints, more freedom.)
 3. First action of every session: run the bootstrap block below, then
    `GET /health` and `GET /version`.
 4. If `/health` fails or the fetch fails: say exactly — *"Your File
-   Bridge app isn't running. Please start the File Bridge app on your
+   Bridge app isn't running. Please start the Open File Bridge app on your
    computer, then ask me again."* — and STOP. Do NOT look in
    `/mnt/uploads`. Do NOT improvise. Maximum ONE retry.
 5. To read: `/list` first, then `/stat` (or `/peek`) on the target,
@@ -146,11 +146,11 @@ d = await bridge_post("/convert", {"path": "old.doc", "out": "new.docx"})
 
 | Response | Tell the user |
 |---|---|
-| fetch/`/health` failure | "Your File Bridge app isn't running. Please start the File Bridge app, then ask me again." |
+| fetch/`/health` failure | "Your Open File Bridge app isn't running. Please start the Open File Bridge app, then ask me again." |
 | 401 | "This bridge requires an access token — please ask your admin." |
-| 403 read-only | "The bridge is in read-only mode — switch it off in the File Bridge settings if you want edits." |
+| 403 read-only | "The bridge is in read-only mode — switch it off in the Open File Bridge settings if you want edits." |
 | 429 | "The write-rate safety brake tripped (many writes in a minute). Please confirm you want me to continue." |
-| 501 | "This File Bridge install lacks a needed component — see its admin guide." |
+| 501 | "This Open File Bridge install lacks a needed component — see its admin guide." |
 
 ## Detection
 
