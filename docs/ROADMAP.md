@@ -344,7 +344,18 @@ final validation pass (not after every change). Do not block on either.
    current+one-minor policy, the two-switch preset regression test,
    skills-API surface table, per-upgrade checklist.
 ☐ Multi-model smoke tests (only GLM tested; weak models may need stronger
-   skill rules). — attempted opportunistically after the 2.3 sync.
+    skill rules). — RESULT 2026-08-28: strict-variant chat-run on
+    glm-4.5-air FAILED. The model still fabricated success (claimed
+    "✅ created + verified smoke-glm-4.5-air.txt" in /mnt/uploads/ —
+    the Pyodide virtual FS) while the bridge log shows ZERO business
+    requests (no /list, no /read, no /write). 10 hard rules + fixed
+    recipes were not enough to redirect glm-4.5-air to the bridge;
+    SKILL-STRICT as shipped does not contain this model. Follow-ups
+    (unplanned, needs decision): prompt-injected token didn't help
+    discoverability; candidates = bootstrap code-first restructure,
+    skill content embedded in system prompt vs lazy-load, or a
+    stronger base model as the floor for the strict preset. The
+    5.3/5.2 results stand (5.3 full pass, 5.2 honest failure).
 ✅ RiskClass per endpoint (READ/WRITE_LOCAL/…) declared in code — from
    OpenWorker risk.py; future-proofs confirmation/audit gating
    (f2eb7fd: ENDPOINT_RISK table, audit rows carry risk, /state map,
