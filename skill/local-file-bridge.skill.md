@@ -22,7 +22,14 @@ Access files in **the user's own computer** through their local File Bridge serv
 | `/versions/list` | POST | `{"path":""}` — metadata of pre-write snapshots (ts/path/size) |
 | `/versions/restore` | POST | `{"path","ts"}` — restore needs its own confirmation token |
 | `/pdf_text?path=X&pages=1-3,5` | GET | **Extract text layer** from PDF (addon: pymupdf) |
+| `/pdf_text?path=X&mode=images&max_pages=100` | GET | **Vision mode**: pages as PNG data URLs (144 dpi, pypdfium2 addon) — for vision models |
 | `/ocr?path=X&lang=swe+eng&max_pages=5` | GET | **OCR** scanned PDF/image (tesseract) |
+| `/ocr_pdf` | POST | `{"path","out":"x.pdf","lang","dpi"}` → **searchable PDF** (invisible text layer; confirm flow) |
+| `/pdf_op` | POST | `{"op":"split\|merge\|rotate","paths":[...],"out","pages":"1-3","angle":90}` — page surgery (confirm on overwrite) |
+| `/docx_merge` | POST | `{"path":"template.docx","out","values":{"name":"…"},"strict":false}` — fill `{{placeholders}}` (confirm flow; reports missing) |
+| `/pptx_from_template` | POST | `{"path":"deck.potx","out","values":{…},"slides":[{"layout":1,"title":"…","body":"…"}]}` — build deck from corporate template (confirm flow) |
+| `/image_info?path=X` | GET | Image dimensions/format/megapixels + EXIF orientation (effective size) — stdlib, no addon |
+| `/reveal?path=X` | GET | Open the user's file manager at the file — **consent-gated** (403 unless the user enabled it in settings) |
 | `/ocr/config` | GET | Current OCR language + installed languages |
 | `/xlsx_read?path=X&sheet=&range=A1:B2&max_rows=` | GET | Read **Excel** as JSON (row_count, headers, grid, merged cells) — no install needed |
 | `/docx_read?path=X` | GET | Read **Word** as markdown-ish text (headings, lists, pipe tables) |
@@ -82,10 +89,11 @@ replacements in one file, one `/edit` call beats several `/write` calls.
 
 **Version check first:** call `/version` (no token needed). If the
 response's `bridge` version doesn't match what this skill documents
-(v2.1), tell the user "the bridge app and the skill are out of sync —
+(v2.2), tell the user "the bridge app and the skill are out of sync —
 re-run the File Bridge installer or scripts/setup_owui.py" and continue
 carefully: newer bridges keep old skills working, but new endpoints
-(like /zip, /directory_tree) won't be in an old skill's vocabulary.
+(like /ocr_pdf, /pdf_op, /docx_merge) won't be in an old skill's
+vocabulary.
 
 ```python
 from pyodide.http import pyfetch
@@ -134,6 +142,27 @@ async def write_text(path, text: str):
 **Creating/editing** runs in Pyodide. Install libraries from the **bridge's
 local wheels** (served from the user's own disk — offline-safe,
 version-pinned; do NOT use PyPI):
+
+**Templates beat blank files:** when the user has a corporate .docx
+template with `{{placeholders}}`, or a .potx deck layout, use the bridge's
+native template endpoints instead of building from scratch — formatting,
+fonts and logos survive:
+
+```python
+# Word: fill placeholders (missing keys are reported in the response)
+d = await bridge_post("/docx_merge", {"path": "templates/contract.docx",
+                                      "out": "out/acme-contract.docx",
+                                      "values": {"client_name": "Acme AB",
+                                                 "amount": "12500"}})
+# PowerPoint: fill the template's own placeholders + append layout-based slides
+d = await bridge_post("/pptx_from_template",
+                      {"path": "templates/deck.potx", "out": "out/q4.pptx",
+                       "values": {"report_title": "Q4 Wrap"},
+                       "slides": [{"layout": 1, "title": "Agenda",
+                                   "body": "One\nTwo"}]})
+```
+Both follow the 409 confirmation flow. For docs without a template, keep
+the Pyodide route below.
 
 ```python
 import micropip
@@ -270,6 +299,33 @@ fast). OCR also works on plain images (png/jpg/bmp/webp/tiff). If
 addons.ocr is false, the user's bridge lacks the tesseract binary — suggest
 the full installer or `TESSERACT_CMD` (admin guide). addons.pdf false →
 `pip install pymupdf`.
+
+**Scans the user wants to ARCHIVE:** after OCR-reading, offer
+`/ocr_pdf` — it writes a NEW file with the page image plus an invisible
+text layer, so the PDF becomes searchable/copyable forever:
+
+```python
+d = await bridge_post("/ocr_pdf", {"path": "scans/receipt-2024.pdf",
+                                   "out": "scans/receipt-2024-searchable.pdf",
+                                   "lang": "swe+eng"})
+# 409 + confirmation_token flow (see write rules) — confirm, re-send
+```
+
+**Vision models:** if YOU can see images and the user asks about layout,
+charts or handwriting, `/pdf_text?mode=images` returns each page as a PNG
+data URL (`png_b64` per page, 144 dpi, ≤100 pages):
+
+```python
+d = await bridge_get("/pdf_text", {"path": "docs/annual.pdf",
+                                   "mode": "images", "pages": "1-3"})
+import base64
+png = base64.b64decode(d["pages"][0]["png_b64"])   # show to the user or inspect
+```
+
+**PDF page surgery** (`/pdf_op`): split extracts selected pages to
+`<out-base>.pN.pdf` files; merge concatenates 2-20 PDFs in order; rotate
+turns selected pages by `angle` (90/180/270). Overwriting an existing
+out file follows the 409 confirmation flow.
 
 ### Plain text / CSV / Markdown
 

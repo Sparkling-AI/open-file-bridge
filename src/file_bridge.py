@@ -51,8 +51,8 @@ MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
-VERSION = "2.1"
-SKILL_VERSION = "2.1"   # keep in sync with skill/local-file-bridge.skill.md
+VERSION = "2.2"
+SKILL_VERSION = "2.2"   # keep in sync with skill/local-file-bridge.skill.md
 
 _IS_WINDOWS = sys.platform == "win32"
 
