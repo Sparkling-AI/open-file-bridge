@@ -104,6 +104,7 @@ ENDPOINT_RISK = {
     "/xlsx_read": RiskClass.READ,
     "/docx_read": RiskClass.READ,
     "/pptx_read": RiskClass.READ,
+    "/eml_read": RiskClass.READ,
     "/directory_tree": RiskClass.READ,
     "/versions/list": RiskClass.READ,
     "/trash/list": RiskClass.READ,
@@ -2197,6 +2198,107 @@ def _out_name_for(pattern: str, vals: dict) -> str:
     return name
 
 
+# ------------------------------------------------ .eml parsing (P3, stdlib)
+# RFC-822 email files: headers + text body + attachment METADATA. stdlib
+# email package — no add-on needed. Attachments are listed (name/size/type),
+# never decoded into the response: raw attachment bytes can hold anything,
+# and dumping binaries into model context is a /read_b64 decision.
+
+def _eml_read(path: Path, q: dict) -> tuple[int, dict]:
+    import email
+    from email import policy
+    try:
+        with open(path, "rb") as fh:
+            msg = email.message_from_binary_file(fh, policy=policy.default)
+    except Exception as e:
+        return 500, {"error": f"eml parse failed: {e}"}
+
+    def _hdr(name):
+        v = msg.get(name)
+        return str(v) if v is not None else None
+
+    out = {
+        "subject": _hdr("Subject"),
+        "from": _hdr("From"),
+        "to": _hdr("To"),
+        "cc": _hdr("Cc"),
+        "date": _hdr("Date"),
+        "message_id": _hdr("Message-ID"),
+    }
+    # parse the Date header into an ISO timestamp when possible
+    if out["date"]:
+        try:
+            from email.utils import parsedate_to_datetime
+            out["date_iso"] = parsedate_to_datetime(out["date"]).isoformat()
+        except Exception:
+            pass
+
+    body_text, body_html = [], []
+    attachments = []
+    max_chars = min(int(q.get("max_chars", "20000") or 20000), MAX_READ)
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        disp = (part.get_content_disposition() or "")
+        ctype = part.get_content_type()
+        fname = part.get_filename()
+        if disp == "attachment" or (fname and disp != "inline"):
+            payload = part.get_payload(decode=True) or b""
+            attachments.append({"filename": fname or "unnamed",
+                                "content_type": ctype,
+                                "bytes": len(payload)})
+            continue
+        if ctype == "text/plain":
+            try:
+                body_text.append(part.get_content())
+            except Exception:
+                raw = part.get_payload(decode=True) or b""
+                body_text.append(raw.decode(part.get_content_charset() or
+                                            "utf-8", errors="replace"))
+        elif ctype == "text/html":
+            try:
+                body_html.append(part.get_content())
+            except Exception:
+                raw = part.get_payload(decode=True) or b""
+                body_html.append(raw.decode(part.get_content_charset() or
+                                            "utf-8", errors="replace"))
+    text = "\n\n".join(t for t in body_text if t and t.strip())
+    if not text.strip() and body_html:
+        # html-only mail: reuse the stdlib tag-stripper from /html_text
+        import html.parser as _hp
+
+        class _Strip(_hp.HTMLParser):
+            def __init__(self):
+                super().__init__()
+                self.parts = []
+                self._skip = 0
+
+            def handle_starttag(self, tag, attrs):
+                if tag in ("script", "style"):
+                    self._skip += 1
+
+            def handle_endtag(self, tag):
+                if tag in ("script", "style") and self._skip:
+                    self._skip -= 1
+
+            def handle_data(self, data):
+                if not self._skip and data.strip():
+                    self.parts.append(data)
+
+        s = _Strip()
+        s.feed("\n".join(body_html))
+        text = "\n".join(s.parts)
+        out["body_was_html"] = True
+    if len(text) > max_chars:
+        out["truncated"] = True
+        text = text[:max_chars]
+    out["body"] = text
+    out["attachment_count"] = len(attachments)
+    if attachments:
+        out["attachments"] = attachments
+    return 200, out
+
+
 # ------------------------------------------------ search + edit (P1)
 
 def _search(root: Path, cfg: dict, q: dict):
@@ -3168,6 +3270,20 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "available": _ocr_langs_available(),
                     "engine": TESSERACT_VER or "tesseract",
                 })
+
+            if u.path == "/eml_read":
+                # RFC-822 email → headers + body + attachment metadata
+                # (P3, stdlib email — no add-on)
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                if p.suffix.lower() not in (".eml", ".msg"):
+                    return self._json(415, {
+                        "error": f"eml_read needs an .eml file, not {p.suffix}",
+                        "hint": ".msg (Outlook) needs the extract-msg add-on; "
+                                "convert or export as .eml"})
+                code, out = _eml_read(p, q)
+                return self._json(code, out)
 
             if u.path == "/image_info":
                 p, root, cfg = resolve_guarded(unquote(q.get("path", "")))

@@ -508,6 +508,50 @@ curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"allow
 check "reveal re-locks"       'reveal is disabled' "$(curl -s "$BRIDGE/reveal?path=notes.txt" $T)"
 check "state shows allow_reveal" 'allow_reveal'  "$(curl -s $BRIDGE/state)"
 
+# ---------- .eml parsing (P3, stdlib) ----------
+python3 - "$TESTDIR" <<'PYEOF'
+import sys, pathlib
+from email.message import EmailMessage
+from email.utils import formatdate
+d = pathlib.Path(sys.argv[1])
+m = EmailMessage()
+m["From"] = "Anna Svensson <anna@example.se>"
+m["To"] = "Dandan Wei <dandan@example.com>"
+m["Cc"] = "cc@example.com"
+m["Subject"] = "Quarterly invoice attached"
+m["Date"] = formatdate(1787896000, localtime=False)
+m.set_content("Hej!\n\nPlease find the invoice below.\nTotal: 44 000 SEK.\n\nMvh Anna")
+m.add_attachment(b"PK\x03\x04fake-xlsx-bytes", maintype="application",
+                 subtype="vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                 filename="invoice-q3.xlsx")
+(d / "mail-with-attachment.eml").write_bytes(m.as_bytes())
+# html-only mail
+h = EmailMessage()
+h["Subject"] = "HTML newsletter"
+h["From"] = "news@example.com"
+h["To"] = "me@example.com"
+h.set_content("<html><body><p>Hello <b>HTML</b> world</p><script>evil()</script></body></html>", subtype="html")
+(d / "mail-html.eml").write_bytes(h.as_bytes())
+print("eml fixtures ok")
+PYEOF
+EM=$(curl -s "$BRIDGE/eml_read?path=mail-with-attachment.eml" $T)
+check "eml subject"          'Quarterly invoice attached' "$EM"
+check "eml from"             'anna@example.se'   "$EM"
+check "eml body text"        '44 000 SEK'        "$EM"
+check "eml attachment count" '"attachment_count": *1' "$EM"
+check "eml attachment name"  'invoice-q3.xlsx'   "$EM"
+check "eml date_iso"         'date_iso'          "$EM"
+check "eml cc"               'cc@example.com'    "$EM"
+EH=$(curl -s "$BRIDGE/eml_read?path=mail-html.eml" $T)
+check "eml html stripped"    'Hello *HTML* world\|Hello' "$EH"
+check "eml script dropped"   'body_was_html'     "$EH"
+if echo "$EH" | grep -q 'evil()'; then echo "  FAIL: script leaked into body"; fail=1; else echo "  PASS: script stripped"; fi
+check "eml wrong ext"        'needs an .eml file' "$(curl -s "$BRIDGE/eml_read?path=notes.txt" $T)"
+check "eml missing"          'no such file'       "$(curl -s "$BRIDGE/eml_read?path=ghost.eml" $T)"
+check "eml traversal"        'escapes'            "$(curl -s "$BRIDGE/eml_read?path=../../etc/passwd" $T)"
+ECT=$(curl -s "$BRIDGE/eml_read?path=mail-with-attachment.eml&max_chars=30" $T)
+check "eml truncation"       '"truncated": *true' "$ECT"
+
 # ---------- risk classes per endpoint (P3) ----------
 RS=$(curl -s $BRIDGE/state)
 check "state exposes risk map"    'endpoint_risk'  "$RS"
