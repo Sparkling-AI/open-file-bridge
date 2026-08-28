@@ -310,7 +310,7 @@ final validation pass (not after every change). Do not block on either.
      macOS Apple Dev ID $99/yr + notarize (`package_macos.sh --sign` ready)
    - Unsigned IS installable on both (SmartScreen "more info→run anyway";
      macOS right-click→open) — docs/SUPPORT.md now covers the flows.
-✅ LibreOffice headless conversion — `/convert` (984426f): _CONV_MATRIX
+✅ LibreOffice headless conversion — `/convert` (fe2535a): _CONV_MATRIX
    whitelist (legacy .doc/.xls/.ppt → OOXML, office → pdf, xlsx → csv,
    docx → png/html); model picks a FORMAT PAIR, never a command;
    _CONV_LOCK serialization (one soffice profile), magic-byte output
@@ -318,12 +318,12 @@ final validation pass (not after every change). Do not block on either.
    > adjacent > /usr/bin > PATH, 501 + install hint when absent.
    Verified live: doc→docx roundtrip, docx→pdf (LO 24.2.7.2 on dpc).
 ✅ Structured write endpoints: /xlsx_append, /docx_write (sections),
-   /pdf_from_text (native fpdf2, no Pyodide shim) — 7d59ae9.
+   /pdf_from_text (native fpdf2, no Pyodide shim) — 28066ed.
 ✅ Mail-merge: /docx_mailmerge — docx template {{placeholders}} + xlsx/
    csv/inline rows → one DOCX per row (out-name pattern or .zip bundle);
-   collision + unresolved-pattern checks pre-confirm (094dace). PDF
+   collision + unresolved-pattern checks pre-confirm (db4f834). PDF
    output = mailmerge + /convert, two deliberate steps.
-✅ .eml parsing (stdlib email) — /eml_read (a74ea64); .msg → 415 with
+✅ .eml parsing (stdlib email) — /eml_read (2ce9f08); .msg → 415 with
    extract-msg hint (not bundled).
 ✅ PDF split/merge/rotate — `/pdf_op` (pymupdf): split to per-page
    `<base>.pN.pdf` files (page-selectable), ordered merge (2-20 inputs),
@@ -355,7 +355,7 @@ final validation pass (not after every change). Do not block on either.
     file task… files written with open()/os are LOST and INVISIBLE;
     claiming success without a bridge response is a failure") → same
     harness, same model: PASS, full bridge flow, file on disk
-    (commit after cb25756/db0be8c). Shipped in SKILL-STRICT.md
+    (commit after 6a5af38/0b0e5a1). Shipped in SKILL-STRICT.md
     frontmatter + setup_owui.py STRICT_DESC (2.3.1). Residuals:
     n=1 per cell (chat-run costs Z.AI quota); non-GLM families
     untested; if a future model ignores the description too, the next
@@ -369,10 +369,10 @@ final validation pass (not after every change). Do not block on either.
     → /write). setup_owui.py now has a single UNIFIED_DESC.
 ✅ RiskClass per endpoint (READ/WRITE_LOCAL/…) declared in code — from
    OpenWorker risk.py; future-proofs confirmation/audit gating
-   (f2eb7fd: ENDPOINT_RISK table, audit rows carry risk, /state map,
+   (0d925e4: ENDPOINT_RISK table, audit rows carry risk, /state map,
    e2e fails on gaps).
 ✅ Skill shipped as folder w/ version + changelog; setup script previews
-   diff before updating an existing skill (f58e070:
+   diff before updating an existing skill (b3f6a90:
    skill/open-file-bridge/{SKILL.md,CHANGELOG.md}, setup_owui.py
    [y/N] prompt + --yes; both paths verified on owui-test).
 ✅ Support runbook — docs/SUPPORT.md (SmartScreen vs Defender-policy,
