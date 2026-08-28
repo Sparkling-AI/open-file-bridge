@@ -2947,11 +2947,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def _add_matching_cors(self):
         """Emit CORS headers ONLY when the request origin matches the lock
-        (or no lock is configured — picker/setup phase). v1 echoed `*`."""
-        origin = _request_origin(self.headers)
+        (or no lock is configured — picker/setup phase). v1 echoed `*`.
+
+        Opaque origins (literal `Origin: null` — Open WebUI's sandboxed
+        Pyodide iframe) are granted CORS only while the TOKEN tier is
+        active: a preflight grants nothing by itself and every real file
+        request still has to carry the token (check_request), so responses
+        become readable only to callers who know it. Origin-only mode keeps
+        refusing null (an unmatched sandbox must read nothing)."""
+        raw_origin = (self.headers.get("Origin") or "").strip()
+        origin = _request_origin(self.headers)      # null/absent → None
         allowed = get_allowed_origin()
-        if allowed is None or (origin and origin == allowed):
-            self.send_header("Access-Control-Allow-Origin", origin or "*")
+        # Opaque origins additionally require that THIS request passed the
+        # auth gate (public endpoints and preflights set the flag too).
+        # Denials (bad/missing token) stay browser-unreadable — no secrets
+        # in those bodies, but hiding them gives a probing sandbox nothing.
+        opaque_ok = (raw_origin.lower() == "null"
+                     and get_configured_token() is not None
+                     and getattr(self, "_authorized", False))
+        if allowed is None or (origin and origin == allowed) or opaque_ok:
+            echo = "null" if opaque_ok else (origin or "*")
+            self.send_header("Access-Control-Allow-Origin", echo)
             self.send_header("Access-Control-Allow-Private-Network", "true")
             self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
             self.send_header("Access-Control-Allow-Headers",
@@ -2987,6 +3003,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return ENDPOINT_RISK.get(urlparse(self.path).path, RiskClass.READ)
 
     def do_OPTIONS(self):
+        self._authorized = True   # preflight: no auth possible, grants nothing
         self.send_response(204)
         self._add_matching_cors()
         self.send_header("Access-Control-Max-Age", "86400")
@@ -2995,6 +3012,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ---- GET ----
 
     def do_GET(self):
+        # everything before the auth gate below is a public endpoint
+        # (/health /version /ocr/config /wheels…) — readable by opaque origins
+        # while the token tier is active (see _add_matching_cors)
+        self._authorized = True
         root = load_root()
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
@@ -3077,6 +3098,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # ---- security gate: everything below serves files ----
         ok, status, reason = check_request(self.headers)
         if not ok:
+            self._authorized = False
             return self._json(status, {"error": reason})
 
         if root is None:
@@ -3501,7 +3523,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
         root = load_root()
         ok, status, reason = check_request(self.headers)
         if not ok:
+            self._authorized = False
             return self._json(status, {"error": reason})
+        self._authorized = True   # POST file ops: CORS for opaque origins
         if root is None:
             return self._json(409, {"error": "No folder chosen yet."})
         try:
@@ -4398,7 +4422,10 @@ function fmtSize(n){if(n==null)return '';if(n<1024)return n+' B';if(n<1048576)re
 async function refresh(){const s=await (await fetch('/state')).json();
 document.getElementById('root').value=s.root||'';
 document.getElementById('origin').value=s.allowed_origin||'';
-document.getElementById('secstatus').textContent='Security mode: '+s.security;
+document.getElementById('secstatus').textContent='Security mode: '+s.security+
+(String(s.security).indexOf('token')>=0
+ ?' · a token IS configured (it is never shown back — paste a new one only to replace it)'
+ :' · no token set');
 const c=await (await fetch('/ocr/config')).json();
 document.getElementById('ocrlang').value=c.lang||'eng';
 renderLangs(c.available,c.lang);

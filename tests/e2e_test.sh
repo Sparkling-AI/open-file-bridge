@@ -108,6 +108,23 @@ if echo "$H2" | grep -q "Access-Control-Allow-Origin"; then
 else
   echo "  PASS: foreign origin gets no CORS headers"
 fi
+# opaque origin (Origin: null — OWUI's sandboxed Pyodide iframe). With the
+# token tier active it MUST get CORS (otherwise the browser aborts the fetch
+# before the token is ever checked — AbortError in Pyodide); the token still
+# gates every real request, and responses are only readable with it.
+HN=$(curl -sI -X OPTIONS $BRIDGE/read -H "Origin: null" -H "Access-Control-Request-Method: GET" -H "Access-Control-Request-Headers: x-bridge-token")
+check "null-origin preflight granted" 'Access-Control-Allow-Origin: null' "$HN"
+check "null-origin preflight hdrs"    'X-Bridge-Token'                    "$HN"
+GN=$(curl -s -D - -o /dev/null "$BRIDGE/read?path=notes.txt" -H "Origin: null" -H "X-Bridge-Token: $TOKEN")
+check "null-origin GET readable"      'Access-Control-Allow-Origin: null' "$GN"
+# ...but a null origin WITHOUT the token is still denied (and unreadable)
+GN2=$(curl -s -D - -o /dev/null "$BRIDGE/read?path=notes.txt" -H "Origin: null")
+check "null-origin no token denied"   '401' "$GN2"
+if echo "$GN2" | grep -q "Access-Control-Allow-Origin"; then
+  echo "  FAIL: null-origin denial leaked CORS headers"; fail=1
+else
+  echo "  PASS: null-origin denial has no CORS headers"
+fi
 
 # ---------- normal endpoints (with token) ----------
 T="-H X-Bridge-Token:$TOKEN"
