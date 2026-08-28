@@ -47,7 +47,8 @@ Add every new gotcha here, not to memory.
 - **Addon suite canonical invocation** (bridge needs the libs IN its own
   process for office-write endpoints):
   `TESSERACT_CMD=… LD_LIBRARY_PATH=… uv run --with pymupdf --with pypdfium2
-  --with python-docx --with python-pptx bash tests/addon_test.sh`
+  --with python-docx --with python-pptx --with fpdf2 --with openpyxl
+  bash tests/addon_test.sh`
   (env vars are user-specified; hermes terminal blocks inline
   LD_LIBRARY_PATH — wrap in a local runner script when driving from
   the agent).
