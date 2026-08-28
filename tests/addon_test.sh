@@ -12,7 +12,11 @@ STATEDIR=$(mktemp -d)
 
 started_here=0
 if ! curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1; then
-  FILE_BRIDGE_STATE_DIR="$STATEDIR" uv run --with pymupdf --with fpdf2 python src/file_bridge.py "$TESTDIR" &
+  # 500-write headroom like e2e (convert+pdf_op+mailmerge together exceed
+  # the default 20/60s; the breaker itself is tested in e2e's dedicated
+  # FILE_BRIDGE_MAX_WRITES=3 instance at the end there)
+  FILE_BRIDGE_MAX_WRITES=500 FILE_BRIDGE_STATE_DIR="$STATEDIR" \
+    uv run --with pymupdf --with fpdf2 python src/file_bridge.py "$TESTDIR" &
   BPID=$!
   started_here=1
   trap 'kill $BPID 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR"' EXIT
@@ -320,6 +324,53 @@ PYEOF
   check "mailmerge bad out ext"   'must end in .docx' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"x.pdf","rows":[{"a":"b"}]}')"
   check "mailmerge wrong src"     'must be .docx' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"clients.xlsx","out":"x.zip"}')"
   check "mailmerge traversal"     'escapes' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"../../etc/passwd","out":"x.zip"}')"
+
+
+  # ---------- /convert (P3, LibreOffice headless — skipped when absent) ----------
+  # fixtures: unsupported-ext file + docx source (python-docx, no soffice)
+  printf 'plain text fixture\n' > "$TESTDIR/notes.txt"
+  uv run --with python-docx python3 - "$TESTDIR" <<'PYEOF'
+import sys, pathlib
+from docx import Document
+d = pathlib.Path(sys.argv[1])
+doc = Document()
+doc.add_heading("Legacy convert", 0)
+doc.add_paragraph("This body was authored as docx, round-tripped to .doc.")
+doc.save(d / "conv-src.docx")
+print("conv fixture ok")
+PYEOF
+  if command -v soffice >/dev/null 2>&1 || [ -n "$SOFFICE_CMD" ]; then
+    # legacy .doc fixture (built BY soffice from the docx above)
+    soffice --headless --norestore --convert-to doc --outdir "$TESTDIR" "$TESTDIR/conv-src.docx" >/dev/null 2>&1 || true
+    if [ -f "$TESTDIR/conv-src.doc" ]; then
+      CV=$(curl -s -m 130 -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.doc","out":"conv-back.docx"}')
+      check "convert needs confirmation" 'confirmation_required' "$CV"
+      TOK=$(J "$CV" confirmation_token)
+      CV2=$(curl -s -m 130 -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.doc","out":"conv-back.docx","confirmation_token":"'"$TOK"'"}')
+      check "convert doc->docx ok"    '"ok": *true'     "$CV2"
+      check "convert magic verified"  '"bytes": *[0-9]' "$CV2"
+      DR=$(curl -s "$BRIDGE/docx_read?path=conv-back.docx")
+      check "convert roundtrip text"  'round-tripped to .doc' "$DR"
+    else
+      echo "  SKIP: legacy .doc fixture build failed (soffice rc)"
+    fi
+    # docx -> pdf (the heavy everyday one)
+    CV3=$(curl -s -m 130 -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.docx","out":"conv-doc.pdf"}')
+    TOK=$(J "$CV3" confirmation_token)
+    CV4=$(curl -s -m 130 -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.docx","out":"conv-doc.pdf","confirmation_token":"'"$TOK"'"}')
+    check "convert docx->pdf ok"    '"ok": *true'     "$CV4"
+    PT2=$(curl -s "$BRIDGE/pdf_text?path=conv-doc.pdf")
+    check "convert pdf readable"    'Legacy convert'  "$PT2"
+    # policy errors
+    check "convert same ext"        'must differ'  "$(curl -s -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.docx","out":"x.docx"}')"
+    check "convert unsupported"     'cannot convert' "$(curl -s -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"notes.txt","out":"x.pdf"}')"
+    check "convert missing src"     'no such file' "$(curl -s -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"ghost.doc","out":"x.docx"}')"
+    check "convert traversal"       'escapes'      "$(curl -s -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"../../etc/passwd","out":"x.pdf"}')"
+  else
+    echo "  SKIP: /convert (no soffice on this machine — endpoint will 501)"
+    CVN=$(curl -s -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.docx","out":"x.pdf"}')
+    if echo "$CVN" | grep -q 'confirmation_required\|cannot convert\|no such'; then echo "  PASS: convert gates before lib check"; else echo "  NOTE: convert without soffice: $CVN"; fi
+  fi
 
 
   # ---------- /pdf_op split|merge|rotate (P3) ----------
