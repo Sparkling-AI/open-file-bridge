@@ -43,7 +43,7 @@ users just pick a model and ask.
 
 | Piece | Where it lives | This repo |
 |---|---|---|
-| Skill (instructions, 2 variants) | OWUI Workspace, public | `skill/local-file-bridge/` |
+| Skill (instructions, 2 variants) | OWUI Workspace, public | `skill/open-file-bridge/` |
 | Model preset (CI on + skill) | OWUI Workspace, public | `scripts/setup_owui.py` |
 | Open File Bridge app | Each user's machine | `src/file_bridge.py` + `build/` |
 
@@ -129,7 +129,7 @@ user"), not list features. Both shipped skill variants carry this wording.
 ```
 ├── src/file_bridge.py            # the app — single file, stdlib-only (3.8+)
 │                                 #   (+ src/wheels/, src/tessdata/ assets)
-├── skill/local-file-bridge/      # OWUI skill: SKILL.md, SKILL-STRICT.md, CHANGELOG
+├── skill/open-file-bridge/      # OWUI skill: SKILL.md, SKILL-STRICT.md, CHANGELOG
 ├── scripts/setup_owui.py         # idempotent admin setup via OWUI REST API
 ├── build/                        # Linux/Windows/macOS packaging (PyInstaller, Inno)
 ├── .github/workflows/build.yml   # CI: all 3 OSes on tag push

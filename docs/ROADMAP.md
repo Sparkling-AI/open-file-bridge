@@ -96,7 +96,7 @@ recommended when copying non-trivial blocks.
    AND no token simultaneously (Open Terminal v0.11.30 refuses keyless
    start; adopt the stance). ✅ done — see items 1/2 above.
 
-✅ Skill rule: never dump whole large files into chat; summarize + cite. (skill/local-file-bridge.skill.md updated: API table, /peek, windowing, 409 confirm flow, token header plumbing)
+✅ Skill rule: never dump whole large files into chat; summarize + cite. (skill/open-file-bridge.skill.md updated: API table, /peek, windowing, 409 confirm flow, token header plumbing)
 
 ## P0b — Scope configuration & accident protection (enterprise-critical)
 
@@ -373,7 +373,7 @@ final validation pass (not after every change). Do not block on either.
    e2e fails on gaps).
 ✅ Skill shipped as folder w/ version + changelog; setup script previews
    diff before updating an existing skill (f58e070:
-   skill/local-file-bridge/{SKILL.md,CHANGELOG.md}, setup_owui.py
+   skill/open-file-bridge/{SKILL.md,CHANGELOG.md}, setup_owui.py
    [y/N] prompt + --yes; both paths verified on owui-test).
 ✅ Support runbook — docs/SUPPORT.md (SmartScreen vs Defender-policy,
    port-8765 conflict triage + FILE_BRIDGE_PORT override, Safari

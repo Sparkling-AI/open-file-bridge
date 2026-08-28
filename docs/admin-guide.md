@@ -41,15 +41,15 @@ python3 scripts/setup_owui.py \
     --base-model glm-5.3-flash      # any tool-calling model you offer
 ```
 
-Creates: public Skill `local-file-bridge` + model preset `local-files-assistant`.
+Creates: public Skill `open-file-bridge` + model preset `local-files-assistant`.
 
 **Skill variants (2.3+).** The repo ships two skill bodies; install one
 or both and customize later:
 
 | Variant | File | For |
 |---|---|---|
-| standard | `skill/local-file-bridge/SKILL.md` | capable models — full API table, Pyodide office creation, discretion |
-| strict | `skill/local-file-bridge/SKILL-STRICT.md` | weaker models — 10 hard rules, fixed A/B/C recipes, bridge-only writes, verify-after-write, scripted error phrases |
+| standard | `skill/open-file-bridge/SKILL.md` | capable models — full API table, Pyodide office creation, discretion |
+| strict | `skill/open-file-bridge/SKILL-STRICT.md` | weaker models — 10 hard rules, fixed A/B/C recipes, bridge-only writes, verify-after-write, scripted error phrases |
 
 Multi-model orgs: `--variant-strict-model <weak-model-id>` installs
 BOTH skills and a second preset `local-files-assistant-strict` riding
@@ -63,8 +63,8 @@ off-recipe; the strict body forecloses both (found 2026-08-28, GLM
 ### Option B — by hand in the UI
 
 1. **Workspace → Skills → Create**
-   - Name: `Local File Bridge`, ID: `local-file-bridge`
-   - Content: paste `skill/local-file-bridge/SKILL.md` (without the `---` frontmatter)
+   - Name: `Local File Bridge`, ID: `open-file-bridge`
+   - Content: paste `skill/open-file-bridge/SKILL.md` (without the `---` frontmatter)
    - Access → make it **public** (read for everyone)
 2. **Workspace → Models → edit/create** a preset based on your model:
    - Attach the skill
