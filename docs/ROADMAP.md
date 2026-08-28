@@ -92,7 +92,7 @@ recommended when copying non-trivial blocks.
    destructive ops get a two-step confirmation token (60 s validity — design
    borrowed from OWUI openapi-servers filesystem server). Makes model edits
    reversible and deliberate — trust foundation for office use.
-☐ **"Production mode" hard-fail** — bridge refuses to serve with CORS `*`
+✅ **"Production mode" hard-fail** — bridge refuses to serve with CORS `*`
    AND no token simultaneously (Open Terminal v0.11.30 refuses keyless
    start; adopt the stance). ✅ done — see items 1/2 above.
 
@@ -290,7 +290,7 @@ final validation pass (not after every change). Do not block on either.
    REJECTED if absolute/drive-letter/`..` (zip-slip aborts the whole
    extraction), 1000-entry + 8 MB caps, symlink members refused, ignore
    rules apply to extracted paths, rate-breaker counted.
-☐ `/directory_tree?format=tree` (from openapi-servers). ✅ done —
+✅ `/directory_tree?format=tree` (from openapi-servers). ✅ done —
    GET /directory_tree: recursive name/type/size tree, ignore-list aware,
    symlinks never listed, entry cap (default 500, max 2000) + depth cap
    (default 6, max 12) with truncated flags.
