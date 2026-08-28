@@ -63,6 +63,11 @@ a model and ask.
 ```bash
 python3 scripts/setup_owui.py --url http://your-owui:8080 \
     --email admin@… --password '…' --base-model glm-5.3-flash
+# weaker models (they wander into the sandbox instead of the bridge)?
+# add a strict variant preset with fixed recipes + verify-after-write:
+python3 scripts/setup_owui.py … --variant-strict-model glm-4.5-air
+# or make strict the ONLY skill (org standardizes on small models):
+python3 scripts/setup_owui.py … --variant strict
 ```
 
 **User:** download the app for your OS, run it, pick a folder, then in

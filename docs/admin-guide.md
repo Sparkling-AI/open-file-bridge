@@ -43,6 +43,23 @@ python3 scripts/setup_owui.py \
 
 Creates: public Skill `local-file-bridge` + model preset `local-files-assistant`.
 
+**Skill variants (2.3+).** The repo ships two skill bodies; install one
+or both and customize later:
+
+| Variant | File | For |
+|---|---|---|
+| standard | `skill/local-file-bridge/SKILL.md` | capable models — full API table, Pyodide office creation, discretion |
+| strict | `skill/local-file-bridge/SKILL-STRICT.md` | weaker models — 10 hard rules, fixed A/B/C recipes, bridge-only writes, verify-after-write, scripted error phrases |
+
+Multi-model orgs: `--variant-strict-model <weak-model-id>` installs
+BOTH skills and a second preset `local-files-assistant-strict` riding
+on the weak model — users pick per chat. Org standardizing on small
+models: `--variant strict` installs strict as the only skill. The
+variants exist because smoke tests showed weak models writing into the
+Pyodide sandbox (`/mnt/uploads/`) and reporting success, or wandering
+off-recipe; the strict body forecloses both (found 2026-08-28, GLM
+4.5-air vs 5.2/5.3).
+
 ### Option B — by hand in the UI
 
 1. **Workspace → Skills → Create**

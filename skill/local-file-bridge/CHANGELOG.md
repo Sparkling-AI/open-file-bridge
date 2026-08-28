@@ -25,6 +25,13 @@ New endpoints the skill can teach:
   attachment metadata only.
 
 Operational:
+- **Skill variants**: the repo now ships a second skill body,
+  SKILL-STRICT.md — 10 hard rules + fixed recipes + bridge-only
+  writes + verify-after-write for weaker models (born from smoke
+  tests: weak models wrote into the Pyodide sandbox and reported
+  success). `setup_owui.py --variant strict` (strict-only org) or
+  `--variant-strict-model <id>` (both skills + a second preset on
+  the weak model). Standard SKILL.md unchanged.
 - Skill now ships as a folder (`skill/local-file-bridge/`) with
   SKILL.md + CHANGELOG.md; `setup_owui.py` reads SKILL.md from there.
 - `setup_owui.py` on update shows a unified diff preview of skill-body
