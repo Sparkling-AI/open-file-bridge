@@ -263,7 +263,7 @@ Add every new gotcha here, not to memory.
   items carry no body; fetch the full record via
   `GET /api/v1/skills/id/<id>` before diffing or re-using a skill
   object as an update base — else you diff against "" and can WIPE the
-  live skill body (setup_owui.py fixed in 54e9a93; bit us once live).
+  live skill body (setup_owui.py fixed in 30d2acc; bit us once live).
   Related: skill DELETE is `DELETE /api/v1/skills/id/<id>/delete`
   (JSON body {"id": ...}) — a POST to the same path 405s.
 - **Playwright selectors on the current `:main` build**: auth =
