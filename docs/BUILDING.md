@@ -111,7 +111,7 @@ pyinstaller ... --collect-all pymupdf ...
 - Extra languages: drop `.traineddata` files from
   https://github.com/tesseract-ocr/tessdata_fast into `tessdata/`.
   Users select them at runtime in the settings page — no rebuild needed.
-  (On Windows: `%LOCALAPPDATA%\Programs\File Bridge\tessdata\`)
+  (On Windows: `%LOCALAPPDATA%\Programs\Open File Bridge\tessdata\`)
 
 **Frozen-build notes (verified on Linux with PyInstaller 6.22):**
 

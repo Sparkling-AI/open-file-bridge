@@ -1,16 +1,16 @@
-# File Bridge — User Guide
+# Open File Bridge — User Guide
 
-File Bridge lets **your** Open WebUI chats read and write files in **one folder
+Open File Bridge lets **your** Open WebUI chats read and write files in **one folder
 on your own computer**. Your files never pass through the Open WebUI server —
 everything happens between your browser and your own machine.
 
 ## Requirements
 
 - **Browser: Chrome, Edge, or Firefox.** ⚠️ **Do NOT use Safari** — Safari
-  blocks web pages from calling `http://127.0.0.1` services, so File Bridge
+  blocks web pages from calling `http://127.0.0.1` services, so Open File Bridge
   cannot work there. This is a hard Safari limitation, not a bug.
 - One of: Windows 10/11, macOS 11+, or Linux.
-- The File Bridge app (get it from your admin, or Downloads below).
+- The Open File Bridge app (get it from your admin, or Downloads below).
 
 ## Install & first run
 
@@ -18,9 +18,9 @@ everything happens between your browser and your own machine.
 1. Download `FileBridge-Setup.exe` (or `FileBridge.exe`).
 2. Double-click. If Windows shows **"Windows protected your PC"**
    (SmartScreen — normal for new unsigned apps): click **More info → Run anyway**.
-3. Your browser opens the File Bridge page. Paste the folder you want to share,
+3. Your browser opens the Open File Bridge page. Paste the folder you want to share,
    e.g. `C:\Users\you\Documents\my-project`, click **Save folder**.
-4. Done. A small File Bridge process now runs in the background.
+4. Done. A small Open File Bridge process now runs in the background.
    Keep it running while you use Open WebUI (re-launch it any time from the
    Start menu / desktop icon; your folder choice is remembered).
 
@@ -28,9 +28,9 @@ everything happens between your browser and your own machine.
 1. Download `FileBridge-macos.zip`, unzip it, drag **FileBridge** into **Applications**.
 2. First launch: **right-click FileBridge → Open → Open**
    (bypasses Gatekeeper for unsigned apps — needed only once).
-3. Your browser opens the File Bridge page. Type or paste the folder to share,
+3. Your browser opens the Open File Bridge page. Type or paste the folder to share,
    e.g. `/Users/you/Documents/my-project`, click **Save folder**.
-4. Done. File Bridge runs quietly in the background (no Dock icon).
+4. Done. Open File Bridge runs quietly in the background (no Dock icon).
 
 ### Linux
 Either run the binary:
@@ -50,7 +50,7 @@ python3 file_bridge.py ~/my-folder
 2. Just ask naturally: *"List the files in my folder"* or
    *"Read notes.txt and summarize it"* or *"Write a draft to report.md"*.
 3. **First time only:** the browser shows a permission prompt —
-   - Chrome/Edge: *"File Bridge wants to access devices on your local network"* → click **Allow**
+   - Chrome/Edge: *"Open File Bridge wants to access devices on your local network"* → click **Allow**
    - Firefox: no prompt (localhost fetches are allowed silently)
 4. That's it. The AI reads/writes only inside the folder you chose.
 
@@ -61,13 +61,13 @@ python3 file_bridge.py ~/my-folder
 | Browser local-network prompt | Appears once (Chrome 142+/Edge) | Click **Allow** — this is what authorizes the connection |
 | Safari | Blocked entirely | Use Chrome, Edge, or Firefox instead |
 | SmartScreen / Gatekeeper warning | First launch of unsigned app | Windows: More info → Run anyway · macOS: right-click → Open |
-| Bridge not running | AI says it can't reach your files | Start the File Bridge app again |
+| Bridge not running | AI says it can't reach your files | Start the Open File Bridge app again |
 | Wrong folder | AI sees old/other files | Open `http://127.0.0.1:8765` in your browser, change folder, Save |
 | Corporate VPN/antivirus | May block localhost traffic | Rare; allow `FileBridge.exe` / port 8765 in your security tool |
 
 ## Privacy & security
 
-- File Bridge **only** exposes the **one folder** you selected. Nothing else.
+- Open File Bridge **only** exposes the **one folder** you selected. Nothing else.
   It's technically impossible for the AI to read outside it (path traversal is
   rejected server-side — tested).
 - Only `list`, `read`, and `write` exist. No delete, no move, no execute.
@@ -77,7 +77,7 @@ python3 file_bridge.py ~/my-folder
 
 ## OCR language
 
-File Bridge reads scans in your language. Open `http://127.0.0.1:8765`, set
+Open File Bridge reads scans in your language. Open `http://127.0.0.1:8765`, set
 **OCR language** (e.g. `swe+eng` for Swedish documents with English words,
 `chi_sim+eng` for Chinese). The list of installed languages is shown there.
 Changing it takes effect immediately — no restart needed.
@@ -94,7 +94,7 @@ Scanned pages take ~1–3 seconds each.
 
 ## Troubleshooting
 
-**"Bridge isn't running"** — Start File Bridge (Windows: Start menu; macOS:
+**"Bridge isn't running"** — Start Open File Bridge (Windows: Start menu; macOS:
 Applications; Linux: run the binary/script). Verify: open `http://127.0.0.1:8765/health`
 — should say `"ok": true`.
 
@@ -104,5 +104,5 @@ selected. Pick the prepared model (e.g. "Local Files Assistant") in the chat.
 **Nothing happens after Allow** — Ask again; the first request sometimes needs
 a second try while the permission settles.
 
-**Want to stop sharing?** Just quit File Bridge. To reset the folder choice,
+**Want to stop sharing?** Just quit Open File Bridge. To reset the folder choice,
 delete `~/.file-bridge.json` (Windows: `C:\Users\you\.file-bridge.json`).

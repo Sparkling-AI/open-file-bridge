@@ -1,7 +1,7 @@
 # Support runbook — the three support calls you'll actually get
 
 Triage card for helpdesk/support. Each section: symptom → likely cause →
-fix → what to ask back. All assume the File Bridge desktop app/service
+fix → what to ask back. All assume the Open File Bridge desktop app/service
 is the deployed artifact.
 
 ## 1. "Windows protected your PC" (SmartScreen)

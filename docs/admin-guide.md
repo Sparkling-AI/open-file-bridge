@@ -1,4 +1,4 @@
-# File Bridge — Admin Guide
+# Open File Bridge — Admin Guide
 
 How to roll out local-file access for your Open WebUI users. Verified against
 **Open WebUI v0.11.1** (Skills workspace feature requires ≥ v0.11).
@@ -14,7 +14,7 @@ How to roll out local-file access for your Open WebUI users. Verified against
 │  • Model preset        │ ──────► │   └─ Pyodide WASM runtime   │
 │    (CI on + skill)     │  text   │        │ pyfetch()          │
 │                        │         │        ▼ http://127.0.0.1:8765
-│  NEVER touches files   │         │  File Bridge app ──► folder │
+│  NEVER touches files   │         │  Open File Bridge app ──► folder │
 └────────────────────────┘         └─────────────────────────────┘
 ```
 
@@ -79,7 +79,7 @@ off-recipe; the strict body forecloses both (found 2026-08-28, GLM
 
 ### Verify
 
-1. Install the File Bridge app on your own machine, pick a test folder with a
+1. Install the Open File Bridge app on your own machine, pick a test folder with a
    known file.
 2. In OWUI select the preset model, ask: *"List my files and read notes.txt"*.
 3. Expect: a listing + verbatim content. See `docs/screenshots/e2e-success.png`
@@ -140,7 +140,7 @@ Ship it inside your installers (it's just files — no install needed).
 Download from https://github.com/tesseract-ocr/tessdata_fast (fast, good) or
 tessdata_best (slower, more accurate) and drop the `.traineddata` into the
 `tessdata/` directory, then restart the bridge. Users pick languages in the
-File Bridge settings page (`http://127.0.0.1:8765`), or the model sets them
+Open File Bridge settings page (`http://127.0.0.1:8765`), or the model sets them
 per request (`/ocr?lang=swe+eng`). Combo languages work: `swe+eng` fixes
 å/ä/ö AND keeps digits correct (verified — each alone loses one of the two).
 

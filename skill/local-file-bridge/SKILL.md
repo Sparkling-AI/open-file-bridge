@@ -5,7 +5,7 @@ description: "MUST-CALL before ANY file task. User's real files are reachable ON
 
 # Local File Bridge
 
-Access files in **the user's own computer** through their local File Bridge service (running at `http://127.0.0.1:8765`). The user has explicitly installed and authorized this — files NEVER pass through the Open WebUI server; all access happens from the user's browser via the Code Interpreter (Pyodide), which runs on the user's machine.
+Access files in **the user's own computer** through their local Open File Bridge service (running at `http://127.0.0.1:8765`). The user has explicitly installed and authorized this — files NEVER pass through the Open WebUI server; all access happens from the user's browser via the Code Interpreter (Pyodide), which runs on the user's machine.
 
 ## Bridge API
 
@@ -96,7 +96,7 @@ replacements in one file, one `/edit` call beats several `/write` calls.
 **Version check first:** call `/version` (no token needed). If the
 response's `bridge` version doesn't match what this skill documents
 (v2.3), tell the user "the bridge app and the skill are out of sync —
-re-run the File Bridge installer or scripts/setup_owui.py" and continue
+re-run the Open File Bridge installer or scripts/setup_owui.py" and continue
 carefully: newer bridges keep old skills working, but new endpoints
 (like /convert, /pdf_from_text, /docx_mailmerge) won't be in an old
 skill's vocabulary.
@@ -297,7 +297,7 @@ Language rules: use what `/ocr/config` lists as available. For Nordic office
 docs `swe+eng` works well (verified: fixes å/ä/ö AND keeps digits correct —
 single-language runs each lose one of the two). Chinese: `chi_sim(+eng)`.
 If the needed language is missing, tell the user to add the .traineddata file
-(see admin guide) or change the default in the File Bridge settings page.
+(see admin guide) or change the default in the Open File Bridge settings page.
 
 Rules: try `/pdf_text` first (instant, exact). If it returns empty text the
 PDF is scanned → fall back to `/ocr` (tesseract: ~0.5 s/page at 200 dpi —
@@ -341,7 +341,7 @@ with the stdlib `csv` module from a `StringIO`.
 ## Workflow rules
 
 1. **Check first:** `await bridge_get("/health")` — if not ok or fetch fails,
-   tell the user: "Your File Bridge isn't running — start the File Bridge app,
+   tell the user: "Your Open File Bridge isn't running — start the Open File Bridge app,
    then ask me again." Do NOT retry more than once.
 2. **`/stat` or `/peek` before `/read`:** if kind is `zip`/`pdf`/`image`, use the
    format reader (`/xlsx_read` `/docx_read` `/pptx_read`) or b64 endpoints;
