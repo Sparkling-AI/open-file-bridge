@@ -2,6 +2,7 @@
 dist/
 build/work/
 build/bundle/
+build/FileBridge/
 __pycache__/
 *.spec.bak
 .venv/
