@@ -1,0 +1,25 @@
+NOTICE
+======
+
+Open File Bridge
+Copyright 2026 Dandan Wei
+
+This product includes software and design patterns inspired by the
+following open-source projects:
+
+- OpenWorker (https://github.com/andrewyng/openworker)
+  Copyright Andrew Ng and OpenWorker contributors — MIT License.
+  Borrowed design patterns: endpoint risk-class taxonomy
+  (READ / WRITE_LOCAL / UI / META), audit-log structure with
+  secret-scrubbing, fail-closed path whitelisting, windowed file
+  reads, and the sha256-keyed result cache. See
+  docs/RESEARCH-openworker.md and the reference index in
+  docs/ROADMAP.md for the complete per-feature mapping.
+
+- Open WebUI openapi-servers (https://github.com/open-webui/openapi-servers)
+  Copyright the Open WebUI authors — MIT License.
+  Reference for the directory-tree endpoint shape.
+
+Open WebUI (https://github.com/open-webui/open-webui, BSD-3-Clause)
+is a separate product and is not bundled with this repository; it is
+the reference integration target.
