@@ -1009,6 +1009,99 @@ def directory_tree(p: Path, cfg: dict, q: dict) -> dict:
             "entry_count": count, "truncated": truncated}
 
 
+# ------------------------------------- /ocr_pdf (P2, searchable PDF)
+# Scan → archive flow: rasterize pages, OCR each with tesseract's `pdf`
+# renderer (page image + INVISIBLE text layer), merge the parts into one
+# searchable PDF, write atomically. Result is a real file write → snapshot
+# + confirmation flow applies when the output already exists.
+
+_OCR_PDF_MAX_PAGES = 50
+
+
+def _tesseract_env() -> dict:
+    env = dict(os.environ)
+    if TESSDATA_DIR:
+        env["TESSDATA_PREFIX"] = str(TESSDATA_DIR)
+    return env
+
+
+def ocr_pdf(src: Path, out: Path, out_root: Path, lang: str, dpi: int,
+            max_pages: int) -> tuple[int, dict]:
+    """Create a searchable PDF from a scanned PDF or image. Returns
+    (http_code, response). Only a %PDF- output file counts as tesseract
+    success (arg errors print usage to stdout)."""
+    tmpdir = tempfile.mkdtemp(prefix="fb-ocrpdf-")
+    try:
+        page_imgs: list[str] = []
+        ext = src.suffix.lower()
+        skipped = 0
+        if ext in {".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}:
+            page_imgs.append(str(src))
+        elif ext == ".pdf":
+            doc = fitz.open(src)
+            try:
+                n = min(doc.page_count, max_pages)
+                for i in range(n):
+                    pix = doc[i].get_pixmap(dpi=dpi)
+                    tf = os.path.join(tmpdir, f"in-{i}.png")
+                    pix.save(tf)
+                    page_imgs.append(tf)
+                skipped = doc.page_count - n
+            finally:
+                doc.close()
+        else:
+            return 400, {"error": f"ocr_pdf supports images and PDF, not {ext}"}
+        if not page_imgs:
+            return 400, {"error": "nothing to OCR (empty document?)"}
+        parts: list[str] = []
+        for idx, img in enumerate(page_imgs):
+            base = os.path.join(tmpdir, f"pg-{idx:04d}")
+            r = subprocess.run([TESSERACT_BIN, img, base, "-l", lang,
+                                "--dpi", str(dpi), "pdf"],
+                               capture_output=True, text=True, timeout=300,
+                               env=_tesseract_env())
+            outpdf = base + ".pdf"
+            head = b""
+            try:
+                with open(outpdf, "rb") as fh:
+                    head = fh.read(5)
+            except OSError:
+                pass
+            if r.returncode != 0 or head != b"%PDF-":
+                return 500, {"error": f"tesseract failed on page {idx + 1}: "
+                                      + (r.stderr.strip() or r.stdout.strip())[:300]}
+            parts.append(outpdf)
+        merged = fitz.open()
+        try:
+            for part in parts:
+                pdoc = fitz.open(part)
+                try:
+                    merged.insert_pdf(pdoc)
+                finally:
+                    pdoc.close()
+            pdf_bytes = merged.tobytes(deflate=True, garbage=3)
+        finally:
+            merged.close()
+        if len(pdf_bytes) > MAX_BINARY:
+            return 413, {"error": f"searchable PDF too large: {len(pdf_bytes)} "
+                                  f"> {MAX_BINARY} bytes"}
+        snap = snapshot_before_write(out_root, out) if out.exists() else None
+        okr, err = rate_check(len(pdf_bytes))
+        if not okr:
+            return 429, {"error": err, "rate_limited": True}
+        atomic_write_bytes(out, pdf_bytes)
+        resp = {"ok": True, "written": str(out), "pages": len(parts),
+                "bytes": len(pdf_bytes), "lang": lang, "dpi": dpi,
+                "snapshot": snap,
+                "note": "searchable PDF: page images + invisible text layer — "
+                        "/pdf_text and copy-paste search work on it now"}
+        if skipped:
+            resp["pages_skipped"] = skipped
+        return 200, resp
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
 # ------------------------------------------------- office reads (P1)
 
 # Optional native readers; stdlib zipfile+XML fallbacks keep the bridge
@@ -2436,6 +2529,61 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if u.path == "/unzip":
                 _, _, cfg = resolve_guarded(".")
                 code, resp = zip_extract(root, cfg, body)
+                return self._json(code, resp)
+
+            if u.path == "/ocr_pdf":
+                # searchable PDF: page images + invisible text layer
+                if not TESSERACT_BIN:
+                    return self._json(501, {"error": "OCR unavailable: tesseract not "
+                                                     "found. Install tesseract or set "
+                                                     "TESSERACT_CMD."})
+                if not HAVE_PYMUPDF:
+                    return self._json(501, {"error": "ocr_pdf needs the PDF add-on "
+                                                     "(pip install pymupdf)"})
+                rel = body.get("path", "")
+                out_rel = body.get("out", "")
+                if not rel or not out_rel:
+                    return self._json(400, {"error": "need path (image or scanned PDF) "
+                                                     "+ out (new .pdf, root-relative)"})
+                if Path(out_rel).suffix.lower() != ".pdf":
+                    return self._json(400, {"error": "out must end in .pdf"})
+                p, _r, _c = resolve_guarded(unquote(rel))
+                ext = p.suffix.lower()
+                if ext not in ({".png", ".jpg", ".jpeg", ".bmp", ".webp", ".tif", ".tiff"}
+                               | {".pdf"}):
+                    return self._json(400, {"error": f"ocr_pdf supports images and "
+                                                     f"PDF, not {ext}"})
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {rel}"})
+                op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
+                if _readonly_for(ocfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                # source read + result write → confirm BEFORE raster/OCR work
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "ocr_pdf", "path": rel, "out": out_rel}
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "ocr_pdf reads the source and writes a new PDF — "
+                                 "needs confirmation",
+                        "confirmation_required": True, **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
+                raw_lang = body.get("lang") or _get_ocr_lang()
+                parts = [x for x in re.split(r"[\s,+]+", raw_lang)
+                         if x and re.fullmatch(r"[a-zA-Z_]{2,8}", x)]
+                lang = "+".join(parts) if parts else "eng"
+                try:
+                    dpi = max(72, min(int(body.get("dpi", 200)), 400))
+                except (TypeError, ValueError):
+                    dpi = 200
+                try:
+                    max_pages = max(1, min(int(body.get("max_pages", _OCR_PDF_MAX_PAGES)),
+                                           _OCR_PDF_MAX_PAGES))
+                except (TypeError, ValueError):
+                    max_pages = _OCR_PDF_MAX_PAGES
+                code, resp = ocr_pdf(p, op, oroot, lang, dpi, max_pages)
                 return self._json(code, resp)
 
             if u.path == "/write_many":
