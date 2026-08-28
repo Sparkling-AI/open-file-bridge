@@ -204,3 +204,39 @@ Add every new gotcha here, not to memory.
   (`systemctl --user enable --now` + `--status`/`--remove` round-trip
   verified); the unit must set FILE_BRIDGE_NO_LOGFILE=1 or the bridge
   double-logs (journal + bridge.log).
+
+## Pitfalls found this session (P3 finish, 2026-08-28)
+
+- **`set -euo pipefail` kills the suite on a grep-no-match**: assigning
+  `VAR=$(… | grep pat | tail -1)` with zero matches exits the whole
+  script silently (trap cleans up; it looks like the run "stopped
+  early" for no reason). Append `|| true` inside ANY `$()` whose grep
+  may legally find nothing.
+- **curl URLs with literal spaces hang**: fixture names produced by a
+  mailmerge pattern (`merged/Acme AB.docx`) MUST be percent-encoded
+  (`Acme%20AB.docx`) in test curl calls — a raw space breaks the
+  request line.
+- **`pkill -f file_bridge` can kill the agent itself**: the hermes
+  terminal wraps every command in `bash -c '… file_bridge …'`, whose
+  OWN cmdline matches the pattern → pkill kills the caller (exit -15,
+  empty output, downstream sections silently skipped). Use
+  `pgrep -f "python src/file_bridge"` + kill (may need two rounds:
+  uv wrapper + python), and verify with `ss -tln | grep 8765` — never
+  pkill from the agent terminal.
+- **`_xlsx_read` returns the grid under key `data`** — not `rows`, not
+  `grid`. (The skill doc's `/xlsx_read` row says "grid"; the JSON the
+  bridge actually returns is `{"data": [[…]], "row_count": …}`.)
+  Mail-merge read xlsx rows via `out["data"]`.
+- **soffice (`--convert-to`) quirks, verified on LO 24.2.7.2**:
+  output file is named after the INPUT stem (--convert-to doc x.docx
+  produces x.doc, NOT the requested out name — copy/rename into
+  place); two concurrent soffice invocations share one user profile
+  and corrupt each other — serialize with a lock; javaldx warnings on
+  stderr are harmless; judge success by the OUTPUT FILE's magic bytes,
+  never by returncode alone.
+- **Addon suite hit its own write-rate breaker**: adding /convert
+  tests pushed the addon suite past the default 20 writes/60 s and
+  pdf_op (the next section) 429'd mid-suite. The suite's self-started
+  bridge now sets FILE_BRIDGE_MAX_WRITES=500 (same headroom as e2e);
+  the breaker itself stays covered by e2e's dedicated
+  FILE_BRIDGE_MAX_WRITES=3 instance at the end of that suite.

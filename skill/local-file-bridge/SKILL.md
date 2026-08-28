@@ -31,6 +31,12 @@ Access files in **the user's own computer** through their local File Bridge serv
 | `/image_info?path=X` | GET | Image dimensions/format/megapixels + EXIF orientation (effective size) — stdlib, no addon |
 | `/reveal?path=X` | GET | Open the user's file manager at the file — **consent-gated** (403 unless the user enabled it in settings) |
 | `/ocr/config` | GET | Current OCR language + installed languages |
+| `/convert` | POST | `{"path":"old.doc","out":"new.docx"}` — **LibreOffice headless conversion**: legacy .doc/.xls/.ppt → modern, office → PDF, xlsx → csv, docx → png/html. Format pair comes from the extensions; confirm flow; 501 with install hint if the user has no LibreOffice |
+| `/pdf_from_text` | POST | `{"out":"x.pdf","blocks":[{"style":"title\|h1\|h2\|body\|pagebreak","text":"…"}]}` — create PDF natively (fpdf2 addon, no Pyodide shim); confirm flow |
+| `/docx_write` | POST | `{"out":"x.docx","sections":[{"style":"h1\|h2\|paragraph\|list\|numbered\|pagebreak","text":"…","items":["…"]}]}` — create Word from structured sections; confirm flow |
+| `/xlsx_append` | POST | `{"path":"log.xlsx","rows":[["a",1],…],"header":["…"],"sheet":"Sheet1"}` — create-or-append Excel (header only applied on create; appending to an existing file needs confirm) |
+| `/docx_mailmerge` | POST | `{"path":"template.docx","out":"merged/{{client}}.docx"\|"bundle.zip","rows":[…]\|"rows.xlsx"\|"rows.csv"}` — one document per row; collision + unresolved-pattern checks BEFORE confirm |
+| `/eml_read?path=X&max_chars=` | GET | Read .eml: headers + date_iso, text body (html stripped), attachment **metadata only**; .msg → 415 hint |
 | `/xlsx_read?path=X&sheet=&range=A1:B2&max_rows=` | GET | Read **Excel** as JSON (row_count, headers, grid, merged cells) — no install needed |
 | `/docx_read?path=X` | GET | Read **Word** as markdown-ish text (headings, lists, pipe tables) |
 | `/pptx_read?path=X` | GET | Read **PowerPoint**: per-slide title + text boxes |
@@ -89,11 +95,11 @@ replacements in one file, one `/edit` call beats several `/write` calls.
 
 **Version check first:** call `/version` (no token needed). If the
 response's `bridge` version doesn't match what this skill documents
-(v2.2), tell the user "the bridge app and the skill are out of sync —
+(v2.3), tell the user "the bridge app and the skill are out of sync —
 re-run the File Bridge installer or scripts/setup_owui.py" and continue
 carefully: newer bridges keep old skills working, but new endpoints
-(like /ocr_pdf, /pdf_op, /docx_merge) won't be in an old skill's
-vocabulary.
+(like /convert, /pdf_from_text, /docx_mailmerge) won't be in an old
+skill's vocabulary.
 
 ```python
 from pyodide.http import pyfetch

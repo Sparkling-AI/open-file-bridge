@@ -302,18 +302,29 @@ final validation pass (not after every change). Do not block on either.
 
 ## P3 — Optional / bigger bets
 
-☐ Signing decisions per feedback matrix:
+☐ Signing decisions per feedback matrix — SKIPPED (user decision
+   2026-08-28, business call; revisit when external distribution
+   demands it):
    - internal AD: internal CA or GPO whitelist (free)
    - external: Windows OV ~$100-200/yr (EV ~$400 for zero friction);
      macOS Apple Dev ID $99/yr + notarize (`package_macos.sh --sign` ready)
    - Unsigned IS installable on both (SmartScreen "more info→run anyway";
-     macOS right-click→open) — docs already cover it.
-☐ LibreOffice headless conversion endpoints: legacy .doc/.xls/.ppt →
-   modern formats; docx→pdf (heavy: hundreds of MB).
-☐ Structured write endpoints: /xlsx_append, /docx_write (sections),
-   /pdf_from_text (native fpdf2, no Pyodide shim needed).
-☐ Mail-merge: docx template {{placeholders}} + xlsx rows → batch PDFs.
-☐ .eml parsing (stdlib email); .msg via extract-msg.
+     macOS right-click→open) — docs/SUPPORT.md now covers the flows.
+✅ LibreOffice headless conversion — `/convert` (984426f): _CONV_MATRIX
+   whitelist (legacy .doc/.xls/.ppt → OOXML, office → pdf, xlsx → csv,
+   docx → png/html); model picks a FORMAT PAIR, never a command;
+   _CONV_LOCK serialization (one soffice profile), magic-byte output
+   verification (soffice rc lies), 120s timeout → 504, SOFFICE_CMD env
+   > adjacent > /usr/bin > PATH, 501 + install hint when absent.
+   Verified live: doc→docx roundtrip, docx→pdf (LO 24.2.7.2 on dpc).
+✅ Structured write endpoints: /xlsx_append, /docx_write (sections),
+   /pdf_from_text (native fpdf2, no Pyodide shim) — 7d59ae9.
+✅ Mail-merge: /docx_mailmerge — docx template {{placeholders}} + xlsx/
+   csv/inline rows → one DOCX per row (out-name pattern or .zip bundle);
+   collision + unresolved-pattern checks pre-confirm (094dace). PDF
+   output = mailmerge + /convert, two deliberate steps.
+✅ .eml parsing (stdlib email) — /eml_read (a74ea64); .msg → 415 with
+   extract-msg hint (not bundled).
 ✅ PDF split/merge/rotate — `/pdf_op` (pymupdf): split to per-page
    `<base>.pN.pdf` files (page-selectable), ordered merge (2-20 inputs),
    per-page rotate (angle mod 360); overwrite-confirm flow, atomic +
@@ -322,20 +333,29 @@ final validation pass (not after every change). Do not block on either.
 ✅ `/reveal` — opens Explorer/Finder/xdg-open at the file. CONSENT-GATED:
    403 unless the local user sets allow_reveal in the picker (default
    off) — a remote model must never pop desktop windows unasked.
-☐ rclone recipe: bridge folder = cloud-drive mount (answers demand in
-   OWUI #5872 data sources, 52+) — docs only.
+✅ rclone recipe: bridge folder = cloud-drive mount (answers demand in
+   OWUI #5872 data sources, 52+) — docs/RCLONE.md (recipe; flagged
+   not-lab-verified — dpc has no rclone/cloud remote).
 ✅ `/image_info` — stdlib-only header parser: png/jpeg/gif/webp/bmp
    dimensions + format + megapixels, JPEG EXIF Orientation tag with
    effective (post-rotation) size. Verified against pymupdf/PIL-generated
    real files incl. oriented JPEG (6 → w/h swap). PIL not required.
-☐ OWUI version-compat window documented (tested 0.11.1).
+✅ OWUI version-compat window — docs/OWUI-COMPAT.md: verified 0.11.1,
+   current+one-minor policy, the two-switch preset regression test,
+   skills-API surface table, per-upgrade checklist.
 ☐ Multi-model smoke tests (only GLM tested; weak models may need stronger
-   skill rules).
-☐ RiskClass per endpoint (READ/WRITE_LOCAL/…) declared in code — from
-   OpenWorker risk.py; future-proofs confirmation/audit gating.
-☐ Skill shipped as folder w/ version + changelog; setup script previews
-   diff before updating an existing skill (their staging pattern).
-☐ Support runbook (SmartScreen / port conflict / Safari).
+   skill rules). — attempted opportunistically after the 2.3 sync.
+✅ RiskClass per endpoint (READ/WRITE_LOCAL/…) declared in code — from
+   OpenWorker risk.py; future-proofs confirmation/audit gating
+   (f2eb7fd: ENDPOINT_RISK table, audit rows carry risk, /state map,
+   e2e fails on gaps).
+✅ Skill shipped as folder w/ version + changelog; setup script previews
+   diff before updating an existing skill (f58e070:
+   skill/local-file-bridge/{SKILL.md,CHANGELOG.md}, setup_owui.py
+   [y/N] prompt + --yes; both paths verified on owui-test).
+✅ Support runbook — docs/SUPPORT.md (SmartScreen vs Defender-policy,
+   port-8765 conflict triage + FILE_BRIDGE_PORT override, Safari
+   private-network hard limit, first-response checklist).
 
 ## Format support matrix (current)
 
@@ -348,7 +368,7 @@ final validation pass (not after every change). Do not block on either.
 | pdf (text layer) | ✅ /pdf_text | ✅ fpdf2 (Pyodide) | |
 | pdf (scanned) | ✅ /ocr (tesseract) | ✅ /ocr_pdf (searchable) | swe+eng combo verified |
 | images | ✅ /ocr, /read_b64, /image_info | ✅ /write_b64 | /reveal consent-gated |
-| doc/xls/ppt (legacy) | ❌ | ❌ | P3: LibreOffice convert |
+| doc/xls/ppt (legacy) | ✅ via /convert | ✅ /convert → OOXML/pdf | LibreOffice headless; 501 + hint if absent |
 | zip | ✅ /zip (create), /unzip, /peek kind=zip | ✅ /zip | flat basenames; zip-slip rejected |
 
 ## Measured performance (reference)
