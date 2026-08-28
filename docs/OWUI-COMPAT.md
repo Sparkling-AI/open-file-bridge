@@ -61,21 +61,30 @@ receives, and the browser console shows "No 'Access-Control-Allow-Origin'
 header". A silent, confusing failure — the model-side code "works" while
 the user gets nothing.
 
-**Verified escape hatch: tier-2 pure token mode.** Configure ONLY the org
-token, no allowed_origin:
+**Fixed in bridge 2.4+: token tier now covers opaque origins.** The
+original escape hatch was token-ONLY mode (no `allowed_origin` configured
+→ the bridge echoed `ACAO: *` for null origins). But the picker requires
+an origin before file serving unlocks, so every real deployment runs
+`token+origin` — where `Origin: null` requests got **no CORS headers at
+all**: the preflight failed and the browser aborted the fetch before the
+token was ever checked (`pyodide.http._exceptions.AbortError: Failed to
+fetch` — found in real use 2026-08-29).
 
-```
-POST /api/root {"token": {"generate": true}}     # loopback-only endpoint
-```
+`_add_matching_cors` now grants opaque origins (`Origin: null`) CORS
+whenever the token tier is active AND the request passed the auth gate
+(public endpoints like `/health`, `/version`, `/wheels` and preflights
+mark themselves authorized; token-check failures do not). The token still
+gates every file request, so responses only become readable to callers
+who know it; denials (bad/missing token) stay browser-unreadable.
+Regression-tested in `tests/e2e_test.sh` (null-origin preflight granted,
+null-origin GET readable, null-origin no-token denied + no CORS leak).
+Token-only mode keeps working as before; the old token-only workaround is
+no longer necessary.
 
-With no origin set, the bridge echoes ACAO (`*` for null origins) and the
-token carries auth. Probe-verified on the current build: **401** without
-the header, **200 + working write flow** with `X-Bridge-Token`. The token
-must then reach the model — the skill bootstrap block accepts a
-`BRIDGE_HEADERS = {"X-Bridge-Token": "…"}` line (that is exactly what
-`mm_smoke_strict.py` injects per run; `setup_owui.py` does NOT inject it —
-see the note in its help/admin guide about distributing the token
-yourself).
+(How the token reaches the model: the skill bootstrap block accepts a
+`BRIDGE_HEADERS = {"X-Bridge-Token": "…"}` line — `setup_owui.py
+--bridge-token` embeds it in the public skill; `mm_smoke_strict.py`
+injects it per run.)
 
 Note this changed WITHIN the 0.11.x line (the two-switch preset above
 kept working) — exactly why the upgrade checklist now has an origin check.

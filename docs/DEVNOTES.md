@@ -420,3 +420,27 @@ where tier-1 CORS cannot help.
   Windows box this session): `-NoProfile -STA` +
   `[Console]::OutputEncoding=UTF8` before writing the path is the
   standard recipe; needs a real-machine pass next Windows session.
+
+## Tier-2 CORS for opaque origins + picker token-indicator (2026-08-29)
+
+Dandan's first live OWUI test: model code correct (token header present)
+but every pyfetch died with `AbortError: Failed to fetch`. Root cause:
+OWUI's sandboxed Pyodide iframe sends `Origin: null`; `_request_origin`
+maps null → None; `_add_matching_cors` then emitted NO CORS headers for
+it → preflight failed → browser aborted the fetch before the token was
+ever checked. The documented "tier-2 works from sandboxes" only held in
+token-ONLY mode (allowed=None → ACAO `*`), but the picker requires an
+origin, so real deployments run token+origin → sandbox dead.
+
+Fix: `_add_matching_cors` grants opaque origins CORS when the token tier
+is active AND the request passed the auth gate. `_authorized` flag: set
+True at top of do_GET (public endpoints) and do_OPTIONS (preflight);
+do_POST sets True after check_request passes, False on denial; do_GET
+denial sets False. So: tokened sandbox reads everything it could read
+with a matching origin; tokenless probes get 401s that stay
+browser-unreadable. e2e grew 5 checks (229 total, all green).
+
+Also: picker now states on refresh whether a token is configured (the
+field stays empty by design — the secret is never echoed back; users
+read "Security mode: token+origin · a token IS configured"). Found the
+token was persisted all along; only the UI was silent about it.
