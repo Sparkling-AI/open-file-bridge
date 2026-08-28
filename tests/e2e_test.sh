@@ -465,6 +465,49 @@ doc.save("$TESTDIR/inv.pdf"); doc.close()
 PY
 fi
 
+# ---------- image_info + reveal (P3) ----------
+# stdlib-built fixtures: 3x2 PNG (hand-rolled), 4x1 GIF, BMP
+python3 - "$TESTDIR" <<'PYEOF'
+import sys, struct, zlib, pathlib
+d = pathlib.Path(sys.argv[1])
+# PNG 3x2 RGB
+def chunk(tag, payload):
+    return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
+raw = b"\x00" + b"\xff\x00\x00" * 3 + b"\x00" + b"\x00\xff\x00" * 3
+png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 3, 2, 8, 2, 0, 0, 0))
+       + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+(d / "tiny.png").write_bytes(png)
+# GIF 4x1
+gif = b"GIF89a" + struct.pack("<HH", 4, 1) + b"\x80\x00\x00" + b"\x00\x00\x00\xff\xff\xff" + b"\x2c" + struct.pack("<HHHH", 0, 0, 4, 1) + b"\x00\x02\x02\x44\x01\x00" + b"\x3b"
+(d / "tiny.gif").write_bytes(gif)
+# BMP 2x2 (BITMAPINFOHEADER, 24bpp)
+bih = struct.pack("<IiiHHIIiiII", 40, 2, 2, 1, 24, 0, 16, 0, 0, 0, 0)
+bmp = b"BM" + struct.pack("<IHHI", 14 + len(bih) + 16, 0, 0, 14 + len(bih)) + bih + b"\x00" * 16
+(d / "tiny.bmp").write_bytes(bmp)
+print("image fixtures ok")
+PYEOF
+II=$(curl -s "$BRIDGE/image_info?path=tiny.png" $T)
+check "png dims"              '"width": *3'      "$II"
+check "png height"            '"height": *2'     "$II"
+check "png format"            '"format": *"png"' "$II"
+check "png megapixels"        'megapixels'       "$II"
+check "gif dims"              '"width": *4'      "$(curl -s "$BRIDGE/image_info?path=tiny.gif" $T)"
+check "bmp dims"              '"width": *2'      "$(curl -s "$BRIDGE/image_info?path=tiny.bmp" $T)"
+check "image_info non-image"  'not a supported image' "$(curl -s "$BRIDGE/image_info?path=notes.txt" $T)"
+check "image_info missing"    'no such file'     "$(curl -s "$BRIDGE/image_info?path=ghost.png" $T)"
+check "image_info traversal"  'escapes'          "$(curl -s "$BRIDGE/image_info?path=../../etc/passwd" $T)"
+# reveal: consent-gated OFF by default
+RV=$(curl -s "$BRIDGE/reveal?path=notes.txt" $T)
+check "reveal off by default" 'reveal is disabled' "$RV"
+# enabling via local picker API unlocks it (xdg-open on headless may fail —
+# accept either ok or the explicit file-manager error, NOT the 403)
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"allow_reveal":true}' >/dev/null
+RV2=$(curl -s "$BRIDGE/reveal?path=notes.txt" $T)
+if echo "$RV2" | grep -q 'reveal is disabled'; then echo "  FAIL: reveal still gated after enabling"; fail=1; else echo "  PASS: reveal unlocks when enabled"; fi
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"allow_reveal":false}' >/dev/null
+check "reveal re-locks"       'reveal is disabled' "$(curl -s "$BRIDGE/reveal?path=notes.txt" $T)"
+check "state shows allow_reveal" 'allow_reveal'  "$(curl -s $BRIDGE/state)"
+
 # ---------- rate circuit breaker (own low-limit instance) ----------
 # The main suite bridge runs with FILE_BRIDGE_MAX_WRITES=500, so a burst can
 # never trip it there. This runs LAST because it reclaims port 8765.
