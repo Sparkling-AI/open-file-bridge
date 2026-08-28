@@ -96,7 +96,12 @@ def main():
         "access_grants": [{"principal_type": "user", "principal_id": "*", "permission": "read"}],
     }
     existing = api("GET", f"{base}/api/v1/skills/", tok)
+    # the LIST endpoint omits `content` — fetch the full record by id
     live = next((s for s in existing if s.get("id") == SKILL_ID), None)
+    if live is not None:
+        full = api("GET", f"{base}/api/v1/skills/id/{SKILL_ID}", tok)
+        if isinstance(full, dict) and full.get("content"):
+            live = full
     if live is not None:
         # preview BEFORE overwriting (their staging pattern): show what
         # the skill-body update would change, ask unless --yes
