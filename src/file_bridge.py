@@ -435,6 +435,114 @@ def pdf_rasterize(p: Path, pages_param: str, max_pages: int) -> tuple[int, dict]
         doc.close()
 
 
+# ------------------------------------------- /pdf_op split|merge|rotate (P3)
+# pymupdf page surgery. Output atomically written + snapshotted, rate-breaker
+# counted. Confirmation only when the OUT file already exists (mirrors /write).
+
+def _parse_pages(spec: str, total: int) -> list:
+    """'1-3,5' (1-indexed) -> sorted 0-based page indices; [] = all."""
+    if not spec:
+        return list(range(total))
+    out = []
+    for part in spec.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        if "-" in part:
+            a, b = part.split("-", 1)
+            out.extend(range(int(a) - 1, min(int(b), total)))
+        else:
+            out.append(int(part) - 1)
+    return sorted(set(w for w in out if 0 <= w < total))
+
+
+def pdf_op(op: str, srcs: list, out: Path, out_root: Path, spec: str,
+           angle: int) -> tuple[int, dict]:
+    """split/merge/rotate. srcs = resolved abs Paths (1 for split/rotate,
+    >=1 for merge)."""
+    if op == "split":
+        src = srcs[0]
+        doc = fitz.open(src)
+        try:
+            total = doc.page_count
+            wanted = _parse_pages(spec, total)
+            if not wanted:
+                return 400, {"error": f"no pages selected (doc has {total})"}
+            base = out.with_suffix("")
+            results = []
+            nbytes = 0
+            for i in wanted:
+                nd = fitz.open()
+                try:
+                    nd.insert_pdf(doc, from_page=i, to_page=i)
+                    data = nd.tobytes(deflate=True, garbage=3)
+                finally:
+                    nd.close()
+                tf = Path(f"{base}.p{i + 1}.pdf")
+                if nbytes + len(data) > MAX_BINARY:
+                    return 413, {"error": f"split output too large (> {MAX_BINARY} bytes)"}
+                okr, err = rate_check(len(data))
+                if not okr:
+                    return 429, {"error": err, "rate_limited": True}
+                snap = snapshot_before_write(out_root, tf) if tf.exists() else None
+                atomic_write_bytes(tf, data)
+                nbytes += len(data)
+                results.append({"file": tf.name, "page": i + 1, "bytes": len(data),
+                                "snapshot": snap})
+            return 200, {"ok": True, "pages_split": len(results),
+                         "files": results,
+                         "note": "one PDF per selected page: <out-base>.pN.pdf"}
+        finally:
+            doc.close()
+    if op == "merge":
+        merged = fitz.open()
+        try:
+            pages_info = []
+            for s in srcs:
+                d = fitz.open(s)
+                try:
+                    merged.insert_pdf(d)
+                    pages_info.append({"file": s.name, "pages": d.page_count})
+                finally:
+                    d.close()
+            data = merged.tobytes(deflate=True, garbage=3)
+        finally:
+            merged.close()
+        if len(data) > MAX_BINARY:
+            return 413, {"error": f"merged PDF too large (> {MAX_BINARY} bytes)"}
+        snap = snapshot_before_write(out_root, out) if out.exists() else None
+        okr, err = rate_check(len(data))
+        if not okr:
+            return 429, {"error": err, "rate_limited": True}
+        atomic_write_bytes(out, data)
+        return 200, {"ok": True, "written": str(out), "bytes": len(data),
+                     "pages": sum(p["pages"] for p in pages_info),
+                     "sources": pages_info, "snapshot": snap}
+    if op == "rotate":
+        src = srcs[0]
+        doc = fitz.open(src)
+        try:
+            total = doc.page_count
+            wanted = _parse_pages(spec, total)
+            if not wanted:
+                return 400, {"error": f"no pages selected (doc has {total})"}
+            for i in wanted:
+                doc[i].set_rotation((doc[i].rotation + angle) % 360)
+            data = doc.tobytes(deflate=True, garbage=3)
+        finally:
+            doc.close()
+        if len(data) > MAX_BINARY:
+            return 413, {"error": f"rotated PDF too large (> {MAX_BINARY} bytes)"}
+        snap = snapshot_before_write(out_root, out) if out.exists() else None
+        okr, err = rate_check(len(data))
+        if not okr:
+            return 429, {"error": err, "rate_limited": True}
+        atomic_write_bytes(out, data)
+        return 200, {"ok": True, "written": str(out), "bytes": len(data),
+                     "pages_rotated": len(wanted), "angle": angle,
+                     "snapshot": snap}
+    return 400, {"error": f"unknown op {op!r} (split|merge|rotate)"}
+
 
 def _app_dir() -> Path:
     """Directory where the app's bundled assets live (wheels/, tessdata/,
@@ -2841,6 +2949,59 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     max_pages = _OCR_PDF_MAX_PAGES
                 code, resp = ocr_pdf(p, op, oroot, lang, dpi, max_pages)
+                return self._json(code, resp)
+
+            if u.path == "/pdf_op":
+                # split | merge | rotate (pymupdf, P3)
+                op = body.get("op", "")
+                if op not in ("split", "merge", "rotate"):
+                    return self._json(400, {"error": "op must be split|merge|rotate"})
+                if not HAVE_PYMUPDF:
+                    return self._json(501, {"error": "pdf_op needs the PDF add-on "
+                                                     "(pip install pymupdf)"})
+                srcs_rel = body.get("paths") or ([body.get("path")] if body.get("path") else [])
+                if not isinstance(srcs_rel, list) or not srcs_rel or len(srcs_rel) > 20:
+                    return self._json(400, {"error": "paths must be a 1-20 list"})
+                out_rel = body.get("out", "")
+                if not out_rel or Path(out_rel).suffix.lower() != ".pdf":
+                    return self._json(400, {"error": "need out (root-relative .pdf)"})
+                if op != "merge" and len(srcs_rel) > 1:
+                    return self._json(400, {"error": f"{op} takes exactly one input"})
+                resolved = []
+                for r in srcs_rel:
+                    if not isinstance(r, str) or not r:
+                        return self._json(400, {"error": f"bad path: {r!r}"})
+                    sp, _sr, _sc = resolve_guarded(unquote(r))
+                    if sp.suffix.lower() != ".pdf":
+                        return self._json(400, {"error": f"input must be .pdf, not "
+                                                         f"{sp.suffix}"})
+                    if not sp.is_file():
+                        return self._json(404, {"error": f"no such file: {r}"})
+                    resolved.append(sp)
+                opath, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
+                if _readonly_for(ocfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                try:
+                    angle = int(body.get("angle", 90)) % 360
+                except (TypeError, ValueError):
+                    angle = 90
+                if op == "rotate" and angle == 0:
+                    return self._json(400, {"error": "angle 0 does nothing"})
+                spec_pages = str(body.get("pages", "") or "")
+                # confirmation mirrors /write: only when OUT already exists
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "pdf_op", "pdfop": op,
+                                  "paths": srcs_rel, "out": out_rel}
+                if opath.exists() and not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "target exists — overwrite needs confirmation",
+                        "confirmation_required": True, **iss})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
+                code, resp = pdf_op(op, resolved, opath, oroot, spec_pages, angle)
                 return self._json(code, resp)
 
             if u.path == "/docx_merge":
