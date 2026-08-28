@@ -211,6 +211,62 @@ PYEOF
   check "pptx_template bad layout"   'bad layout index' "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"deck-template.pptx","out":"d2.pptx","slides":[{"layout":99}]}')"
   check "pptx_template wrong src"    'must be .potx or .pptx' "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"inv.png","out":"x.pptx"}')"
   check "pptx_template traversal"    'escapes'       "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"../../etc/passwd","out":"x.pptx"}')"
+
+  # ---------- /pdf_op split|merge|rotate (P3) ----------
+  # multi-page fixture
+  uv run --with pymupdf python3 - "$TESTDIR" <<'PYEOF'
+import sys, pathlib
+import fitz
+d = pathlib.Path(sys.argv[1])
+doc = fitz.open()
+for n in range(3):
+    pg = doc.new_page()
+    pg.insert_text((72, 72), f"PAGE {n+1}", fontname="helv", fontsize=14)
+doc.save(d / "multi.pdf"); doc.close()
+PYEOF
+  # split
+  SP=$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"split","paths":["multi.pdf"],"out":"chunk.pdf","pages":"1,3"}')
+  check "pdf_op split"          '"pages_split": *2' "$SP"
+  check "pdf_op split file1"    'chunk.p1.pdf'     "$SP"
+  for f in chunk.p1.pdf chunk.p3.pdf; do
+    if [ -f "$TESTDIR/$f" ]; then echo "  PASS: $f exists"; else echo "  FAIL: $f missing"; fail=1; fi
+  done
+  if [ -f "$TESTDIR/chunk.p2.pdf" ]; then echo "  FAIL: unselected page split out"; fail=1; else echo "  PASS: page 2 skipped"; fi
+  SPV=$(curl -s "$BRIDGE/pdf_text?path=chunk.p2.pdf" 2>/dev/null || echo skip)
+  # merge
+  MG=$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"merge","paths":["chunk.p1.pdf","chunk.p3.pdf"],"out":"merged.pdf"}')
+  check "pdf_op merge"          '"ok": *true'      "$MG"
+  check "pdf_op merge pages"    '"pages": *2'      "$MG"
+  MGV=$(curl -s "$BRIDGE/pdf_text?path=merged.pdf")
+  check "merge order page1"     'PAGE 1'           "$MGV"
+  check "merge order page3"     'PAGE 3'           "$MGV"
+  if echo "$MGV" | grep -q 'PAGE 2'; then echo "  FAIL: page 2 leaked into merge"; fail=1; else echo "  PASS: merge only wanted pages"; fi
+  # merge overwrite needs confirmation
+  MG2=$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"merge","paths":["chunk.p1.pdf"],"out":"merged.pdf"}')
+  check "pdf_op overwrite confirmed" 'confirmation_required' "$MG2"
+  # rotate
+  RT=$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"rotate","paths":["multi.pdf"],"out":"rot.pdf","angle":90,"pages":"1"}')
+  check "pdf_op rotate"         '"pages_rotated": *1' "$RT"
+  # rotation actually changed the page (mediabox rotates)
+  python3 - "$TESTDIR" <<'PYEOF'
+import sys, pathlib
+import fitz
+d = pathlib.Path(sys.argv[1])
+a = fitz.open(d / "multi.pdf"); b = fitz.open(d / "rot.pdf")
+try:
+    assert b[0].rotation == (a[0].rotation + 90) % 360, "page 1 not rotated"
+    assert b[1].rotation == a[1].rotation, "page 2 wrongly rotated"
+    print("rotations verified")
+finally:
+    a.close(); b.close()
+PYEOF
+  if [ $? -eq 0 ]; then echo "  PASS: rotate verified"; else echo "  FAIL: rotation wrong"; fail=1; fi
+  # policy errors
+  check "pdf_op bad op"       'split\|merge\|rotate' "$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"shred","paths":["multi.pdf"],"out":"x.pdf"}')"
+  check "pdf_op non-pdf src"  'must be .pdf'   "$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"split","paths":["loose.txt"],"out":"x.pdf"}')"
+  check "pdf_op traversal"    'escapes'        "$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"split","paths":["../../etc/passwd"],"out":"x.pdf"}')"
+  check "pdf_op angle 0"      'does nothing'   "$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"rotate","paths":["multi.pdf"],"out":"r2.pdf","angle":0}')"
+  check "pdf_op split multi-input" 'takes exactly one' "$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"split","paths":["multi.pdf","merged.pdf"],"out":"x.pdf"}')"
 fi
 
 echo
