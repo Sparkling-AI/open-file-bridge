@@ -33,7 +33,9 @@ jobs:
       - name: Build (Windows)
         if: runner.os == 'Windows'
         working-directory: build
-        run: pyinstaller --noconfirm file_bridge_windows.spec
+        # spec paths are CWD-relative (../src), so run from build/ but emit
+        # to the repo-root dist/ the smoke test and installer expect
+        run: pyinstaller --noconfirm --distpath ../dist file_bridge_windows.spec
 
       - name: Bundle frozen assets (Windows)
         if: runner.os == 'Windows'
