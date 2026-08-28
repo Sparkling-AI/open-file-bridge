@@ -150,6 +150,18 @@ with pymupdf present (collect_all without it silently produced a
 PDF-less exe; artifact uploads had wrong paths for win/mac → empty
 artifacts, now `if-no-files-found: error`).
 
+**Windows noconsole launch (CI run 4 vs 5).** Even with the devnull guard
+at the top of main(), the windowed exe hung on windows-latest when started
+bare (`Start-Process`, alive-but-not-listening, no bridge.log — PyInstaller
+windowed-traceback-dialog signature). The CI smoke now starts the exe with
+`-RedirectStandardError/-RedirectStandardOutput` handles → boots cleanly
+(`smoke OK: addons=@{pdf=True; ocr=False} wheels=8`). So: real double-click
+launches are covered by the in-code guard; programmatic/CI launches should
+pass stdio handles. The smoke also dumps process state + raw /health +
+bridge.log + captured stderr on any future failure. ocr=False on runners
+is expected (no tesseract binary there — the Inno installer bundles the
+engine for real installs).
+
 ## Session handoff
 
 - Repo: `~/workspace/owui-file-bridge` (git, 3 research docs + roadmap).
