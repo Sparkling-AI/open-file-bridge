@@ -124,6 +124,7 @@ ENDPOINT_RISK = {
     "/pdf_op": RiskClass.WRITE_LOCAL,
     "/pdf_from_text": RiskClass.WRITE_LOCAL,
     "/docx_merge": RiskClass.WRITE_LOCAL,
+    "/docx_mailmerge": RiskClass.WRITE_LOCAL,
     "/docx_write": RiskClass.WRITE_LOCAL,
     "/pptx_from_template": RiskClass.WRITE_LOCAL,
     "/xlsx_append": RiskClass.WRITE_LOCAL,
@@ -2044,6 +2045,158 @@ def xlsx_append(path: Path, rows: list, sheet: str | None, out_root: Path,
     return 200, resp
 
 
+# --------------------------------- mail-merge: docx template + rows -> batch (P3)
+# Natural extension of /docx_merge (openworker #454): same {{placeholder}}
+# engine, but one document PER ROW. Rows come from an .xlsx (bridge reader),
+# a .csv (stdlib), or inline JSON. Output: N docx files following an out
+# pattern, or ONE zip when out ends in .zip.
+
+def _mailmerge_rows(src: Path, q_cols: str | None) -> tuple[int, dict]:
+    """Load merge rows: xlsx (header row = keys) | csv | inline handled by
+    caller. Returns (code, {rows|error})."""
+    ext = src.suffix.lower()
+    if ext == ".xlsx":
+        res = _xlsx_read(src, {"max_rows": "501"})
+        if "error" in res:
+            return 400, res
+        rows_raw = res.get("data") or []
+        if not rows_raw:
+            return 400, {"error": "xlsx has no rows"}
+        header = [str(h) if h is not None else "" for h in rows_raw[0]]
+        rows = []
+        for r in rows_raw[1:]:
+            row = {}
+            for i, h in enumerate(header):
+                if h and i < len(r) and r[i] is not None:
+                    row[h] = r[i]
+            if row:
+                rows.append(row)
+        return 200, {"rows": rows}
+    if ext == ".csv":
+        import csv as _csv
+        with open(src, newline="", encoding="utf-8", errors="replace") as fh:
+            reader = list(_csv.reader(fh))
+        if not reader:
+            return 400, {"error": "csv is empty"}
+        header = [h.strip() for h in reader[0]]
+        rows = []
+        for r in reader[1:]:
+            row = {}
+            for i, h in enumerate(header):
+                if h and i < len(r):
+                    row[h] = r[i]
+            if row:
+                rows.append(row)
+        return 200, {"rows": rows}
+    return 400, {"error": f"row source must be .xlsx or .csv, not {ext}"}
+
+
+def _safe_name(s: str) -> str:
+    """Filename-safe placeholder value (merged into out patterns)."""
+    keep = []
+    for ch in str(s):
+        if ch.isalnum() or ch in "-_ ":
+            keep.append(ch)
+        else:
+            keep.append("_")
+    return "".join(keep).strip()[:80] or "row"
+
+
+def docx_mailmerge(tpl: Path, out_rel: str, out_root: Path, root: Path,
+                   rows: list, to_zip: bool) -> tuple[int, dict]:
+    try:
+        filled_list, all_missing = [], set()
+        for i, row in enumerate(rows[:50]):
+            if not isinstance(row, dict):
+                return 400, {"error": f"row {i} is not an object"}
+            vals = {str(k): str(v) for k, v in row.items()}
+            data, missing = _docx_placeholder_fill(tpl.read_bytes(), vals)
+            all_missing.update(missing)
+            filled_list.append((vals, data))
+    except ImportError:
+        return 501, {"error": "docx_mailmerge needs python-docx "
+                              "(pip install python-docx)"}
+    except Exception as e:
+        return 500, {"error": f"mail-merge failed: {e}"}
+    total = 0
+    results = []
+    tpl_bytes = tpl.read_bytes()
+    del filled_list
+    # zip mode: write every docx into one archive (atomic, one breaker hit)
+    if to_zip:
+        import zipfile as _zf
+        bio = io.BytesIO()
+        with _zf.ZipFile(bio, "w", _zf.ZIP_DEFLATED) as z:
+            for row in rows[:50]:
+                vals = {str(k): str(v) for k, v in row.items()}
+                data, missing = _docx_placeholder_fill(tpl_bytes, vals)
+                all_missing.update(missing)
+                name = _out_name_for(out_rel, vals)
+                z.writestr(name, data)
+                total += len(data)
+                results.append({"file": name, "bytes": len(data)})
+        data_out = bio.getvalue()
+        if len(data_out) > MAX_BINARY:
+            return 413, {"error": f"zip too large (> {MAX_BINARY} bytes)"}
+        snap = snapshot_before_write(out_root, out_root / out_rel) \
+            if (out_root / out_rel).exists() else None
+        okr, err = rate_check(len(data_out))
+        if not okr:
+            return 429, {"error": err, "rate_limited": True}
+        atomic_write_bytes(out_root / out_rel, data_out)
+        resp = {"ok": True, "written": str(out_root / out_rel),
+                "bytes": len(data_out), "documents": len(results),
+                "files": results, "snapshot": snap}
+        if all_missing:
+            resp["missing"] = sorted(all_missing)
+        return 200, resp
+    # loose-file mode: one docx per row, out pattern names them
+    for row in rows[:50]:
+        vals = {str(k): str(v) for k, v in row.items()}
+        data, missing = _docx_placeholder_fill(tpl_bytes, vals)
+        all_missing.update(missing)
+        rel = _out_name_for(out_rel, vals)
+        tf = out_root / rel
+        if total + len(data) > MAX_BINARY:
+            return 413, {"error": f"output too large (> {MAX_BINARY} bytes)"}
+        okr, err = rate_check(len(data))
+        if not okr:
+            return 429, {"error": err, "rate_limited": True,
+                         "hint": "batch aborted — files written so far are "
+                                 "listed"}
+        snap = snapshot_before_write(out_root, tf) if tf.exists() else None
+        atomic_write_bytes(tf, data)
+        total += len(data)
+        results.append({"file": rel, "bytes": len(data), "snapshot": snap})
+    resp = {"ok": True, "documents": len(results), "bytes": total,
+            "files": results}
+    if all_missing:
+        resp["missing"] = sorted(all_missing)
+    return 200, resp
+
+
+_PLACEHOLDER_NAME_RE = None
+
+
+def _out_name_for(pattern: str, vals: dict) -> str:
+    """Replace {{placeholders}} in the out pattern; default 'row-N.docx'."""
+    global _PLACEHOLDER_NAME_RE
+    if _PLACEHOLDER_NAME_RE is None:
+        _PLACEHOLDER_NAME_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.\-]+)\s*\}\}")
+    def sub(m):
+        k = m.group(1)
+        return _safe_name(vals.get(k, "")) if k in vals else m.group(0)
+    name = _PLACEHOLDER_NAME_RE.sub(sub, pattern)
+    if _PLACEHOLDER_NAME_RE.search(name):
+        # unresolved placeholder in the NAME → numbered fallback
+        name = re.sub(r"\{\{[^}]*\}\}", "", name)
+        name = name.strip("_- ")
+    stem, dot, ext = name.rpartition(".")
+    if not stem or not dot:
+        return pattern
+    return name
+
+
 # ------------------------------------------------ search + edit (P1)
 
 def _search(root: Path, cfg: dict, q: dict):
@@ -3616,6 +3769,96 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     if not okc:
                         return self._json(400, {"error": err})
                 code, resp = xlsx_append(p, rows, sheet, proot, header)
+                return self._json(code, resp)
+
+
+            if u.path == "/docx_mailmerge":
+                # one document PER ROW from xlsx/csv/inline (P3, #454 family)
+                rel = body.get("path", "")
+                out_rel = body.get("out", "")
+                if not rel or not out_rel:
+                    return self._json(400, {"error": "need path (.docx template) "
+                                                     "+ out (pattern like "
+                                                     "'out/{{name}}-contract.docx' "
+                                                     "or a .zip)"})
+                if not (out_rel.lower().endswith(".zip") or
+                        out_rel.lower().endswith(".docx")):
+                    return self._json(400, {"error": "out must end in .docx "
+                                                     "(name pattern) or .zip"})
+                to_zip = out_rel.lower().endswith(".zip")
+                p, _r, _c = resolve_guarded(unquote(rel))
+                if p.suffix.lower() != ".docx":
+                    return self._json(400, {"error": f"template must be .docx, "
+                                                     f"not {p.suffix}"})
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {rel}"})
+                rows_src = body.get("rows")
+                src_path = None
+                if isinstance(rows_src, list):
+                    if not rows_src or len(rows_src) > 50:
+                        return self._json(400, {"error": "rows: 1-50 objects"})
+                    rows = rows_src
+                elif isinstance(rows_src, str) and rows_src:
+                    sp, _sr, _sc = resolve_guarded(unquote(rows_src))
+                    if sp.suffix.lower() not in (".xlsx", ".csv"):
+                        return self._json(400, {"error": "rows file must be "
+                                                         ".xlsx or .csv"})
+                    if not sp.is_file():
+                        return self._json(404, {"error": f"no such file: "
+                                                         f"{rows_src}"})
+                    src_path = sp
+                    rows = None  # loaded after cheap validation
+                else:
+                    return self._json(400, {"error": "rows must be a list of "
+                                                     "objects or a path to "
+                                                     ".xlsx/.csv"})
+                op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
+                if _readonly_for(ocfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                if rows is None:
+                    code, res = _mailmerge_rows(src_path, None)
+                    if code != 200:
+                        return self._json(code, res)
+                    rows = res["rows"]
+                    if not rows:
+                        return self._json(400, {"error": "row source has no data "
+                                                         "rows"})
+                # validate the out pattern resolves per-row BEFORE confirm
+                if not to_zip:
+                    probes = []
+                    for row in rows[:50]:
+                        nm = _out_name_for(out_rel,
+                                           {str(k): str(v) for k, v in
+                                            (row.items() if isinstance(row, dict)
+                                             else [])})
+                        probes.append(nm)
+                    if any("{{" in n for n in probes):
+                        return self._json(400, {"error": "out pattern has "
+                                                         "placeholders not "
+                                                         "present in the rows "
+                                                         "(e.g. {{name}})"})
+                    if len(set(probes)) != len(probes):
+                        return self._json(400, {"error": "out pattern collides "
+                                                         "(two rows map to the "
+                                                         "same filename) — add "
+                                                         "a unique column to "
+                                                         "the pattern"})
+                if len(json.dumps(rows, default=str)) > MAX_READ:
+                    return self._json(413, {"error": "payload too large"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "docx_mailmerge", "path": rel,
+                                  "out": out_rel}
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": f"docx_mailmerge writes {len(rows)} files — "
+                                 "needs confirmation",
+                        "confirmation_required": True, "documents": len(rows),
+                        **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
+                code, resp = docx_mailmerge(p, out_rel, oroot, _r, rows, to_zip)
                 return self._json(code, resp)
 
 

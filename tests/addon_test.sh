@@ -270,6 +270,58 @@ PYEOF
   check "xlsx_append no rows"     'rows must be' "$(curl -s -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' -d '{"path":"x2.xlsx","rows":[]}')"
 
 
+  # ---------- /docx_mailmerge: docx template + rows -> batch (P3) ----------
+  # rows file fixture: xlsx with header row
+  uv run --with openpyxl python3 - "$TESTDIR" <<'PYEOF'
+import sys, pathlib
+import openpyxl
+d = pathlib.Path(sys.argv[1])
+wb = openpyxl.Workbook(); ws = wb.active
+ws.append(["name", "amount", "city"])
+ws.append(["Acme AB", "12500", "Stockholm"])
+ws.append(["Beta LLC", "9900", "Goteborg"])
+wb.save(d / "clients.xlsx"); wb.close()
+# csv variant
+(d / "clients.csv").write_text("name,amount,city\nGamma AB,7000,Malmo\n", encoding="utf-8")
+print("merge fixtures ok")
+PYEOF
+  # inline rows, loose outputs via name pattern
+  MM=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"merged/{{client_name}}-contract.docx","rows":[{"client_name":"Acme AB","amount":"12500"},{"client_name":"Beta LLC","amount":"9900"}]}')
+  check "mailmerge needs confirmation" 'confirmation_required' "$MM"
+  TOK=$(J "$MM" confirmation_token)
+  check "mailmerge preview count"     '"documents": *2' "$MM"
+  MM2=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"merged/{{client_name}}-contract.docx","rows":[{"client_name":"Acme AB","amount":"12500"},{"client_name":"Beta LLC","amount":"9900"}],"confirmation_token":"'"$TOK"'"}')
+  check "mailmerge ok"            '"ok": *true'        "$MM2"
+  check "mailmerge doc count"     '"documents": *2'    "$MM2"
+  DR=$(curl -s "$BRIDGE/docx_read?path=merged/Acme%20AB-contract.docx")
+  check "mailmerge row1 filled"   'Acme AB'            "$DR"
+  check "mailmerge row1 amount"   '12500 SEK'          "$DR"
+  DR2=$(curl -s "$BRIDGE/docx_read?path=merged/Beta%20LLC-contract.docx")
+  check "mailmerge row2 filled"   'Beta LLC'           "$DR2"
+  # xlsx rows file
+  MM3=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"fromxlsx/{{name}}.docx","rows":"clients.xlsx"}')
+  TOK=$(J "$MM3" confirmation_token)
+  MM4=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"fromxlsx/{{name}}.docx","rows":"clients.xlsx","confirmation_token":"'"$TOK"'"}')
+  check "mailmerge xlsx ok"       '"documents": *2'    "$MM4"
+  DR3=$(curl -s "$BRIDGE/docx_read?path=fromxlsx/Gamma%20AB.docx")
+  check "mailmerge xlsx row"      'Gamma AB'           "$DR3"
+  LS=$(curl -s "$BRIDGE/list?path=fromxlsx")
+  check "mailmerge xlsx names"    'Acme AB.docx'       "$LS"
+  # csv rows -> zip
+  MM5=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"batch.zip","rows":"clients.csv"}')
+  TOK=$(J "$MM5" confirmation_token)
+  MM6=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"batch.zip","rows":"clients.csv","confirmation_token":"'"$TOK"'"}')
+  check "mailmerge csv-zip ok"    '"ok": *true'        "$MM6"
+  check "mailmerge zip doc count" '"documents": *1'    "$MM6"
+  # policy errors
+  check "mailmerge unresolved pattern" 'not present in the rows' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"{{nope}}.docx","rows":[{"client_name":"X"}]}')"
+  check "mailmerge collision"     'collides' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"same.docx","rows":[{"client_name":"A"},{"client_name":"B"}]}')"
+  check "mailmerge bad rows ext"  '.xlsx or .csv' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"x.zip","rows":"template.docx"}')"
+  check "mailmerge bad out ext"   'must end in .docx' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"x.pdf","rows":[{"a":"b"}]}')"
+  check "mailmerge wrong src"     'must be .docx' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"clients.xlsx","out":"x.zip"}')"
+  check "mailmerge traversal"     'escapes' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"../../etc/passwd","out":"x.zip"}')"
+
+
   # ---------- /pdf_op split|merge|rotate (P3) ----------
   # multi-page fixture
   uv run --with pymupdf python3 - "$TESTDIR" <<'PYEOF'
