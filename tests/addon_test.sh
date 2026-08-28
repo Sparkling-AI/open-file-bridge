@@ -12,7 +12,7 @@ STATEDIR=$(mktemp -d)
 
 started_here=0
 if ! curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1; then
-  FILE_BRIDGE_STATE_DIR="$STATEDIR" uv run --with pymupdf python src/file_bridge.py "$TESTDIR" &
+  FILE_BRIDGE_STATE_DIR="$STATEDIR" uv run --with pymupdf --with fpdf2 python src/file_bridge.py "$TESTDIR" &
   BPID=$!
   started_here=1
   trap 'kill $BPID 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR"' EXIT
@@ -211,6 +211,64 @@ PYEOF
   check "pptx_template bad layout"   'bad layout index' "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"deck-template.pptx","out":"d2.pptx","slides":[{"layout":99}]}')"
   check "pptx_template wrong src"    'must be .potx or .pptx' "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"inv.png","out":"x.pptx"}')"
   check "pptx_template traversal"    'escapes'       "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"../../etc/passwd","out":"x.pptx"}')"
+
+  # ---------- structured writes: /pdf_from_text /docx_write /xlsx_append (P3) ----------
+  # pdf_from_text happy path (confirm flow first)
+  PF=$(curl -s -m 20 -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"from-text.pdf","title":"Test Doc","blocks":[{"style":"title","text":"Quarterly Report"},{"style":"h1","text":"Summary"},{"style":"body","text":"Revenue is up 17% this quarter — arrows → and åäö survive latin-1 mapping."},{"style":"pagebreak"},{"style":"body","text":"Page two body."}]}')
+  check "pdf_from_text needs confirmation" 'confirmation_required' "$PF"
+  TOK=$(J "$PF" confirmation_token)
+  PF2=$(curl -s -m 20 -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"from-text.pdf","title":"Test Doc","blocks":[{"style":"title","text":"Quarterly Report"},{"style":"h1","text":"Summary"},{"style":"body","text":"Revenue is up 17% this quarter — arrows → and åäö survive latin-1 mapping."},{"style":"pagebreak"},{"style":"body","text":"Page two body."}],"confirmation_token":"'"$TOK"'"}')
+  check "pdf_from_text ok"        '"ok": *true'      "$PF2"
+  check "pdf_from_text blocks"    '"blocks": *5'     "$PF2"
+  # it IS a real PDF: bridge's own /pdf_text reads it back
+  PT=$(curl -s "$BRIDGE/pdf_text?path=from-text.pdf")
+  check "pdf_from_text readable"  'Quarterly Report' "$PT"
+  check "pdf_from_text page 2"    'Page two body'    "$PT"
+  check "pdf_from_text sanitize"  'arrows ->'        "$PT"
+  # page_size letter + policy errors
+  PF3=$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"letter.pdf","page_size":"letter","blocks":[{"style":"body","text":"x"}]}')
+  TOK=$(J "$PF3" confirmation_token)
+  PF4=$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"letter.pdf","page_size":"letter","blocks":[{"style":"body","text":"x"}],"confirmation_token":"'"$TOK"'"}')
+  check "pdf_from_text letter"    '"page_size": *"letter"' "$PF4"
+  check "pdf_from_text bad ext"   'need out'  "$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"x.txt","blocks":[]}')"
+  check "pdf_from_text bad style" 'unknown style\|each block' "$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"x.pdf","blocks":[{"style":"h5","text":"x"}]}')"
+  check "pdf_from_text bad size"  'page_size must be' "$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"x.pdf","page_size":"a3","blocks":[{"style":"body","text":"x"}]}')"
+
+  # docx_write happy path
+  DW=$(curl -s -m 20 -X POST $BRIDGE/docx_write -H 'Content-Type: application/json' -d '{"out":"sections.docx","title":"Spec","sections":[{"style":"h1","text":"Overview"},{"style":"paragraph","text":"Some intro text."},{"style":"list","items":["first","second"]},{"style":"numbered","items":["step one","step two"]},{"style":"pagebreak"},{"style":"h2","text":"After break"}]}')
+  check "docx_write needs confirmation" 'confirmation_required' "$DW"
+  TOK=$(J "$DW" confirmation_token)
+  DW2=$(curl -s -m 20 -X POST $BRIDGE/docx_write -H 'Content-Type: application/json' -d '{"out":"sections.docx","title":"Spec","sections":[{"style":"h1","text":"Overview"},{"style":"paragraph","text":"Some intro text."},{"style":"list","items":["first","second"]},{"style":"numbered","items":["step one","step two"]},{"style":"pagebreak"},{"style":"h2","text":"After break"}],"confirmation_token":"'"$TOK"'"}')
+  check "docx_write ok"           '"ok": *true'      "$DW2"
+  DR=$(curl -s "$BRIDGE/docx_read?path=sections.docx")
+  check "docx_write title"        'Spec'             "$DR"
+  check "docx_write bullet item"  'first'            "$DR"
+  check "docx_write numbered"     'step one'         "$DR"
+  check "docx_write after break"  'After break'      "$DR"
+  check "docx_write bad ext"      'need out'  "$(curl -s -X POST $BRIDGE/docx_write -H 'Content-Type: application/json' -d '{"out":"x.pdf","sections":[]}')"
+  check "docx_write bad style"    'each section' "$(curl -s -X POST $BRIDGE/docx_write -H 'Content-Type: application/json' -d '{"out":"x.docx","sections":[{"style":"h5","text":"x"}]}')"
+
+  # xlsx_append: create-then-append round trip via /xlsx_read
+  XA=$(curl -s -m 20 -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' -d '{"path":"log.xlsx","header":["when","event"],"rows":[["2026-08-28","created"],["2026-08-28","row2"]]}')
+  check "xlsx_append create ok (no confirm for new file)" '"ok": *true'  "$XA"
+  check "xlsx_append created"     '"created": *true' "$XA"
+  XA2=$(curl -s -m 20 -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' -d '{"path":"log.xlsx","rows":[["2026-08-29","appended"]]}')
+  check "xlsx_append existing needs confirm" 'confirmation_required' "$XA2"
+  TOK=$(J "$XA2" confirmation_token)
+  XA3=$(curl -s -m 20 -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' -d '{"path":"log.xlsx","rows":[["2026-08-29","appended"]],"confirmation_token":"'"$TOK"'"}')
+  check "xlsx_append ok"          '"rows_appended": *1' "$XA3"
+  XR=$(curl -s "$BRIDGE/xlsx_read?path=log.xlsx")
+  check "xlsx_append row landed"  'appended'         "$XR"
+  check "xlsx_append row_count"   '"row_count": *4'  "$XR"
+  # sheet targeting + policy
+  XA4=$(curl -s -m 20 -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' -d '{"path":"log.xlsx","sheet":"Archive","rows":[["x"]]}')
+  TOK=$(J "$XA4" confirmation_token)
+  XA5=$(curl -s -m 20 -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' -d '{"path":"log.xlsx","sheet":"Archive","rows":[["x"]],"confirmation_token":"'"$TOK"'"}')
+  check "xlsx_append new sheet"   '"sheet": *"Archive"' "$XA5"
+  check "xlsx_append bad ext"     'need path'  "$(curl -s -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' -d '{"path":"x.xls","rows":[["x"]]}')"
+  check "xlsx_append dict cell"   'flat list'  "$(curl -s -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' -d '{"path":"x2.xlsx","rows":[{"k":"v"}]}')"
+  check "xlsx_append no rows"     'rows must be' "$(curl -s -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' -d '{"path":"x2.xlsx","rows":[]}')"
+
 
   # ---------- /pdf_op split|merge|rotate (P3) ----------
   # multi-page fixture
