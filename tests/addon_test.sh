@@ -150,5 +150,68 @@ check "images cache hit"      '"cached": *true'   "$IM3"
 # text mode unaffected (no png_b64 key)
 if curl -s "$BRIDGE/pdf_text?path=inv.pdf" | grep -q png_b64; then echo "  FAIL: text mode leaked images"; fail=1; else echo "  PASS: text mode unaffected"; fi
 
+# ---------- office writes: /docx_merge + /pptx_from_template (P2) ----------
+if command -v uv >/dev/null; then
+  # fixtures: template docx with placeholders, pptx template deck
+  uv run --with python-docx --with python-pptx python3 - "$TESTDIR" <<'PYEOF'
+import sys, pathlib
+d = pathlib.Path(sys.argv[1])
+from docx import Document
+doc = Document()
+doc.add_heading("Contract {{client_name}}", 0)
+doc.add_paragraph("Dear {{client_name}}, your total is {{amount}} SEK.")
+doc.save(d / "template.docx")
+from pptx import Presentation
+prs = Presentation()
+s1 = prs.slides.add_slide(prs.slide_layouts[0])
+s1.shapes.title.text = "{{report_title}}"
+s1.placeholders[1].text = "Prepared for {{client_name}}"
+prs.save(d / "deck-template.pptx")
+print("fixtures ok")
+PYEOF
+  # docx_merge happy path
+  DM=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"contract-filled.docx","values":{"client_name":"Acme AB","amount":"12500"}}')
+  check "docx_merge needs confirmation" 'confirmation_required' "$DM"
+  TOK=$(J "$DM" confirmation_token)
+  DM2=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"contract-filled.docx","values":{"client_name":"Acme AB","amount":"12500"},"confirmation_token":"'"$TOK"'"}')
+  check "docx_merge ok"          '"ok": *true'   "$DM2"
+  # verify content via /docx_read (stdlib reader works without the lib)
+  DR=$(curl -s "$BRIDGE/docx_read?path=contract-filled.docx")
+  check "docx_merge filled name"   'Acme AB'      "$DR"
+  check "docx_merge filled amount" '12500 SEK'    "$DR"
+  # unfilled placeholder reported (non-strict leaves {{x}} in text)
+  DM3=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"partial.docx","values":{"client_name":"Beta"}}')
+  TOK=$(J "$DM3" confirmation_token)
+  DM4=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"partial.docx","values":{"client_name":"Beta"},"confirmation_token":"'"$TOK"'"}')
+  check "docx_merge reports missing" '"missing": *\["amount"\]' "$DM4"
+  # strict mode refuses
+  DM5=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"partial2.docx","values":{"client_name":"Beta"},"strict":true}')
+  TOK=$(J "$DM5" confirmation_token)
+  DM6=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"partial2.docx","values":{"client_name":"Beta"},"strict":true,"confirmation_token":"'"$TOK"'"}')
+  check "docx_merge strict blocks"  'unresolved placeholders' "$DM6"
+  if [ -f "$TESTDIR/partial2.docx" ]; then echo "  FAIL: strict wrote the file"; fail=1; else echo "  PASS: strict wrote nothing"; fi
+  # policy errors
+  check "docx_merge bad out ext" 'must end in .docx' "$(curl -s -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"x.pdf","values":{}}')"
+  check "docx_merge wrong src"   'must be .docx'     "$(curl -s -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"inv.png","out":"x.docx","values":{}}')"
+  check "docx_merge missing src" 'no such file'      "$(curl -s -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"ghost.docx","out":"x.docx","values":{}}')"
+  check "docx_merge traversal"   'escapes'           "$(curl -s -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"../../etc/passwd","out":"x.docx","values":{}}')"
+
+  # pptx_from_template
+  PT=$(curl -s -m 20 -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"deck-template.pptx","out":"deck-out.pptx","values":{"report_title":"Q4 Wrap","client_name":"Acme AB"},"slides":[{"layout":1,"title":"Agenda","body":"One\nTwo"}]}')
+  check "pptx_template needs confirmation" 'confirmation_required' "$PT"
+  TOK=$(J "$PT" confirmation_token)
+  PT2=$(curl -s -m 20 -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"deck-template.pptx","out":"deck-out.pptx","values":{"report_title":"Q4 Wrap","client_name":"Acme AB"},"slides":[{"layout":1,"title":"Agenda","body":"One\nTwo"}],"confirmation_token":"'"$TOK"'"}')
+  check "pptx_template ok"        '"ok": *true'      "$PT2"
+  check "pptx_template added"     '"slides_added": *1' "$PT2"
+  PR=$(curl -s "$BRIDGE/pptx_read?path=deck-out.pptx")
+  check "pptx_template filled title" 'Q4 Wrap'       "$PR"
+  check "pptx_template filled body"  'Acme AB'       "$PR"
+  check "pptx_template new slide"    'Agenda'        "$PR"
+  check "pptx_template slide count"  '"slide_count": *2' "$PR"
+  check "pptx_template bad layout"   'bad layout index' "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"deck-template.pptx","out":"d2.pptx","slides":[{"layout":99}]}')"
+  check "pptx_template wrong src"    'must be .potx or .pptx' "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"inv.png","out":"x.pptx"}')"
+  check "pptx_template traversal"    'escapes'       "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"../../etc/passwd","out":"x.pptx"}')"
+fi
+
 echo
 if [[ $fail -eq 0 ]]; then echo "ALL ADDON TESTS PASSED ✅"; else echo "SOME ADDON TESTS FAILED ❌"; exit 1; fi
