@@ -5,6 +5,20 @@ Notable, user-facing changes to the OWUI skill
 they re-run `scripts/setup_owui.py`. Bridge-side changes without a
 skill-visible surface stay in ROADMAP/DEVNOTES.
 
+## 2.3.1 — 2026-08-28
+
+- **Strict skill description rewritten (weak-model fix, validated)**:
+  the old text described features; the new one front-loads the failure
+  mode into the ONLY text a model is guaranteed to see (the tool-list
+  description — opening the skill body is optional). Chat-verified on
+  glm-4.5-air: with the old description the model ignored the skill
+  entirely and fabricated success in /mnt/uploads/ (zero bridge
+  requests); with the new one it called the skill, ran the Bootstrap,
+  and completed /list → /read → /write with the file landing on disk.
+  Applied to SKILL-STRICT.md frontmatter + setup_owui.py (single
+  STRICT_DESC constant now — was two diverging inline strings); setup
+  rerun verified idempotent (live description survives).
+
 ## 2.3 — 2026-08-28 (staged with bridge 2.3)
 
 New endpoints the skill can teach:

@@ -343,19 +343,24 @@ final validation pass (not after every change). Do not block on either.
 ✅ OWUI version-compat window — docs/OWUI-COMPAT.md: verified 0.11.1,
    current+one-minor policy, the two-switch preset regression test,
    skills-API surface table, per-upgrade checklist.
-☐ Multi-model smoke tests (only GLM tested; weak models may need stronger
-    skill rules). — RESULT 2026-08-28: strict-variant chat-run on
-    glm-4.5-air FAILED. The model still fabricated success (claimed
-    "✅ created + verified smoke-glm-4.5-air.txt" in /mnt/uploads/ —
-    the Pyodide virtual FS) while the bridge log shows ZERO business
-    requests (no /list, no /read, no /write). 10 hard rules + fixed
-    recipes were not enough to redirect glm-4.5-air to the bridge;
-    SKILL-STRICT as shipped does not contain this model. Follow-ups
-    (unplanned, needs decision): prompt-injected token didn't help
-    discoverability; candidates = bootstrap code-first restructure,
-    skill content embedded in system prompt vs lazy-load, or a
-    stronger base model as the floor for the strict preset. The
-    5.3/5.2 results stand (5.3 full pass, 5.2 honest failure).
+✅ Multi-model smoke tests (GLM family: 5.3 / 5.2 / 4.5-air) — DONE
+    2026-08-28. Matrix: glm-5.3 full pass on the BASE skill (bridge log
+    /list→/read→/write 200 + readback); glm-5.2 honest failure (tier-1
+    era, not re-run under tier-2); glm-4.5-air fabricated success in
+    the Pyodide virtual FS with zero bridge requests — SKILL-STRICT's
+    10 rules did NOT help because the model never opened the skill
+    body. ROOT CAUSE = discovery, not rules: models only see
+    name+description. FIX (validated same day): strict description
+    rewritten to front-load the failure mode ("MUST-CALL before ANY
+    file task… files written with open()/os are LOST and INVISIBLE;
+    claiming success without a bridge response is a failure") → same
+    harness, same model: PASS, full bridge flow, file on disk
+    (commit after cb25756/db0be8c). Shipped in SKILL-STRICT.md
+    frontmatter + setup_owui.py STRICT_DESC (2.3.1). Residuals:
+    n=1 per cell (chat-run costs Z.AI quota); non-GLM families
+    untested; if a future model ignores the description too, the next
+    lever is the bootstrap-restructure / system-prompt-embed ideas
+    (kept as candidates above).
 ✅ RiskClass per endpoint (READ/WRITE_LOCAL/…) declared in code — from
    OpenWorker risk.py; future-proofs confirmation/audit gating
    (f2eb7fd: ENDPOINT_RISK table, audit rows carry risk, /state map,

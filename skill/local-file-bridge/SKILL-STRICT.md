@@ -1,6 +1,6 @@
 ---
 name: local-file-bridge-strict
-description: "[STRICT] Read and write files in the user's local shared folder via the File Bridge app (http://127.0.0.1:8765) — fixed step-by-step recipes for weaker models. Every write goes through the bridge and is verified by reading it back. Use with Code Interpreter (Pyodide engine) enabled."
+description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
 # Local File Bridge — STRICT variant
