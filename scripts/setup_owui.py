@@ -3,9 +3,14 @@
 model preset on an Open WebUI instance via its REST API. Verified against
 Open WebUI v0.11.1.
 
-The script reads the skill body from skill/local-file-bridge.skill.md in the
-repo. To embed an org-wide bridge token (Tier-2 enterprise hardening), pass
---bridge-token; setup_owui injects it into the skill's bootstrap block.
+The script reads the skill body from skill/local-file-bridge/SKILL.md
+in the repo. To embed an org-wide bridge token (Tier-2 enterprise
+hardening), pass --bridge-token; setup_owui injects it into the skill's
+bootstrap block.
+
+When the skill already exists on the server, a unified diff of the
+incoming body vs the live one is shown first; update proceeds only
+after confirmation (or immediately with --yes).
 
 Usage:
   python3 scripts/setup_owui.py --url http://your-owui:8080 \\
@@ -14,6 +19,7 @@ Usage:
       [--bridge-token SECRET]        # opt-in Tier 2: org-wide token
 """
 import argparse
+import difflib
 import json
 import re
 import sys
@@ -22,6 +28,10 @@ from pathlib import Path
 
 SKILL_ID = "local-file-bridge"
 MODEL_ID = "local-files-assistant"
+SKILL_DIR = "skill/local-file-bridge"
+# keep in sync with VERSION/SKILL_VERSION in src/file_bridge.py and the
+# skill folder's CHANGELOG.md
+SKILL_VERSION = "2.3"
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -52,6 +62,9 @@ def main():
     ap.add_argument("--bridge-token", default=None,
                     help="Tier 2: org-wide token embedded in the skill "
                          "(bridge must be configured with the same token)")
+    ap.add_argument("--yes", "-y", action="store_true",
+                    help="apply the skill update without the diff-preview "
+                         "prompt (unattended installs)")
     args = ap.parse_args()
     base = args.url.rstrip("/")
 
@@ -61,7 +74,7 @@ def main():
     print("✓ signed in")
 
     # 2. skill body (with optional token header injection)
-    skill_md = (REPO / "skill" / "local-file-bridge.skill.md").read_text()
+    skill_md = (REPO / SKILL_DIR / "SKILL.md").read_text()
     if skill_md.startswith("---"):
         skill_md = skill_md.split("---", 2)[2].lstrip("\n")
     if args.bridge_token:
@@ -83,9 +96,37 @@ def main():
         "access_grants": [{"principal_type": "user", "principal_id": "*", "permission": "read"}],
     }
     existing = api("GET", f"{base}/api/v1/skills/", tok)
-    if any(s.get("id") == SKILL_ID for s in existing):
-        r = api("POST", f"{base}/api/v1/skills/id/{SKILL_ID}/update", tok, skill)
-        print(f"✓ skill updated: {r.get('id')}")
+    live = next((s for s in existing if s.get("id") == SKILL_ID), None)
+    if live is not None:
+        # preview BEFORE overwriting (their staging pattern): show what
+        # the skill-body update would change, ask unless --yes
+        live_md = live.get("content") or ""
+        if live_md != skill_md:
+            diff = difflib.unified_diff(
+                live_md.splitlines(keepends=True),
+                skill_md.splitlines(keepends=True),
+                fromfile=f"live skill ({SKILL_ID})",
+                tofile=f"new skill ({SKILL_VERSION})",
+                n=1,
+            )
+            dlines = list(diff)
+            print(f"--- skill body diff ({len([l for l in dlines if l.startswith(('+', '-')) and not l.startswith(('+++', '---'))])} changed lines) ---")
+            for line in dlines[:120]:
+                print("  " + line.rstrip())
+            if len(dlines) > 120:
+                print(f"  … ({len(dlines) - 120} more diff lines)")
+            print("--- end diff ---")
+            if not args.yes:
+                try:
+                    ans = input("Apply this skill update? [y/N] ")
+                except EOFError:
+                    ans = ""
+                if ans.strip().lower() not in ("y", "yes"):
+                    print("⏭ skill NOT updated (preset setup continues)")
+                    live = None
+        if live is not None:
+            r = api("POST", f"{base}/api/v1/skills/id/{SKILL_ID}/update", tok, skill)
+            print(f"✓ skill updated: {r.get('id')}")
     else:
         r = api("POST", f"{base}/api/v1/skills/create", tok, skill)
         print(f"✓ skill created: {r.get('id')}")
