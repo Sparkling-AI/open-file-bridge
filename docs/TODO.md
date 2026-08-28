@@ -43,8 +43,10 @@ your OWUI keeps working, everything else gets blocked by CORS, not by trust.
 hardcoded wrong origin breaks the out-of-the-box demo. Options to make it
 safe *and* turnkey (pick one, implement in `src/file_bridge.py`):
 
-- [ ] First-run picker page asks for the OWUI URL and saves it next to the
+- [x] First-run picker page asks for the OWUI URL and saves it next to the
       folder choice in `~/.file-bridge.json` (best UX for non-technical users)
+      — DONE since the v2 picker (state.json) + origin field; 2.4 polished it
+      (Browse… dialog, OS-specific placeholder, live status, Stop button)
 - [ ] Config/env override: `FILE_BRIDGE_ALLOWED_ORIGIN` env var
 - [ ] Build-time flag baked into each org's installer
 

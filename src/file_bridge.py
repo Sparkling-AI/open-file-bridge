@@ -51,7 +51,7 @@ MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
-VERSION = "2.3"
+VERSION = "2.4"
 SKILL_VERSION = "2.3"   # keep in sync with skill/open-file-bridge/SKILL.md
 
 
@@ -87,6 +87,9 @@ ENDPOINT_RISK = {
     "/wheels": RiskClass.META,
     "/picker": RiskClass.META,
     "/api/root": RiskClass.META,
+    "/api/shutdown": RiskClass.META,   # local-only: stops the process
+    # desktop interaction — consent = the local user clicking the button
+    "/api/pick_folder": RiskClass.UI,  # local-only: native choose-folder dialog
     # reads
     "/list": RiskClass.READ,
     "/read": RiskClass.READ,
@@ -3036,6 +3039,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "endpoint_risk": {k: ENDPOINT_RISK[k] for k in
                                   sorted(ENDPOINT_RISK)}})
 
+        if u.path == "/ocr/config":
+            # UNGATED (loopback-bound server): lang list + engine version are
+            # the same disclosure class as /health (which already reports
+            # ocr_langs_available), and the local picker needs this on FIRST
+            # RUN — before the origin lock exists, while file endpoints stay
+            # hard-disabled (the settings page is the only thing reachable).
+            return self._json(200, {
+                "lang": _get_ocr_lang(),
+                "available": _ocr_langs_available(),
+                "engine": TESSERACT_VER or "tesseract",
+            })
+
         # ---- wheel hosting (token-free by design: static public wheels) ----
         if u.path == "/wheels":
             if WHEELS_DIR.is_dir():
@@ -3386,14 +3401,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(500, {"error": f"pptx parse failed: {e}"})
                 return self._json(200, out)
 
-            if u.path == "/ocr/config":
-                # GET: current OCR settings + available langs. POST via /api/root.
-                return self._json(200, {
-                    "lang": _get_ocr_lang(),
-                    "available": _ocr_langs_available(),
-                    "engine": TESSERACT_VER or "tesseract",
-                })
-
             if u.path == "/eml_read":
                 # RFC-822 email → headers + body + attachment metadata
                 # (P3, stdlib email — no add-on)
@@ -3463,6 +3470,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not self._is_loopback():
                 return self._json(403, {"error": "picker API is local only"}, cors=False)
             return self._do_api_root()
+
+        # native choose-folder dialog for the picker's Browse… button
+        # (loopback + the click itself = the consent; RiskClass.UI)
+        if u.path == "/api/pick_folder":
+            if not self._is_loopback():
+                return self._json(403, {"error": "picker API is local only"}, cors=False)
+            self._audit("/api/pick_folder")
+            path, err = pick_folder_dialog()
+            if err:
+                return self._json(500, {"ok": False, "error": err}, cors=False)
+            if not path:
+                return self._json(200, {"ok": True, "canceled": True}, cors=False)
+            return self._json(200, {"ok": True, "path": path}, cors=False)
+
+        # settings-page Stop button (loopback only; response is sent first,
+        # the shutdown itself fires ~0.4 s later from a Timer thread)
+        if u.path == "/api/shutdown":
+            if not self._is_loopback():
+                return self._json(403, {"error": "picker API is local only"}, cors=False)
+            self._audit("/api/shutdown", args={"source": "picker"})
+            if _SHUTDOWN_FN:
+                threading.Timer(0.4, _SHUTDOWN_FN).start()
+                return self._json(200, {"ok": True, "stopping": True,
+                                        "note": "File Bridge is stopping — this "
+                                                "page goes offline now"}, cors=False)
+            return self._json(500, {"ok": False, "error": "shutdown not available "
+                                    "in this mode"}, cors=False)
 
         root = load_root()
         ok, status, reason = check_request(self.headers)
@@ -4207,7 +4241,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._audit("/api/root", args={k: "[redacted]" for k in body})  # settings changes: keys only
 
         if "ocr_lang" in body:
-            _set_ocr_lang(str(body["ocr_lang"]).strip())
+            # tesseract wants codes joined with '+' (e.g. swe+eng). Users
+            # instinctively type 'eng, sv' — normalize separators, then
+            # validate format + membership so typos fail HERE with a clear
+            # message instead of at OCR time inside tesseract.
+            raw = str(body["ocr_lang"]).strip()
+            norm = re.sub(r"[\s,;+]+", "+", raw).strip("+") if raw else "eng"
+            if not re.fullmatch(r"[A-Za-z0-9_]+(\+[A-Za-z0-9_]+)*", norm):
+                return self._json(400, {"ok": False,
+                                        "error": "OCR languages must be tesseract "
+                                                 "codes joined with '+', e.g. "
+                                                 "eng+swe"}, cors=False)
+            avail = _ocr_langs_available()
+            if avail:
+                missing = [c for c in norm.split("+") if c not in avail]
+                if missing:
+                    return self._json(400, {"ok": False,
+                                            "error": f"language not installed: "
+                                                     f"{', '.join(missing)} "
+                                                     f"(installed: {', '.join(avail)})"},
+                                      cors=False)
+            _set_ocr_lang(norm)
 
         # security settings ------------------------------------------------
         if "allowed_origin" in body:
@@ -4269,11 +4323,15 @@ button{padding:10px 22px;font-size:16px;margin-top:12px;cursor:pointer}
 .ok{color:#0a7d32;font-weight:bold}.hint{color:#666;font-size:14px}
 .warn{color:#b00;font-weight:bold}.sec{background:#f4f6f8;padding:14px 18px;border-radius:8px;margin:14px 0}
 code{background:#eee;padding:2px 6px;border-radius:4px}</style></head><body>
-<h2>📁 File Bridge</h2>
+<h2>📁 File Bridge <span id="beat" style="font-size:18px;color:#999">●</span></h2>
+<p class="hint" id="beatinfo">checking whether the bridge is running…</p>
 <p>This little service lets <b>Open WebUI in your browser</b> read &amp; write files
 in <b>one folder you choose</b> on this computer. Nothing else is exposed.</p>
 <p>Shared folder:</p>
-<input id="root" placeholder="C:\\\\Users\\\\you\\\\Documents\\\\my-folder" value="__ROOT__">
+<div style="display:flex;gap:8px;align-items:stretch">
+<input id="root" placeholder="__ROOTPH__" value="__ROOT__" style="flex:1">
+<button id="browsebtn" onclick="browse()" style="margin-top:0;white-space:nowrap">Browse…</button>
+</div>
 <button onclick="setRoot()">Save folder</button>
 <p class="ok" id="status"></p>
 <div class="sec">
@@ -4289,8 +4347,13 @@ your OWUI admin (it is embedded in the skill by setup_owui.py).</p>
 <p class="hint" id="secstatus"></p>
 </div>
 <hr>
-<p>OCR language (for reading scanned PDFs / photos):</p>
-<input id="ocrlang" placeholder="swe+eng" value="__OCRLANG__" style="max-width:200px">
+<p>OCR language (for reading scanned PDFs / photos) — tick one or more:</p>
+<div id="langbox" style="background:#fff;border:1px solid #ddd;border-radius:6px;
+padding:10px 12px;font-size:15px;line-height:2.1"></div>
+<p class="hint">Ticks combine automatically in tesseract syntax (e.g. <code>eng+swe</code>
+— combining is free, mixing e.g. Swedish AND English fixes å/ä/ö and digits).
+Need a code that is not listed? Type it below before saving.</p>
+<input id="ocrlang" placeholder="eng+swe" value="__OCRLANG__" style="max-width:200px" oninput="syncBoxes(false)">
 <button onclick="setLang()">Save language</button>
 <p class="hint" id="langs"></p>
 <hr>
@@ -4305,25 +4368,72 @@ font-size:13px;color:#333;text-align:left"></div>
 <p class="hint" id="previnfos"></p>
 </div>
 <hr>
-<p class="hint">Status: __STATUS__<br>Keep this window/service running while using Open WebUI.
-You can close this browser tab — the service keeps running.</p>
+<p class="hint">Status: __STATUS__<br>
+You can close this browser tab — the service keeps running in the background.
+It stops only when you stop it:</p>
+<button onclick="stopBridge()" style="background:#fff1f0">Stop File Bridge</button>
+<p class="hint">…or quit it like any app: right-click its icon in the Dock (macOS),
+Ctrl+C in a terminal, or stop the service (Linux).</p>
 <script>
+const LANG_NAMES={eng:'English',swe:'Swedish',chi_sim:'Chinese (Simplified)',
+chi_tra:'Chinese (Traditional)',dan:'Danish',nor:'Norwegian',fin:'Finnish',
+isl:'Icelandic',deu:'German',fra:'French',spa:'Spanish',ita:'Italian',
+por:'Portuguese',nld:'Dutch',rus:'Russian',ukr:'Ukrainian',pol:'Polish',
+ces:'Czech',slk:'Slovak',slv:'Slovenian',hrv:'Croatian',srp:'Serbian',
+bul:'Bulgarian',ell:'Greek',hun:'Hungarian',ron:'Romanian',tur:'Turkish',
+ara:'Arabic',heb:'Hebrew',jpn:'Japanese',kor:'Korean',hin:'Hindi',tha:'Thai',
+vie:'Vietnamese',ind:'Indonesian',cat:'Catalan',glg:'Galician',eus:'Basque',
+lit:'Lithuanian',lav:'Latvian',est:'Estonian',osd:'auto-detect (page orientation)'};
+function esc(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+function fmtSize(n){if(n==null)return '';if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB';}
 async function refresh(){const s=await (await fetch('/state')).json();
 document.getElementById('root').value=s.root||'';
 document.getElementById('origin').value=s.allowed_origin||'';
 document.getElementById('secstatus').textContent='Security mode: '+s.security;
 const c=await (await fetch('/ocr/config')).json();
 document.getElementById('ocrlang').value=c.lang||'eng';
-document.getElementById('langs').textContent='Installed: '+(c.available||[]).join(', ')+' — engine: '+(c.engine||'?');
+renderLangs(c.available,c.lang);
+document.getElementById('langs').textContent='engine: '+(c.engine||'?');
 renderPreview();}
-function esc(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
-function fmtSize(n){if(n==null)return '';if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB';}
+function renderLangs(avail,cur){
+ const box=document.getElementById('langbox');
+ const sel=new Set(String(cur||'').split('+').filter(Boolean));
+ box.innerHTML=(avail&&avail.length)?avail.map(c=>
+  '<label style="margin-right:16px;white-space:nowrap">'+
+  '<input type="checkbox" value="'+esc(c)+'"'+(sel.has(c)?' checked':'')+
+  ' onchange="syncBoxes(true)"> '+esc(c)+
+  (LANG_NAMES[c]?' — '+LANG_NAMES[c]:'')+'</label>').join(' ')
+  :'<span class="hint">no installed language files found — type codes below instead</span>';}
+function syncBoxes(fromBoxes){
+ const inp=document.getElementById('ocrlang');
+ if(fromBoxes){
+  const v=[...document.querySelectorAll('#langbox input:checked')].map(x=>x.value);
+  inp.value=v.join('+');
+ }else{
+  const sel=new Set(inp.value.split(/[+,\\s]+/).filter(Boolean));
+  document.querySelectorAll('#langbox input').forEach(x=>x.checked=sel.has(x.value));
+ }}
+async function beat(){
+ const dot=document.getElementById('beat'),info=document.getElementById('beatinfo');
+ try{
+  const h=await fetch('/health',{cache:'no-store'});
+  if(!h.ok)throw new Error('http '+h.status);
+  const j=await h.json();
+  dot.style.color='#0a7d32';
+  info.textContent='Running · v'+(j.version||'?')+' · security: '+(j.security||'?')+
+   (j.ok?'':' · no folder chosen yet');
+ }catch(e){
+  dot.style.color='#b00';
+  info.textContent='no response — the bridge has stopped';
+ }}
+setInterval(beat,5000);beat();
 async function renderPreview(){
  const box=document.getElementById('preview'), info=document.getElementById('previnfos');
  try{
   const h=await (await fetch('/health')).json();
   if(!h.ok){box.innerHTML='🔒 '+(h.hint||'no folder chosen yet');info.textContent='';return;}
   const t=await (await fetch('/directory_tree?path=.&max_entries=500&max_depth=6')).json();
+  if(!t.ok&&t.error&&!t.entries){box.innerHTML='🔒 '+esc(t.error);info.textContent='';return;}
   let lines=[],count=0;
   function walk(node,depth){
    if(count>=500){return;}
@@ -4350,6 +4460,17 @@ async function setRoot(){
  const d=await res.json();
  document.getElementById('status').textContent=d.ok?'✓ Saved: '+d.root:'✗ '+d.error;
  refresh();}
+async function browse(){
+ const b=document.getElementById('browsebtn'),st=document.getElementById('status');
+ b.disabled=true;b.textContent='Waiting for dialog…';
+ try{
+  const res=await fetch('/api/pick_folder',{method:'POST'});
+  const d=await res.json();
+  if(d.ok&&d.path){document.getElementById('root').value=d.path;st.textContent='';}
+  else if(d.ok){st.textContent='';}                       // canceled — no drama
+  else{st.textContent='✗ '+(d.error||'folder picker failed');}
+ }catch(e){st.textContent='✗ folder picker failed: '+(e.message||e);}
+ b.disabled=false;b.textContent='Browse…';}
 async function setOrigin(){
  const o=document.getElementById('origin').value.trim();
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({allowed_origin:o})});
@@ -4364,6 +4485,11 @@ async function clearToken(){
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:{clear:true}})});
  const d=await res.json();
  document.getElementById('secstatus').textContent='Security mode: '+d.security;}
+async function stopBridge(){
+ if(!confirm('Stop the File Bridge service?\\nOpen WebUI will lose file access until you start it again.'))return;
+ try{await fetch('/api/shutdown',{method:'POST'});}catch(e){}
+ document.getElementById('beat').style.color='#b00';
+ document.getElementById('beatinfo').textContent='stopping… this page goes offline now';}
 refresh();
 </script></body></html>"""
 
@@ -4438,6 +4564,247 @@ class _RotatingLog:
             self._fh.flush()
 
 
+# ------------------------------------- native folder picker (P3, stdlib-only)
+# The local settings page's "Browse…" button. Uses each OS's built-in
+# choose-folder dialog via subprocess — no GUI toolkit dependency:
+#   macOS:   osascript "choose folder"          (always present)
+#   Windows: PowerShell FolderBrowserDialog      (always present, -STA)
+#   Linux:   zenity, else kdialog               (best effort)
+# Only reachable from the loopback picker API — the local user clicking
+# the button IS the consent, same stance as /reveal but local-initiated.
+
+_ACTIVE_DIALOGS: set = set()
+_DIALOGS_LOCK = threading.Lock()
+
+
+def _run_dialog(cmd: list) -> tuple[int, bytes, bytes]:
+    """Run a native dialog subprocess, registered so a bridge shutdown can
+    kill it (Stop button / Dock Quit while a dialog is open must not leave
+    an orphaned dialog on screen). Returns (returncode, stdout, stderr)."""
+    p = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    with _DIALOGS_LOCK:
+        _ACTIVE_DIALOGS.add(p)
+    try:
+        try:
+            out, err = p.communicate(timeout=600)
+        except subprocess.TimeoutExpired:
+            p.kill()
+            out, err = p.communicate()
+            raise
+    finally:
+        with _DIALOGS_LOCK:
+            _ACTIVE_DIALOGS.discard(p)
+    return p.returncode, out or b"", err or b""
+
+
+def kill_active_dialogs() -> None:
+    """Close any still-open native dialogs (called on bridge shutdown)."""
+    with _DIALOGS_LOCK:
+        for p in list(_ACTIVE_DIALOGS):
+            try:
+                p.kill()
+            except Exception:
+                pass
+
+
+def pick_folder_dialog(prompt: str = "File Bridge — choose the folder to share"
+                       ) -> tuple[str | None, str | None]:
+    """Returns (path, error). (None, None) → the user canceled the dialog."""
+    try:
+        if sys.platform == "darwin":
+            script = ("POSIX path of (choose folder with prompt \""
+                      + prompt.replace("\\", "\\\\").replace('"', '\\"') + "\")")
+            try:
+                rc, out_b, err_b = _run_dialog(["osascript", "-e", script])
+            except subprocess.TimeoutExpired:
+                return None, "folder dialog timed out (10 min) — try again or type the path"
+            err = err_b.decode("utf-8", "replace")
+            if rc != 0:
+                if "cancel" in err.lower():
+                    return None, None
+                return None, err.strip()[:300] or f"osascript exited {rc}"
+            out = out_b.decode("utf-8", "replace").strip()
+            if out.endswith("/") and len(out) > 1:   # POSIX path keeps a /
+                out = out[:-1]
+            return out or None, None
+        if _IS_WINDOWS:
+            ps = ("& {Add-Type -AssemblyName System.Windows.Forms; "
+                  "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+                  "$d.Description = 'File Bridge: choose the folder to share'; "
+                  "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
+                  "{ [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+                  "[Console]::Out.Write($d.SelectedPath) }")
+            try:
+                rc, out_b, err_b = _run_dialog(["powershell", "-NoProfile", "-STA",
+                                                "-Command", ps])
+            except subprocess.TimeoutExpired:
+                return None, "folder dialog timed out (10 min) — try again or type the path"
+            if rc == 0:
+                sel = out_b.decode("utf-8", "replace").strip()
+                if sel:
+                    return sel, None
+                return None, None   # dialog closed without a choice
+            return None, (err_b.decode("utf-8", "replace").strip()[:300]
+                          or f"powershell exited {rc}")
+        import shutil as _sh
+        home = os.path.expanduser("~")
+        if _sh.which("zenity"):
+            try:
+                rc, out_b, err_b = _run_dialog(
+                    ["zenity", "--file-selection", "--directory",
+                     "--filename", home + "/", "--title", prompt])
+            except subprocess.TimeoutExpired:
+                return None, "folder dialog timed out (10 min) — try again or type the path"
+            sel = out_b.decode("utf-8", "replace").strip()
+            if rc == 0 and sel:
+                return sel, None
+            if rc in (0, 1):
+                return None, None   # 1 = canceled, empty = canceled
+            return None, (err_b.decode("utf-8", "replace").strip()[:300]
+                          or f"zenity exited {rc}")
+        if _sh.which("kdialog"):
+            try:
+                rc, out_b, _err_b = _run_dialog(
+                    ["kdialog", "--getexistingdirectory", home])
+            except subprocess.TimeoutExpired:
+                return None, "folder dialog timed out (10 min) — try again or type the path"
+            sel = out_b.decode("utf-8", "replace").strip()
+            if rc == 0 and sel:
+                return sel, None
+            return None, None
+        return None, ("no folder dialog found — install zenity, or type the "
+                      "folder path manually")
+    except OSError as e:
+        return None, f"could not launch the folder dialog: {e}"
+
+
+# ------------------------------------- macOS Dock presence (P3, stdlib-only)
+# A windowed PyInstaller .app never touches AppKit, so LaunchServices
+# classifies the process BackgroundOnly — no Dock icon, no visible sign
+# the bridge is running (user feedback 2026-08-28). Bootstrapping
+# NSApplication via ctypes fixes that without adding a dependency:
+#   - activation policy Regular → the app shows in the Dock while running
+#   - Dock / right-click → Quit works: NSApplication's default terminate
+#     handles the quit Apple event (verified empirically on arm64)
+#   - [NSApp run] parks the MAIN thread; the HTTP server moves to a
+#     daemon thread. The settings-page Stop button (and any future need
+#     to stop programmatically) breaks the loop with stop: plus
+#     CFRunLoopStop(main) — thread-safe, no NSEvent struct marshalling.
+# ctypes pitfall (cost a segfault in testing): objc_getClass /
+# sel_registerName / objc_msgSend MUST have restype/argtypes declared,
+# or ctypes truncates 64-bit pointers to c_int.
+# Every step is guarded — if anything fails, main() falls back to plain
+# serve_forever() and the bridge works exactly as before.
+
+_IS_MAC_FROZEN = sys.platform == "darwin" and bool(getattr(sys, "frozen", False))
+
+
+class CocoaDock:
+    """AppKit bootstrap for the frozen macOS app. .ok False → disabled."""
+
+    def __init__(self):
+        self.ok = False
+        self._app = None
+        if not _IS_MAC_FROZEN:
+            return
+        try:
+            import ctypes
+            self._objc = ctypes.CDLL("/usr/lib/libobjc.dylib")
+            ctypes.CDLL("/System/Library/Frameworks/AppKit.framework/AppKit")
+            ob = self._objc
+            ob.objc_getClass.restype = ctypes.c_void_p
+            ob.objc_getClass.argtypes = [ctypes.c_char_p]
+            ob.sel_registerName.restype = ctypes.c_void_p
+            ob.sel_registerName.argtypes = [ctypes.c_char_p]
+            ob.objc_msgSend.restype = ctypes.c_void_p
+            ob.objc_msgSend.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            app = ob.objc_msgSend(ob.objc_getClass(b"NSApplication"),
+                                  ob.sel_registerName(b"sharedApplication"))
+            if not app:
+                return
+            set_pol = ob.objc_msgSend
+            set_pol.restype = None
+            set_pol.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_long]
+            set_pol(app, ob.sel_registerName(b"setActivationPolicy:"), 0)  # Regular
+            self._app = app
+            self.ok = True
+        except Exception:
+            self.ok = False
+
+    def run_forever(self):
+        """Park the main thread in the AppKit event loop until stopped."""
+        if not self.ok:
+            return
+        import ctypes
+        ob = ctypes.CDLL("/usr/lib/libobjc.dylib")   # fresh handle: argtypes
+        ob.objc_getClass.restype = ctypes.c_void_p   # mutations must not race
+        ob.sel_registerName.restype = ctypes.c_void_p
+        f = ob.objc_msgSend
+        f.restype = None
+        f.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        f(self._app, ob.sel_registerName(b"run"))
+
+    def request_stop(self):
+        """Break the AppKit loop (safe from any thread). No-op if not ok.
+        The canonical pyobjc recipe: [NSApp stop:] sets a flag that the
+        run loop only checks WHEN IT PROCESSES AN EVENT — an idle loop
+        would sleep forever (verified: performSelectorOnMainThread alone
+        does not wake it). So: stop: + performSelectorOnMainThread for
+        good measure, then an application-defined no-op NSEvent to wake
+        the loop and make it observe the flag."""
+        if not self.ok:
+            return
+        try:
+            import ctypes
+
+            class _NSPoint(ctypes.Structure):
+                _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+            ob = ctypes.CDLL("/usr/lib/libobjc.dylib")
+            ob.objc_getClass.restype = ctypes.c_void_p
+            ob.sel_registerName.restype = ctypes.c_void_p
+            sel = ob.sel_registerName
+            # 1. set the stop flag (idempotent, cheap ivar write)
+            f_stop = ob.objc_msgSend
+            f_stop.restype = None
+            f_stop.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            f_stop(self._app, sel(b"stop:"), None)
+            # 2. also run stop: on the main thread (documented-safe path)
+            f_perf = ob.objc_msgSend
+            f_perf.restype = None
+            f_perf.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                               ctypes.c_void_p, ctypes.c_void_p, ctypes.c_bool]
+            f_perf(self._app,
+                   sel(b"performSelectorOnMainThread:withObject:waitUntilDone:"),
+                   sel(b"stop:"), None, False)
+            # 3. wake the loop with a no-op event so it observes the flag
+            #    (+[NSEvent otherEventWithType:...] is a CLASS method —
+            #    calling it on an alloc'd instance silently no-ops)
+            f_ev = ob.objc_msgSend
+            f_ev.restype = ctypes.c_void_p
+            f_ev.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                             ctypes.c_longlong, _NSPoint, ctypes.c_ulonglong,
+                             ctypes.c_double, ctypes.c_longlong, ctypes.c_void_p,
+                             ctypes.c_short, ctypes.c_longlong, ctypes.c_longlong]
+            ev = f_ev(ob.objc_getClass(b"NSEvent"),
+                      sel(b"otherEventWithType:location:modifierFlags:"
+                          b"timestamp:windowNumber:context:subtype:"
+                          b"data1:data2:"),
+                      15, _NSPoint(0, 0), 0, 0.0, 0, None, 0, 0, 0)  # AppDefined
+            if not ev:
+                return
+            f_post = ob.objc_msgSend
+            f_post.restype = None
+            f_post.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                               ctypes.c_void_p, ctypes.c_bool]
+            f_post(self._app, sel(b"postEvent:atStart:"), ev, True)
+        except Exception:
+            pass
+
+
+_SHUTDOWN_FN = None   # set in main(): called from a server thread to stop
+
+
 def main():
     # PyInstaller --windowed (shipped Windows exe; console=False) leaves
     # sys.stdout/sys.stderr as None on Windows when there is no console —
@@ -4502,6 +4869,15 @@ def main():
             html = html.replace("__STATUS__",
                                 f"sharing {root} · security {security_mode()}" if root
                                 else f"no folder chosen yet · security {security_mode()}")
+            # placeholder shows a path shaped like THIS os (user feedback:
+            # C:\Users\... on a Mac reads as a Windows-only tool)
+            if _IS_WINDOWS:
+                rootph = "C:\\Users\\you\\Documents\\my-folder"
+            elif sys.platform == "darwin":
+                rootph = "/Users/you/Documents/my-folder"
+            else:
+                rootph = "/home/you/Documents/my-folder"
+            html = html.replace("__ROOTPH__", rootph)
             body = html.encode()
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
@@ -4513,21 +4889,63 @@ def main():
     Handler.do_GET = do_GET_picker
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
-    with socketserver.ThreadingTCPServer(("127.0.0.1", PORT), Handler) as httpd:
-        url = f"http://127.0.0.1:{PORT}"
-        mode = security_mode()
-        print(f"File Bridge v{VERSION} running at {url}  (Ctrl+C to stop)")
-        print(f"Security mode: {mode}")
-        if mode == "UNLOCKED":
-            print("⚠ UNLOCKED: file endpoints are DISABLED until you set the allowed")
-            print("  Open WebUI origin (and optionally a token) in the settings page.")
-        if not root:
-            print("No folder set — opening folder picker in your browser...")
-            threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    # daemon request threads: Stop/Dock-Quit must exit immediately instead of
+    # hanging in server_close() joining a thread that is parked on a
+    # 10-minute native folder dialog (ThreadingHTTPServer does the same).
+    socketserver.ThreadingTCPServer.daemon_threads = True
+    try:
+        httpd = socketserver.ThreadingTCPServer(("127.0.0.1", PORT), Handler)
+    except OSError:
+        # second launch while the first bridge still holds the port (e.g.
+        # the Dock icon got clicked again) — die politely instead of a
+        # windowed traceback dialog, and send the user to the live picker.
+        print(f"File Bridge is already running at http://127.0.0.1:{PORT} — "
+              f"this second copy exits.")
+        try:
+            webbrowser.open(f"http://127.0.0.1:{PORT}")
+        except Exception:
+            pass
+        return
+
+    # macOS .app: Dock presence via the CocoaDock bootstrap — the server
+    # moves to a daemon thread and the main thread parks in the AppKit
+    # loop (Dock icon + working Quit). Everywhere else: serve_forever on
+    # the main thread exactly as before. Both modes stop cleanly via
+    # /api/shutdown (settings page Stop button).
+    global _SHUTDOWN_FN
+    dock = CocoaDock()
+    url = f"http://127.0.0.1:{PORT}"
+    mode = security_mode()
+    if dock.ok:
+
+        def _stop_cocoa():
+            dock.request_stop()      # break the AppKit loop (main thread)
+            httpd.shutdown()         # stop serving (Timer thread, ≤0.5 s)
+        _SHUTDOWN_FN = _stop_cocoa
+        threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    else:
+        _SHUTDOWN_FN = httpd.shutdown
+
+    print(f"File Bridge v{VERSION} running at {url}  (Ctrl+C to stop)")
+    print(f"Security mode: {mode}")
+    if mode == "UNLOCKED":
+        print("⚠ UNLOCKED: file endpoints are DISABLED until you set the allowed")
+        print("  Open WebUI origin (and optionally a token) in the settings page.")
+    if not root:
+        print("No folder set — opening folder picker in your browser...")
+        threading.Timer(0.5, lambda: webbrowser.open(url)).start()
+    if dock.ok:
+        print("Running with a Dock icon — Quit from the Dock, or the Stop button"
+              " on the settings page, ends the bridge.")
+        dock.run_forever()
+    else:
         try:
             httpd.serve_forever()
         except KeyboardInterrupt:
-            print("\nFile Bridge stopped.")
+            pass
+    kill_active_dialogs()   # no orphaned choose-folder dialog after exit
+    httpd.server_close()
+    print("\nFile Bridge stopped.")
 
 
 if __name__ == "__main__":

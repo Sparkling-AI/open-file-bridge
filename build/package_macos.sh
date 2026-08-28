@@ -26,6 +26,11 @@ for asset in wheels tessdata; do
   fi
 done
 
+# App icon (build/appicon.icns — see docs/BUILDING.md to regenerate)
+if [ -f build/appicon.icns ]; then
+  cp build/appicon.icns "$APP/Contents/Resources/appicon.icns"
+fi
+
 cat > "$APP/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -37,12 +42,15 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>CFBundleVersion</key>         <string>1.0.0</string>
   <key>CFBundlePackageType</key>     <string>APPL</string>
   <key>CFBundleExecutable</key>      <string>FileBridge</string>
+  <key>CFBundleIconFile</key>        <string>appicon</string>
   <key>LSMinimumSystemVersion</key>  <string>11.0</string>
-  <key>LSUIElement</key>             <true/>
 </dict>
 </plist>
 PLIST
-# LSUIElement=true: no Dock icon; runs quietly in background (it's a helper app)
+# NO LSUIElement (2026-08-28, user feedback): the bridge shows a normal Dock
+# icon while running — that is how you tell it is up. The binary itself
+# bootstraps NSApplication (see CocoaDock in src/file_bridge.py) so Dock →
+# Quit works too; the settings page also has a Stop button.
 
 if [[ "$SIGN" == "--sign" ]]; then
   codesign --deep --force --sign "Developer ID Application: YOUR NAME (TEAMID)" "$APP"

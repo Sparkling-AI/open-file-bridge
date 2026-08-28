@@ -70,6 +70,24 @@ check "origin saved"      '"security": *"origin"'  "$(curl -s -X POST $BRIDGE/ap
 check "token generated"   'test-token-1234'        "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"token":{"set":"test-token-1234"}}')"
 check "state shows mode"  'token+origin'           "$(curl -s $BRIDGE/state)"
 
+# ---------- picker page UX (2.4): placeholders, Browse, OCR validation -----
+PH=$(curl -s $BRIDGE/picker)
+check "picker: browse button"     'id="browsebtn"'   "$PH"
+check "picker: heartbeat marker"  'id="beatinfo"'    "$PH"
+check "picker: OCR checkbox box"  'id="langbox"'     "$PH"
+check "picker: stop button"       'stopBridge'       "$PH"
+case "$(uname -s)" in
+  Darwin)  check "picker: mac placeholder"     '/Users/you/Documents' "$PH" ;;
+  Linux)   check "picker: linux placeholder"   '/home/you/Documents'  "$PH" ;;
+  MINGW*|MSYS*) check "picker: win placeholder" 'C:\\\\Users'        "$PH" ;;
+esac
+check "ocr_lang: 'eng, swe' normalized to eng+swe" '"ocr_lang": *"eng[+]swe"' \
+  "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"ocr_lang":"eng, swe"}')"
+check "ocr_lang: unknown code rejected"   'language not installed' \
+  "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"ocr_lang":"eng+xyzzy"}')"
+check "ocr_lang: junk format rejected"    'must be tesseract codes' \
+  "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"ocr_lang":"!!!"}')"
+
 # ---------- token tier ----------
 check "no token denied"         'missing or invalid bridge token' "$(curl -s "$BRIDGE/read?path=notes.txt" -H "Origin: http://owui.test:8080")"
 check "wrong token denied"      'missing or invalid bridge token' "$(curl -s "$BRIDGE/read?path=notes.txt" -H "Origin: http://owui.test:8080" -H "X-Bridge-Token: nope")"
@@ -617,7 +635,8 @@ for ep in ('/write','/write_b64','/edit','/delete','/write_many','/zip','/unzip'
            '/pdf_text','/ocr','/ocr_pdf','/pdf_op','/docx_merge',
            '/pptx_from_template','/image_info','/reveal','/list','/read','/peek',
            '/stat','/search','/html_text','/csv_head','/csv_stats','/xlsx_read',
-           '/docx_read','/pptx_read','/directory_tree'):
+           '/docx_read','/pptx_read','/directory_tree','/api/pick_folder',
+           '/api/shutdown'):
     if ep not in d:
         print('missing:', ep)
 ")

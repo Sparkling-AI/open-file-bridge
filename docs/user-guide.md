@@ -18,19 +18,27 @@ everything happens between your browser and your own machine.
 1. Download `FileBridge-Setup.exe` (or `FileBridge.exe`).
 2. Double-click. If Windows shows **"Windows protected your PC"**
    (SmartScreen — normal for new unsigned apps): click **More info → Run anyway**.
-3. Your browser opens the Open File Bridge page. Paste the folder you want to share,
-   e.g. `C:\Users\you\Documents\my-project`, click **Save folder**.
-4. Done. A small Open File Bridge process now runs in the background.
-   Keep it running while you use Open WebUI (re-launch it any time from the
-   Start menu / desktop icon; your folder choice is remembered).
+3. Your browser opens the Open File Bridge page. Pick the folder to share with
+   **Browse…** (native folder dialog), or paste a path, e.g.
+   `C:\Users\you\Documents\my-project`, then click **Save folder**.
+4. Done. A small Open File Bridge process now runs in the background
+   (a green ● on its settings page confirms it is live). Re-launch it any
+   time from the Start menu / desktop icon; your folder choice is remembered.
 
 ### macOS
 1. Download `FileBridge-macos.zip`, unzip it, drag **FileBridge** into **Applications**.
 2. First launch: **right-click FileBridge → Open → Open**
    (bypasses Gatekeeper for unsigned apps — needed only once).
-3. Your browser opens the Open File Bridge page. Type or paste the folder to share,
-   e.g. `/Users/you/Documents/my-project`, click **Save folder**.
-4. Done. Open File Bridge runs quietly in the background (no Dock icon).
+3. Your browser opens the Open File Bridge page. Pick the folder to share with
+   **Browse…** (native folder dialog), or type/paste a path, e.g.
+   `/Users/you/Documents/my-project`, then click **Save folder**.
+4. Done. File Bridge runs in the background with an **icon in the Dock** —
+   that is how you can see it is running. Stop it with the **Stop File Bridge**
+   button at the bottom of the settings page, or quit it from the Dock
+   (right-click → Quit). Launching it again while it runs just opens the
+   settings page.
+5. OCR languages: tick one or more checkboxes (e.g. English + Swedish —
+   combining fixes å/ä/ö *and* digits). Codes can also be typed manually.
 
 ### Linux
 Either run the binary:
