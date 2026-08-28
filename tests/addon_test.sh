@@ -134,5 +134,21 @@ check "ocr_pdf bad out ext"  'must end in .pdf'  "$(curl -s -X POST $BRIDGE/ocr_
 check "ocr_pdf traversal"    'escapes'           "$(curl -s -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"../../etc/passwd","out":"x.pdf"}')"
 check "ocr_pdf missing src"  'no such file'      "$(curl -s -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"ghost.png","out":"x.pdf"}')"
 
+# ---------- /pdf_text?mode=images (P2 vision mode) ----------
+IM=$(curl -s -m 60 "$BRIDGE/pdf_text?path=inv.pdf&mode=images")
+check "images mode pages"     '"page_count": *1'  "$IM"
+check "images mode rendered"  '"rendered": *1'    "$IM"
+check "images mode has b64"   'png_b64'           "$IM"
+# PNG magic inside the base64 (verifies the hand-rolled encoder)
+if echo "$IM" | python3 -c "import json,sys,base64; d=json.load(sys.stdin); b=base64.b64decode(d['pages'][0]['png_b64']); sys.exit(0 if b[:8]==b'\x89PNG\r\n\x1a\n' else 1)"; then echo "  PASS: images mode valid PNG"; else echo "  FAIL: images mode bad PNG"; fail=1; fi
+# page selection works in images mode too
+IM2=$(curl -s -m 60 "$BRIDGE/pdf_text?path=inv.pdf&mode=images&max_pages=1")
+check "images mode max_pages" '"rendered": *1'    "$IM2"
+# cache: second identical call is a hit
+IM3=$(curl -s -m 60 "$BRIDGE/pdf_text?path=inv.pdf&mode=images")
+check "images cache hit"      '"cached": *true'   "$IM3"
+# text mode unaffected (no png_b64 key)
+if curl -s "$BRIDGE/pdf_text?path=inv.pdf" | grep -q png_b64; then echo "  FAIL: text mode leaked images"; fail=1; else echo "  PASS: text mode unaffected"; fi
+
 echo
 if [[ $fail -eq 0 ]]; then echo "ALL ADDON TESTS PASSED ✅"; else echo "SOME ADDON TESTS FAILED ❌"; exit 1; fi

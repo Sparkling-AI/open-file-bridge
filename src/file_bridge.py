@@ -353,6 +353,88 @@ except ImportError:
     fitz = None
     HAVE_PYMUPDF = False
 
+try:
+    import pypdfium2  # optional: /pdf_text?mode=images raster mode
+    HAVE_PDFIUM = True
+except ImportError:
+    pypdfium2 = None
+    HAVE_PDFIUM = False
+
+
+# ------------------------------------------- /pdf_text mode=images (P2)
+# Rasterize pages for VISION models: each page → PNG data URL, 144 dpi
+# (scale 2.0 of 72 dpi base), ≤100 pages (openworker pdf_support pattern).
+# Hand-rolled PNG encoder — no Pillow dependency on the bridge side.
+
+RASTER_SCALE = 2.0    # ~144 dpi; readable text without giant payloads
+RASTER_MAX_PAGES = 100
+
+
+def _encode_png(width: int, height: int, pixels: bytes, stride: int,
+                channels: int) -> bytes:
+    """Minimal PNG writer (RGB/RGBA 8-bit), stdlib zlib only (MIT,
+    openworker coworker/pdf_support.py)."""
+    import struct
+    import zlib
+    color_type = 6 if channels == 4 else 2
+    row_bytes = width * channels
+    scanlines = bytearray()
+    for y in range(height):
+        scanlines.append(0)  # filter: None
+        start = y * stride
+        scanlines.extend(pixels[start:start + row_bytes])
+
+    def chunk(tag: bytes, payload: bytes) -> bytes:
+        return (struct.pack(">I", len(payload)) + tag + payload
+                + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF))
+
+    header = struct.pack(">IIBBBBB", width, height, 8, color_type, 0, 0, 0)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header)
+            + chunk(b"IDAT", zlib.compress(bytes(scanlines), 6))
+            + chunk(b"IEND", b""))
+
+
+def pdf_rasterize(p: Path, pages_param: str, max_pages: int) -> tuple[int, dict]:
+    """/pdf_text?mode=images backend: pages as PNG data URLs. Returns
+    (http_code, response)."""
+    try:
+        doc = pypdfium2.PdfDocument(str(p))
+    except Exception as e:
+        return 500, {"error": f"pdfium could not open the document: {e}"}
+    try:
+        total = len(doc)
+        wanted = list(range(total))
+        if pages_param:
+            wanted = []
+            for part in pages_param.split(","):
+                part = part.strip()
+                if "-" in part:
+                    a, b = part.split("-", 1)
+                    wanted.extend(range(int(a) - 1, min(int(b), total)))
+                elif part:
+                    wanted.append(int(part) - 1)
+            wanted = sorted(set(w for w in wanted if 0 <= w < total))
+        wanted = wanted[:max_pages]
+        pages_out = []
+        budget = MAX_BINARY  # guard total payload like the text path guards chars
+        for i in wanted:
+            bitmap = doc[i].render(scale=RASTER_SCALE, rev_byteorder=True)
+            png = _encode_png(bitmap.width, bitmap.height, bytes(bitmap.buffer),
+                              bitmap.stride, bitmap.n_channels)
+            budget -= len(png)
+            pages_out.append({"page": i + 1, "size": [bitmap.width, bitmap.height],
+                              "png_b64": base64.b64encode(png).decode("ascii")})
+            if budget <= 0:
+                pages_out.append({"page": i + 1, "note": "truncated (byte budget)"})
+                break
+        return 200, {"path": str(p.name), "mode": "images", "page_count": total,
+                     "pages": pages_out, "rendered": len(pages_out),
+                     "note": "each page is a PNG data URL — decode png_b64 and "
+                             "show to the vision model, or upload to the chat"}
+    finally:
+        doc.close()
+
+
 
 def _app_dir() -> Path:
     """Directory where the app's bundled assets live (wheels/, tessdata/,
@@ -2110,7 +2192,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
             # ---------- optional PDF/OCR add-on endpoints ----------
 
             if u.path == "/pdf_text":
-                # Extract embedded text layer from a PDF (pymupdf).
+                # Extract embedded text layer from a PDF (pymupdf) — or, with
+                # mode=images, rasterize pages for vision models (pypdfium2).
                 if not HAVE_PYMUPDF:
                     return self._json(501, {"error": "PDF add-on not installed on this machine "
                                                      "(pip install pymupdf)"})
@@ -2118,6 +2201,25 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not p.is_file():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
                 pages_param = q.get("pages", "")  # "1-3,5" optional, 1-indexed
+                mode = q.get("mode", "text")
+                if mode == "images":
+                    if not HAVE_PDFIUM:
+                        return self._json(501, {"error": "images mode needs pypdfium2 "
+                                                         "(pip install pypdfium2)"})
+                    try:
+                        max_pages = max(1, min(int(q.get("max_pages", str(RASTER_MAX_PAGES))),
+                                               RASTER_MAX_PAGES))
+                    except ValueError:
+                        max_pages = RASTER_MAX_PAGES
+                    cache_params = {"mode": "images", "pages": pages_param,
+                                    "max_pages": max_pages}
+                    hit, cached = cache_get(p, "pdf_text", cache_params)
+                    if hit:
+                        return self._json(200, {**cached, "cached": True})
+                    code, out = pdf_rasterize(p, pages_param, max_pages)
+                    if code == 200:
+                        cache_put(p, "pdf_text", cache_params, out)
+                    return self._json(code, out)
                 cache_params = {"pages": pages_param}
                 hit, cached = cache_get(p, "pdf_text", cache_params)
                 if hit:
