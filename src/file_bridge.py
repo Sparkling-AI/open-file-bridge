@@ -1438,6 +1438,161 @@ def _pptx_read(path: Path, q: dict):
     return {"path": q.get("path"), "slide_count": len(slides), "slides": slides}
 
 
+# -------------------------- office writes: docx_merge + pptx_from_template (P2)
+# Real office demand (openworker issue #454): fill {{placeholders}} in a
+# .docx template, and build a deck from a .potx/.pptx layout template.
+# These WRITE office files → they need the native libs (stdlib can't
+# author OOXML safely), get 501 without them, and run the standard
+# snapshot + confirmation + rate-breaker write pipeline.
+
+_PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.\-]+)\s*\}\}")
+
+
+def _iter_docx_paragraphs(doc):
+    """Paragraphs in the body + all tables (python-docx leaves table cells
+    out of doc.paragraphs)."""
+    for p in doc.paragraphs:
+        yield p
+    for t in doc.tables:
+        for row in t.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    yield p
+
+
+def _fill_run_text(text: str, values: dict, missing: list):
+    def sub(m):
+        key = m.group(1)
+        if key in values and key not in missing:
+            return str(values[key])
+        missing.append(key)
+        return m.group(0)
+    return _PLACEHOLDER_RE.sub(sub, text)
+
+
+def _docx_placeholder_fill(data: bytes, values: dict) -> tuple[bytes, list]:
+    from docx import Document
+    bio = io.BytesIO(data)
+    doc = Document(bio)
+    missing = []
+    for para in _iter_docx_paragraphs(doc):
+        # python-docx merges adjacent same-format runs; replace per-run so
+        # formatting is preserved. Multi-run placeholders are caught by the
+        # joined-text pass below.
+        for run in para.runs:
+            if "{" in run.text:
+                run.text = _fill_run_text(run.text, values, missing)
+        joined = "".join(r.text for r in para.runs)
+        if _PLACEHOLDER_RE.search(joined):
+            # placeholder split across runs → rewrite whole paragraph text
+            filled = _fill_run_text(joined, values, missing)
+            for i, run in enumerate(para.runs):
+                run.text = filled if i == 0 else ""
+    # headers + footers
+    for sec in doc.sections:
+        for hf in (sec.header, sec.footer):
+            for para in hf.paragraphs:
+                for run in para.runs:
+                    if "{" in run.text:
+                        run.text = _fill_run_text(run.text, values, missing)
+    out = io.BytesIO()
+    doc.save(out)
+    return out.getvalue(), missing
+
+
+def docx_merge(src: Path, out: Path, out_root: Path, values: dict,
+               strict: bool) -> tuple[int, dict]:
+    try:
+        filled, missing = _docx_placeholder_fill(src.read_bytes(), values)
+    except ImportError:
+        return 501, {"error": "docx_merge needs python-docx "
+                              "(pip install python-docx)"}
+    except Exception as e:
+        return 500, {"error": f"docx parse failed: {e}"}
+    if strict and missing:
+        return 400, {"error": "unresolved placeholders (strict mode)",
+                     "missing": sorted(set(missing))}
+    snap = snapshot_before_write(out_root, out) if out.exists() else None
+    okr, err = rate_check(len(filled))
+    if not okr:
+        return 429, {"error": err, "rate_limited": True}
+    atomic_write_bytes(out, filled)
+    resp = {"ok": True, "written": str(out), "bytes": len(filled),
+            "placeholders_filled": len(values), "snapshot": snap}
+    if missing:
+        resp["missing"] = sorted(set(missing))
+    return 200, resp
+
+
+def _pptx_fill_frame(frame, values: dict, missing: list):
+    """Fill every paragraph of a text frame, preserving runs."""
+    for para in frame.paragraphs:
+        for run in para.runs:
+            if "{" in run.text:
+                run.text = _fill_run_text(run.text, values, missing)
+        joined = "".join(r.text for r in para.runs)
+        if _PLACEHOLDER_RE.search(joined):
+            filled = _fill_run_text(joined, values, missing)
+            for i, run in enumerate(para.runs):
+                run.text = filled if i == 0 else ""
+
+
+def pptx_from_template(src: Path, out: Path, out_root: Path, slides: list,
+                       values: dict) -> tuple[int, dict]:
+    """Copy template → optional global {{placeholder}} fill → optional
+    per-slide dict list appended via template LAYOUTS (new slides copy the
+    layout's placeholder frames, so corporate design survives)."""
+    try:
+        from pptx import Presentation
+    except ImportError:
+        return 501, {"error": "pptx_from_template needs python-pptx "
+                              "(pip install python-pptx)"}
+    try:
+        prs = Presentation(str(src))
+    except Exception as e:
+        return 500, {"error": f"pptx parse failed: {e}"}
+    missing = []
+    # global fill over existing slides
+    for slide in prs.slides:
+        for shape in slide.shapes:
+            if shape.has_text_frame:
+                _pptx_fill_frame(shape.text_frame, values, missing)
+    added = 0
+    # append new slides from per-slide dicts. Fresh add_slide() placeholders
+    # carry layout PROMPT text, not {{placeholders}} — so per-slide specs set
+    # title/body directly (values-fill only applies to template's own slides).
+    for spec in slides:
+        layout_idx = spec.get("layout", 1)
+        layouts = list(prs.slide_layouts)
+        if not isinstance(layout_idx, int) or not (0 <= layout_idx < len(layouts)):
+            return 400, {"error": f"bad layout index {layout_idx!r} — template "
+                                  f"has {len(layouts)} layouts (0-"
+                                  f"{len(layouts) - 1})"}
+        slide = prs.slides.add_slide(layouts[layout_idx])
+        if spec.get("title") is not None and slide.shapes.title is not None:
+            slide.shapes.title.text = str(spec["title"])
+        if spec.get("body") is not None:
+            for ph in slide.placeholders:
+                if ph.placeholder_format.idx != 0:
+                    ph.text = str(spec["body"])
+                    break
+        added += 1
+    bio = io.BytesIO()
+    prs.save(bio)
+    data = bio.getvalue()
+    snap = snapshot_before_write(out_root, out) if out.exists() else None
+    okr, err = rate_check(len(data))
+    if not okr:
+        return 429, {"error": err, "rate_limited": True}
+    atomic_write_bytes(out, data)
+    resp = {"ok": True, "written": str(out), "bytes": len(data),
+            "slides_added": added, "layout_count": len(prs.slide_layouts),
+            "snapshot": snap}
+    if missing:
+        resp["missing"] = sorted(set(missing))
+    return 200, resp
+
+
 
 
 
@@ -2686,6 +2841,98 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 except (TypeError, ValueError):
                     max_pages = _OCR_PDF_MAX_PAGES
                 code, resp = ocr_pdf(p, op, oroot, lang, dpi, max_pages)
+                return self._json(code, resp)
+
+            if u.path == "/docx_merge":
+                # fill {{placeholders}} in a .docx template (openworker #454)
+                rel = body.get("path", "")
+                out_rel = body.get("out", "")
+                if not rel or not out_rel:
+                    return self._json(400, {"error": "need path (.docx template) + "
+                                                     "out (root-relative .docx)"})
+                if Path(out_rel).suffix.lower() != ".docx":
+                    return self._json(400, {"error": "out must end in .docx"})
+                p, _r, _c = resolve_guarded(unquote(rel))
+                if p.suffix.lower() != ".docx":
+                    return self._json(400, {"error": f"template must be .docx, "
+                                                     f"not {p.suffix}"})
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {rel}"})
+                op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
+                if _readonly_for(ocfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                values = body.get("values") or {}
+                if not isinstance(values, dict):
+                    return self._json(400, {"error": "values must be an object of "
+                                                     "{placeholder: text}"})
+                if len(json.dumps(values, default=str)) > MAX_READ:
+                    return self._json(413, {"error": "values payload too large"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "docx_merge", "path": rel, "out": out_rel}
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "docx_merge writes a new file — needs confirmation",
+                        "confirmation_required": True, **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
+                code, resp = docx_merge(p, op, oroot, values,
+                                        bool(body.get("strict")))
+                return self._json(code, resp)
+
+            if u.path == "/pptx_from_template":
+                # build a deck from a .potx/.pptx layout template (#454)
+                rel = body.get("path", "")
+                out_rel = body.get("out", "")
+                if not rel or not out_rel:
+                    return self._json(400, {"error": "need path (.potx/.pptx "
+                                                     "template) + out (.pptx)"})
+                if Path(out_rel).suffix.lower() != ".pptx":
+                    return self._json(400, {"error": "out must end in .pptx"})
+                p, _r, _c = resolve_guarded(unquote(rel))
+                if p.suffix.lower() not in {".potx", ".pptx"}:
+                    return self._json(400, {"error": f"template must be .potx or "
+                                                     f".pptx, not {p.suffix}"})
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {rel}"})
+                op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
+                if _readonly_for(ocfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                values = body.get("values") or {}
+                slides = body.get("slides") or []
+                if not isinstance(values, dict) or not isinstance(slides, list):
+                    return self._json(400, {"error": "values must be an object, "
+                                                     "slides a list of {layout, "
+                                                     "title, body}"})
+                if len(slides) > 100:
+                    return self._json(400, {"error": "slides capped at 100"})
+                # validate layout indices BEFORE the confirmation flow so bad
+                # specs fail fast (no token burn on typos)
+                for spec in slides:
+                    if not isinstance(spec, dict):
+                        return self._json(400, {"error": "each slide must be an object "
+                                                         "{layout, title, body}"})
+                    li = spec.get("layout", 1)
+                    if not isinstance(li, int) or isinstance(li, bool) or not (0 <= li <= 11):
+                        return self._json(400, {"error": f"bad layout index {li!r} — "
+                                                          f"valid range depends on the "
+                                                          f"template (usually 0-11)"})
+                if len(json.dumps({"v": values, "s": slides}, default=str)) > MAX_READ:
+                    return self._json(413, {"error": "payload too large"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "pptx_from_template", "path": rel,
+                                  "out": out_rel}
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "pptx_from_template writes a new file — needs "
+                                 "confirmation",
+                        "confirmation_required": True, **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
+                code, resp = pptx_from_template(p, op, oroot, slides, values)
                 return self._json(code, resp)
 
             if u.path == "/write_many":
