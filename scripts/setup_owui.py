@@ -16,6 +16,10 @@ Usage:
   python3 scripts/setup_owui.py --url http://your-owui:8080 \\
       --email admin@example.com --password ... \\
       --base-model glm-5.3-flash \\
+      [--variant standard|strict]    # skill flavor; default standard
+      [--variant-strict-model ID]    # ALSO create a strict preset on
+                                     # this (weak) model; implies both
+                                     # skills being installed
       [--bridge-token SECRET]        # opt-in Tier 2: org-wide token
 """
 import argparse
@@ -28,6 +32,8 @@ from pathlib import Path
 
 SKILL_ID = "local-file-bridge"
 MODEL_ID = "local-files-assistant"
+STRICT_SKILL_ID = "local-file-bridge-strict"
+STRICT_MODEL_ID = "local-files-assistant-strict"
 SKILL_DIR = "skill/local-file-bridge"
 # keep in sync with VERSION/SKILL_VERSION in src/file_bridge.py and the
 # skill folder's CHANGELOG.md
@@ -53,12 +59,126 @@ def api(method, url, token=None, data=None):
         sys.exit(1)
 
 
+def upsert_skill(base, tok, skill_id, name, description, skill_md, yes):
+    """Create or diff-preview-update one skill; returns True if the live
+    body now equals skill_md."""
+    skill = {
+        "id": skill_id, "name": name,
+        "description": description,
+        "content": skill_md,
+        "meta": {}, "is_active": True,
+        "access_grants": [{"principal_type": "user", "principal_id": "*",
+                           "permission": "read"}],
+    }
+    existing = api("GET", f"{base}/api/v1/skills/", tok)
+    # the LIST endpoint omits `content` — fetch the full record by id
+    live = next((s for s in existing if s.get("id") == skill_id), None)
+    if live is not None:
+        full = api("GET", f"{base}/api/v1/skills/id/{skill_id}", tok)
+        if isinstance(full, dict) and full.get("content"):
+            live = full
+    if live is not None:
+        # preview BEFORE overwriting (their staging pattern): show what
+        # the skill-body update would change, ask unless --yes
+        live_md = live.get("content") or ""
+        if live_md != skill_md:
+            diff = difflib.unified_diff(
+                live_md.splitlines(keepends=True),
+                skill_md.splitlines(keepends=True),
+                fromfile=f"live skill ({skill_id})",
+                tofile=f"new skill ({SKILL_VERSION})",
+                n=1,
+            )
+            dlines = list(diff)
+            print(f"--- {skill_id} body diff ({len([l for l in dlines if l.startswith(('+', '-')) and not l.startswith(('+++', '---'))])} changed lines) ---")
+            for line in dlines[:80]:
+                print("  " + line.rstrip())
+            if len(dlines) > 80:
+                print(f"  … ({len(dlines) - 80} more diff lines)")
+            print("--- end diff ---")
+            if not yes:
+                try:
+                    ans = input(f"Apply this update to {skill_id}? [y/N] ")
+                except EOFError:
+                    ans = ""
+                if ans.strip().lower() not in ("y", "yes"):
+                    print(f"⏭ {skill_id} NOT updated")
+                    return False
+        r = api("POST", f"{base}/api/v1/skills/id/{skill_id}/update", tok, skill)
+        print(f"✓ skill updated: {r.get('id')}")
+    else:
+        r = api("POST", f"{base}/api/v1/skills/create", tok, skill)
+        print(f"✓ skill created: {r.get('id')}")
+    api("POST", f"{base}/api/v1/skills/id/{skill_id}/access/update", tok,
+        {"access_grants": [{"principal_type": "user", "principal_id": "*",
+                            "permission": "read"}]})
+    print(f"✓ {skill_id} public")
+    return True
+
+
+def load_skill_md(fname, bridge_token):
+    skill_md = (REPO / SKILL_DIR / fname).read_text()
+    if skill_md.startswith("---"):
+        skill_md = skill_md.split("---", 2)[2].lstrip("\n")
+    if bridge_token:
+        inject = (
+            '# Org token (Tier 2): every bridge call MUST send this header.\n'
+            'BRIDGE_HEADERS = {"X-Bridge-Token": "%s"}\n' % bridge_token
+        )
+        # SKILL.md and SKILL-STRICT.md use different bootstrap headings —
+        # try both anchors before falling back to a prepend
+        for anchor in (r"## Bootstrap helpers \(run once per session\)\n",
+                       r"## Bootstrap — run this first, copy it exactly\n"):
+            skill_md, n = re.subn(r"(" + anchor + r")",
+                                  r"\1\n" + inject, skill_md, count=1)
+            if n == 1:
+                return skill_md
+        skill_md = inject + "\n" + skill_md  # fallback: prepend
+    return skill_md
+
+
+def upsert_model(base, tok, model_id, name, base_model, skill_ids):
+    # the two-switch gotcha: BOTH capabilities.code_interpreter AND
+    # defaultFeatureIds are required, or the frontend silently sends
+    # features.code_interpreter:false.
+    model = {
+        "id": model_id, "base_model_id": base_model, "name": name,
+        "meta": {
+            "description": "Access your own local files through the File Bridge app.",
+            "capabilities": {"code_interpreter": True},
+            "defaultFeatureIds": ["code_interpreter"],
+            "skillIds": skill_ids,
+        },
+        "params": {},
+        "access_grants": [{"principal_type": "user", "principal_id": "*",
+                           "permission": "read"}],
+        "is_active": True,
+    }
+    models = api("GET", f"{base}/api/v1/models/export", tok)
+    if any(m.get("id") == model_id for m in models):
+        r = api("POST", f"{base}/api/v1/models/model/update", tok, model)
+        print(f"✓ model preset updated: {r.get('id')}")
+    else:
+        r = api("POST", f"{base}/api/v1/models/create", tok, model)
+        print(f"✓ model preset created: {r.get('id')}")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--url", required=True, help="OWUI base URL, e.g. http://owui.internal:8080")
     ap.add_argument("--email", required=True)
     ap.add_argument("--password", required=True)
     ap.add_argument("--base-model", required=True, help="existing model id, e.g. glm-5.3-flash")
+    ap.add_argument("--variant", choices=["standard", "strict"],
+                    default="standard",
+                    help="skill flavor to install as the main skill: "
+                         "standard (capable models, default) or strict "
+                         "(fixed recipes + verify-after-write, for weaker "
+                         "models; created as its own skill either way)")
+    ap.add_argument("--variant-strict-model", default=None, metavar="ID",
+                    help="additionally create a strict preset on this "
+                         "(weaker) base model — implies installing the "
+                         "strict skill alongside the standard one")
     ap.add_argument("--bridge-token", default=None,
                     help="Tier 2: org-wide token embedded in the skill "
                          "(bridge must be configured with the same token)")
@@ -73,94 +193,48 @@ def main():
               None, {"email": args.email, "password": args.password})["token"]
     print("✓ signed in")
 
-    # 2. skill body (with optional token header injection)
-    skill_md = (REPO / SKILL_DIR / "SKILL.md").read_text()
-    if skill_md.startswith("---"):
-        skill_md = skill_md.split("---", 2)[2].lstrip("\n")
-    if args.bridge_token:
-        inject = (
-            '# Org token (Tier 2): every bridge call MUST send this header.\n'
-            'BRIDGE_HEADERS = {"X-Bridge-Token": "%s"}\n' % args.bridge_token
-        )
-        skill_md = re.sub(r"(## Bootstrap helpers \(run once per session\)\n)",
-                          r"\1\n" + inject, skill_md, count=1)
-        if "X-Bridge-Token" not in skill_md:
-            skill_md = inject + "\n" + skill_md  # fallback: prepend
-
-    skill = {
-        "id": SKILL_ID, "name": "Local File Bridge",
-        "description": "Read/write files in the user's chosen local folder via the "
-                       "File Bridge app (http://127.0.0.1:8765). Needs Code Interpreter.",
-        "content": skill_md,
-        "meta": {}, "is_active": True,
-        "access_grants": [{"principal_type": "user", "principal_id": "*", "permission": "read"}],
-    }
-    existing = api("GET", f"{base}/api/v1/skills/", tok)
-    # the LIST endpoint omits `content` — fetch the full record by id
-    live = next((s for s in existing if s.get("id") == SKILL_ID), None)
-    if live is not None:
-        full = api("GET", f"{base}/api/v1/skills/id/{SKILL_ID}", tok)
-        if isinstance(full, dict) and full.get("content"):
-            live = full
-    if live is not None:
-        # preview BEFORE overwriting (their staging pattern): show what
-        # the skill-body update would change, ask unless --yes
-        live_md = live.get("content") or ""
-        if live_md != skill_md:
-            diff = difflib.unified_diff(
-                live_md.splitlines(keepends=True),
-                skill_md.splitlines(keepends=True),
-                fromfile=f"live skill ({SKILL_ID})",
-                tofile=f"new skill ({SKILL_VERSION})",
-                n=1,
-            )
-            dlines = list(diff)
-            print(f"--- skill body diff ({len([l for l in dlines if l.startswith(('+', '-')) and not l.startswith(('+++', '---'))])} changed lines) ---")
-            for line in dlines[:120]:
-                print("  " + line.rstrip())
-            if len(dlines) > 120:
-                print(f"  … ({len(dlines) - 120} more diff lines)")
-            print("--- end diff ---")
-            if not args.yes:
-                try:
-                    ans = input("Apply this skill update? [y/N] ")
-                except EOFError:
-                    ans = ""
-                if ans.strip().lower() not in ("y", "yes"):
-                    print("⏭ skill NOT updated (preset setup continues)")
-                    live = None
-        if live is not None:
-            r = api("POST", f"{base}/api/v1/skills/id/{SKILL_ID}/update", tok, skill)
-            print(f"✓ skill updated: {r.get('id')}")
+    # 2. skills — variant selection (both files ship in the repo; users
+    #    keep whichever they don't install for later customization)
+    std_md = load_skill_md("SKILL.md", args.bridge_token)
+    strict_md = load_skill_md("SKILL-STRICT.md", args.bridge_token)
+    installed = []
+    if args.variant == "strict":
+        if upsert_skill(base, tok, STRICT_SKILL_ID,
+                        "Local File Bridge (strict)", 
+                        "[STRICT] Fixed recipes + verify-after-write for "
+                        "weaker models. " + "Bridge at 127.0.0.1:8765.",
+                        strict_md, args.yes):
+            installed.append(STRICT_SKILL_ID)
     else:
-        r = api("POST", f"{base}/api/v1/skills/create", tok, skill)
-        print(f"✓ skill created: {r.get('id')}")
-    api("POST", f"{base}/api/v1/skills/id/{SKILL_ID}/access/update", tok,
-        {"access_grants": [{"principal_type": "user", "principal_id": "*", "permission": "read"}]})
-    print("✓ skill public")
+        if upsert_skill(base, tok, SKILL_ID, "Local File Bridge",
+                        "Read/write files in the user's chosen local folder "
+                        "via the File Bridge app (http://127.0.0.1:8765). "
+                        "Needs Code Interpreter.",
+                        std_md, args.yes):
+            installed.append(SKILL_ID)
+    if args.variant_strict_model:
+        # the strict preset needs the strict skill installed
+        if STRICT_SKILL_ID not in installed:
+            if upsert_skill(base, tok, STRICT_SKILL_ID,
+                            "Local File Bridge (strict)",
+                            "[STRICT] Fixed recipes + verify-after-write for "
+                            "weaker models. " + "Bridge at 127.0.0.1:8765.",
+                            strict_md, args.yes):
+                installed.append(STRICT_SKILL_ID)
 
-    # 3. model preset — the two-switch gotcha:
-    #    BOTH capabilities.code_interpreter AND defaultFeatureIds are required.
-    model = {
-        "id": MODEL_ID, "base_model_id": args.base_model,
-        "name": "Local Files Assistant",
-        "meta": {
-            "description": "Access your own local files through the File Bridge app.",
-            "capabilities": {"code_interpreter": True},
-            "defaultFeatureIds": ["code_interpreter"],
-            "skillIds": [SKILL_ID],
-        },
-        "params": {},
-        "access_grants": [{"principal_type": "user", "principal_id": "*", "permission": "read"}],
-        "is_active": True,
-    }
-    models = api("GET", f"{base}/api/v1/models/export", tok)
-    if any(m.get("id") == MODEL_ID for m in models):
-        r = api("POST", f"{base}/api/v1/models/model/update", tok, model)
-        print(f"✓ model preset updated: {r.get('id')}")
+    # 3. model preset(s) — two-switch gotcha handled inside upsert_model
+    if args.variant == "strict":
+        upsert_model(base, tok, MODEL_ID, "Local Files Assistant",
+                     args.base_model, installed)
     else:
-        r = api("POST", f"{base}/api/v1/models/create", tok, model)
-        print(f"✓ model preset created: {r.get('id')}")
+        upsert_model(base, tok, MODEL_ID, "Local Files Assistant",
+                     args.base_model, installed)
+        if args.variant_strict_model:
+            upsert_model(base, tok, STRICT_MODEL_ID,
+                         "Local Files Assistant (strict)",
+                         args.variant_strict_model, [STRICT_SKILL_ID])
+            print(f"  (strict preset rides on '{args.variant_strict_model}'; "
+                  f"standard preset on '{args.base_model}')")
 
     # 4. code interpreter engine (admin default) — read current, warn only
     ci = api("GET", f"{base}/api/v1/configs/code_execution", tok)
