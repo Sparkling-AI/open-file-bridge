@@ -3087,6 +3087,17 @@ your OWUI admin (it is embedded in the skill by setup_owui.py).</p>
 <button onclick="setLang()">Save language</button>
 <p class="hint" id="langs"></p>
 <hr>
+<div class="sec">
+<h3>👁 What the AI can see</h3>
+<p class="hint">Exactly what Open WebUI's model sees when it lists your folders —
+after ignore lists and security rules. Nothing here is editable; change folders
+or ignore patterns above instead.</p>
+<div id="preview" class="hint" style="max-height:340px;overflow:auto;background:#fff;
+border:1px solid #ddd;border-radius:6px;padding:10px;font-family:ui-monospace,monospace;
+font-size:13px;color:#333;text-align:left"></div>
+<p class="hint" id="previnfos"></p>
+</div>
+<hr>
 <p class="hint">Status: __STATUS__<br>Keep this window/service running while using Open WebUI.
 You can close this browser tab — the service keeps running.</p>
 <script>
@@ -3096,7 +3107,31 @@ document.getElementById('origin').value=s.allowed_origin||'';
 document.getElementById('secstatus').textContent='Security mode: '+s.security;
 const c=await (await fetch('/ocr/config')).json();
 document.getElementById('ocrlang').value=c.lang||'eng';
-document.getElementById('langs').textContent='Installed: '+(c.available||[]).join(', ')+' — engine: '+(c.engine||'?');}
+document.getElementById('langs').textContent='Installed: '+(c.available||[]).join(', ')+' — engine: '+(c.engine||'?');
+renderPreview();}
+function esc(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
+function fmtSize(n){if(n==null)return '';if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB';}
+async function renderPreview(){
+ const box=document.getElementById('preview'), info=document.getElementById('previnfos');
+ try{
+  const h=await (await fetch('/health')).json();
+  if(!h.ok){box.innerHTML='🔒 '+(h.hint||'no folder chosen yet');info.textContent='';return;}
+  const t=await (await fetch('/directory_tree?path=.&max_entries=500&max_depth=6')).json();
+  let lines=[],count=0;
+  function walk(node,depth){
+   if(count>=500){return;}
+   count++;
+   const pad='&nbsp;'.repeat(depth*2);
+   const icon=node.type==='dir'?'📁':(node.type==='symlink'?'🔗':'📄');
+   lines.push(pad+icon+' '+esc(node.name)+(node.size!=null?' <span style="color:#999">'+fmtSize(node.size)+'</span>':''));
+   if(node.children)for(const ch of node.children)walk(ch,depth+1);
+  }
+  for(const n of t.entries)walk(n,0);
+  if(t.truncated)lines.push('… (truncated — '+(t.entry_count||'500+')+' entries max)');
+  box.innerHTML=lines.join('<br>')||'(empty folder)';
+  info.textContent=(t.entry_count||0)+' entries · ignore lists applied · symlinks never shown';
+ }catch(e){box.innerHTML='preview unavailable: '+esc(e.message||e);}
+}
 async function setLang(){
  const l=document.getElementById('ocrlang').value.trim();
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ocr_lang:l})});
