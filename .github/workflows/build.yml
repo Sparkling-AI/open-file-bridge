@@ -61,7 +61,17 @@ jobs:
             } catch {}
             Start-Sleep -Seconds 1
           }
-          if (-not $health -or -not $health.ok) { throw "bridge did not come up" }
+          if (-not $health -or -not $health.ok) {
+            Write-Output "---- diagnostics: process exited=$($p.HasExited) ----"
+            Write-Output "---- raw /health via curl.exe ----"
+            curl.exe -s -m 3 http://127.0.0.1:8765/health
+            Write-Output ""
+            Write-Output "---- bridge.log (state dir) ----"
+            if (Test-Path "$env:RUNNER_TEMP\fbstate\bridge.log") {
+              Get-Content "$env:RUNNER_TEMP\fbstate\bridge.log" -Tail 40
+            } else { Write-Output "(no bridge.log)" }
+            throw "bridge did not come up"
+          }
           if (-not $health.addons.pdf) { throw "pymupdf missing from frozen build" }
           if ($health.wheels -ne 8) { throw "expected 8 bundled wheels, got $($health.wheels)" }
           Write-Output "smoke OK: root=$($health.root) addons=$($health.addons) wheels=$($health.wheels)"
