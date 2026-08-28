@@ -44,8 +44,16 @@ Add every new gotcha here, not to memory.
 - Persistent copy: `~/tools/tesseract-5.3.4/` (AppImage extracted).
   Run with `TESSERACT_CMD=~/tools/tesseract-5.3.4/usr/bin/tesseract
   LD_LIBRARY_PATH=~/tools/tesseract-5.3.4/usr/lib`.
+- **Addon suite canonical invocation** (bridge needs the libs IN its own
+  process for office-write endpoints):
+  `TESSERACT_CMD=… LD_LIBRARY_PATH=… uv run --with pymupdf --with pypdfium2
+  --with python-docx --with python-pptx bash tests/addon_test.sh`
+  (env vars are user-specified; hermes terminal blocks inline
+  LD_LIBRARY_PATH — wrap in a local runner script when driving from
+  the agent).
 - tessdata there has 10 langs incl swe/chi_sim (we added). Repo bundle:
-  `src/tessdata/` = eng swe chi_sim osd only.
+  `src/tessdata/` = eng swe chi_sim osd + `configs/` (tesseract's 25
+  config files, needed by /ocr_pdf's `pdf` renderer).
 - No system tesseract, no sudo — NEVER `apt install`; use the persistent copy.
 
 ## Pyodide/browser testing
@@ -148,3 +156,51 @@ Add every new gotcha here, not to memory.
   commands small; the blocked payload is saved to
   `~/.hermes/cache/blocked-scripts/` and can be run via
   `bash <saved-path>` — same effect, no parser trip.
+
+## Pitfalls found this session (P2/P3 batch 2, 2026-08-28)
+
+- **tesseract `pdf` config renderer needs tessdata/configs/**: running
+  `tesseract in.png out -l eng pdf` against a bare tessdata dir (only
+  .traineddata files — what the repo bundled) fails with
+  `read_params_file: Can't open pdf`, rc=1, NO output file. ARG-PARSING
+  errors also print usage to STDOUT with rc=0 in some builds — so verify
+  success by checking the output file starts with `%PDF-`, not by
+  returncode alone. Fix shipped: `src/tessdata/configs/` now carries
+  tesseract's 25 stock config files (copied from the AppImage install).
+- **Confirm-then-validate ordering matters for UX**: putting input
+  validation (ext checks, layout-index checks) AFTER the 409 confirmation
+  issue burns the user's token on typos. Order: validate everything
+  cheap first → then confirmation_issue → then heavy work. The
+  ocr_pdf/pdf_op/docx_merge/pptx_from_template endpoints all follow
+  this now.
+- **Confirmation tokens bind to (op, path, out) only** — lang/dpi/pages
+  are deliberately NOT bound, so a model may tweak dpi after the user
+  approved without a fresh 409. Testing "changed payload burns token"
+  must change `out` (a bound param), not `dpi`.
+- **e2e stdlib PNG/GIF/BMP fixtures must be built, not fetched** (no
+  Pillow in the e2e env): ~15 lines of struct+zlib build a valid 3x2 PNG,
+  GIF logical screen descriptor is LITTLE-endian (first fixture read
+  4x1 back as 1024x256 — classic be/le swap), BMP dims live at offset 18
+  as <ii.
+- **fuzzy patch tool mangles Python indentation** when the anchor spans
+  a function boundary — it re-indented a whole inserted block once.
+  For multi-function inserts, use a small python script
+  (`text.index(anchor) + splice + ast.parse`) instead of patch mode.
+- **`uv run --with X bash script.sh` injects X only into uv's own
+  python invocations** — a plain `python3` inside the script (fixture
+  builders) does NOT see the package. Either run those under their own
+  `uv run --with …` line or make the BRIDGE itself run under the
+  decorated interpreter (what the addon suite now does for
+  pymupdf/pypdfium2/python-docx/python-pptx).
+- **Playwright sync API works from plain python3** if the chromium
+  build is passed explicitly (`executable_path` from
+  `~/.cache/ms-playwright/chromium_headless_shell-*/…`); the CDP
+  websocket route is unnecessary for picker DOM checks.
+  `page.inner_text("#id")` + `wait_for_selector` is enough; assert
+  ignore-list exclusion there (fixture `hidden.dat` absent) —
+  complements the API-level directory_tree tests with rendered-output
+  proof.
+- **systemd user units are testable without sudo**
+  (`systemctl --user enable --now` + `--status`/`--remove` round-trip
+  verified); the unit must set FILE_BRIDGE_NO_LOGFILE=1 or the bridge
+  double-logs (journal + bridge.log).

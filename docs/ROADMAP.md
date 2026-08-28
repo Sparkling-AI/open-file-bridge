@@ -231,18 +231,46 @@ final validation pass (not after every change). Do not block on either.
    `is_symlink()` in resolve_any (reads AND writes refuse symlinks —
    in-root ones too), and atomic_write refuses a symlink final hop.
    Windows symlink/junction tests deferred to the user's final phase.
-☐ Log rotation; optional service/LaunchAgent installers.
-☐ `/ocr_pdf` — tesseract PDF output → searchable PDF (scan → archive).
+✅ **Log rotation; optional service/LaunchAgent installers.** Console/
+   request log → `state_dir/bridge.log` when non-interactive (tee to
+   stderr, size rotation to `.log.1`, default 5 MB, env
+   FILE_BRIDGE_LOG_MAX_BYTES; the systemd service sets
+   FILE_BRIDGE_NO_LOGFILE=1 and relies on the journal instead).
+   `scripts/install_service.py` (+`--status`/`--remove`/`--exec` for
+   frozen binaries): systemd user unit on Linux (VERIFIED round-trip:
+   install → active → /health → remove → port freed), LaunchAgent plist
+   on macOS (written, not loaded — user's final phase), Startup-folder
+   .bat on Windows (write-only). FILE_BRIDGE_PORT env override added.
+✅ **`/ocr_pdf`** — tesseract PDF renderer → searchable PDF (page image +
+   invisible text layer; pymupdf merges per-page parts). Image and PDF
+   inputs, 50-page cap, dpi 72-400, lang like /ocr. Confirm-BEFORE-OCR
+   (409 token — raster+tesseract never runs unconfirmed), atomic +
+   snapshotted output, source untouched, output readable by /pdf_text.
+   Requires the tessdata `configs/` dir — now bundled in
+   src/tessdata/configs (tesseract's 25 config files; without `pdf`
+   config the renderer dies with `read_params_file: Can't open pdf`).
 ✅ **Content-hash cache for /pdf_text + /ocr** (OpenWorker pdf_support
    `_cached` pattern): results keyed by (sha256(file bytes), op, params) —
    in-memory, 16-entry FIFO, `"cached": true` flag on hits. Re-asks and
    history replays skip raster+tesseract entirely; any file change
    (different digest) or param change (lang/dpi/pages/max_pages) computes
    fresh. In-memory only: restart clears it, no disk state.
-☐ `/pptx_from_template` (.potx/pptx layout matching) + `/docx_merge`
-   placeholder filling — from OpenWorker issue #454 (real office demand).
-☐ `/pdf_text?mode=text|images` — images mode rasters pages (pypdfium2,
-   144dpi, ≤100pg) for vision models; capability fallback pattern.
+✅ **`/pptx_from_template` + `/docx_merge`** (openworker #454).
+   docx_merge: `{{placeholder}}` fill preserving per-run formatting
+   (multi-run placeholders collapsed onto run 0), body + tables +
+   headers/footers, missing keys reported, `strict: true` refuses to
+   write when placeholders remain. pptx_from_template: .potx/.pptx
+   input, global placeholder fill + per-slide append through the
+   template's own layouts (corporate design survives; fresh add_slide
+   placeholders carry PROMPT text, so per-slide specs set title/body
+   directly), layout-index validated BEFORE the confirmation token.
+   Both need native python-docx/python-pptx (501 otherwise) and run the
+   standard confirm + snapshot + rate-breaker pipeline.
+✅ **`/pdf_text?mode=text|images`** — images mode rasters pages via
+   pypdfium2 (scale 2.0 ≈ 144 dpi, ≤100 pages, openworker RASTER_MAX_PAGES
+   pattern) with a hand-rolled stdlib PNG encoder (no Pillow on the
+   bridge); pages as `png_b64`, MAX_BINARY byte budget, result cached
+   like text mode. Addon env gains `--with pypdfium2`.
 ✅ **Sensitive-name blacklist** — bridge-side floor in resolve_any (reads
    AND writes): basename match against SENSITIVE_NAMES (.env, id_rsa*,
    authorized_keys, credentials*, secrets*, .npmrc/.netrc/.pypirc,
@@ -266,8 +294,11 @@ final validation pass (not after every change). Do not block on either.
    GET /directory_tree: recursive name/type/size tree, ignore-list aware,
    symlinks never listed, entry cap (default 500, max 2000) + depth cap
    (default 6, max 12) with truncated flags.
-☐ Local preview tab in settings page (what the AI can see) — Open Terminal
-   file-browser inspiration.
+✅ **Local preview tab in settings page** (what the AI can see) — picker
+   gained a "What the AI can see" panel: live directory_tree render
+   (ignore-aware, symlinks never shown, XSS-escaped names, sizes + entry
+   count + truncation note). Open Terminal file-browser inspiration.
+   Verified in headless chromium incl. ignore-list exclusion.
 
 ## P3 — Optional / bigger bets
 
@@ -283,11 +314,20 @@ final validation pass (not after every change). Do not block on either.
    /pdf_from_text (native fpdf2, no Pyodide shim needed).
 ☐ Mail-merge: docx template {{placeholders}} + xlsx rows → batch PDFs.
 ☐ .eml parsing (stdlib email); .msg via extract-msg.
-☐ PDF split/merge/rotate (pymupdf, nearly free).
-☐ `/reveal` (Explorer/Finder locate).
+✅ PDF split/merge/rotate — `/pdf_op` (pymupdf): split to per-page
+   `<base>.pN.pdf` files (page-selectable), ordered merge (2-20 inputs),
+   per-page rotate (angle mod 360); overwrite-confirm flow, atomic +
+   snapshotted, rate-breaker counted; verified page selection/rotation
+   empirically in the addon suite.
+✅ `/reveal` — opens Explorer/Finder/xdg-open at the file. CONSENT-GATED:
+   403 unless the local user sets allow_reveal in the picker (default
+   off) — a remote model must never pop desktop windows unasked.
 ☐ rclone recipe: bridge folder = cloud-drive mount (answers demand in
    OWUI #5872 data sources, 52+) — docs only.
-☐ /image_info (dimensions/EXIF; PIL optional plugin).
+✅ `/image_info` — stdlib-only header parser: png/jpeg/gif/webp/bmp
+   dimensions + format + megapixels, JPEG EXIF Orientation tag with
+   effective (post-rotation) size. Verified against pymupdf/PIL-generated
+   real files incl. oriented JPEG (6 → w/h swap). PIL not required.
 ☐ OWUI version-compat window documented (tested 0.11.1).
 ☐ Multi-model smoke tests (only GLM tested; weak models may need stronger
    skill rules).
@@ -306,8 +346,8 @@ final validation pass (not after every change). Do not block on either.
 | html | ✅ /html_text (tags stripped) | ✅ | |
 | xlsx/docx/pptx | ✅ /xlsx_read /docx_read /pptx_read | ✅ via Pyodide | |
 | pdf (text layer) | ✅ /pdf_text | ✅ fpdf2 (Pyodide) | |
-| pdf (scanned) | ✅ /ocr (tesseract) | — | swe+eng combo verified |
-| images | ✅ /ocr, /read_b64 | ✅ /write_b64 | |
+| pdf (scanned) | ✅ /ocr (tesseract) | ✅ /ocr_pdf (searchable) | swe+eng combo verified |
+| images | ✅ /ocr, /read_b64, /image_info | ✅ /write_b64 | /reveal consent-gated |
 | doc/xls/ppt (legacy) | ❌ | ❌ | P3: LibreOffice convert |
 | zip | ✅ /zip (create), /unzip, /peek kind=zip | ✅ /zip | flat basenames; zip-slip rejected |
 
