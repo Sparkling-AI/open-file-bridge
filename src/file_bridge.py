@@ -129,6 +129,7 @@ ENDPOINT_RISK = {
     "/docx_write": RiskClass.WRITE_LOCAL,
     "/pptx_from_template": RiskClass.WRITE_LOCAL,
     "/xlsx_append": RiskClass.WRITE_LOCAL,
+    "/convert": RiskClass.WRITE_LOCAL,       # spawns soffice → writes a file
 }
 
 _IS_WINDOWS = sys.platform == "win32"
@@ -2299,6 +2300,118 @@ def _eml_read(path: Path, q: dict) -> tuple[int, dict]:
     return 200, out
 
 
+# ------------------------------------------------ LibreOffice /convert (P3)
+# Headless conversion between document formats (roadmap P3): legacy
+# .doc/.xls/.ppt -> modern OOXML, docx/xlsx/pptx -> pdf, plus image export.
+# Needs a local soffice binary (env SOFFICE_CMD > bundled/adjacent
+# tesseract-style locations > PATH). 501 with a clear hint when absent.
+#
+# Subprocess posture (mirrors /ocr): FIXED argument shape — the model may
+# choose the format pair, never a raw command. Conversions run in a temp
+# outdir (soffice derives its own output name), the product is verified by
+# magic bytes (soffice rc alone lies on some builds), then moved atomically
+# to the confirmed out path. LibreOffice cannot run two instances off one
+# user profile at once — a module lock serializes conversions.
+
+_CONV_MATRIX = {
+    # from-ext -> {to-ext: (soffice family, filter-or-None, magic)}
+    ".doc": {".docx": ("writer", None, b"PK\x03\x04"),
+             ".pdf": ("writer", None, b"%PDF-")},
+    ".docx": {".pdf": ("writer", None, b"%PDF-"),
+              ".doc": ("writer", None, b"\xd0\xcf\x11\xe0"),
+              ".txt": ("writer", "Text (encoded):UTF8", None),
+              ".png": ("writer", "writer_png_Export", b"\x89PNG"),
+              ".html": ("writer", "html", None)},
+    ".rtf": {".docx": ("writer", None, b"PK\x03\x04"),
+             ".pdf": ("writer", None, b"%PDF-")},
+    ".odt": {".docx": ("writer", None, b"PK\x03\x04"),
+             ".pdf": ("writer", None, b"%PDF-")},
+    ".xls": {".xlsx": ("calc", None, b"PK\x03\x04"),
+             ".pdf": ("calc", None, b"%PDF-"),
+             ".csv": ("calc", "Text - txt - csv (StarCalc):44,34,76,1",
+                      None)},
+    ".xlsx": {".pdf": ("calc", None, b"%PDF-"),
+              ".xls": ("calc", None, b"\xd0\xcf\x11\xe0"),
+              ".csv": ("calc", "Text - txt - csv (StarCalc):44,34,76,1",
+                       None)},
+    ".ods": {".xlsx": ("calc", None, b"PK\x03\x04"),
+             ".pdf": ("calc", None, b"%PDF-")},
+    ".ppt": {".pptx": ("impress", None, b"PK\x03\x04"),
+             ".pdf": ("impress", None, b"%PDF-")},
+    ".pptx": {".pdf": ("impress", None, b"%PDF-"),
+              ".png": ("impress", "impress_png_Export", b"\x89PNG")},
+    ".odp": {".pptx": ("impress", None, b"PK\x03\x04"),
+             ".pdf": ("impress", None, b"%PDF-")},
+}
+_CONV_LOCK = threading.Lock()   # one soffice profile at a time
+_CONV_TIMEOUT = 120             # seconds per conversion
+
+
+def _soffice_bin() -> str | None:
+    """SOFFICE_CMD env > soffice next to the app/binary dir > PATH."""
+    cands = []
+    if os.environ.get("SOFFICE_CMD"):
+        cands.append(os.environ["SOFFICE_CMD"])
+    here = Path(sys.executable).parent if getattr(sys, "frozen", False) \
+        else Path(__file__).resolve().parent
+    cands += [here / "soffice",
+              here / "libreoffice" / "program" / "soffice",
+              Path("/usr/bin/soffice"), Path("/usr/local/bin/soffice"),
+              Path("/opt/libreoffice/program/soffice")]
+    for c in cands:
+        if c and Path(c).exists():
+            return str(c)
+    return shutil.which("soffice") or shutil.which("libreoffice")
+
+
+def convert_file(src: Path, out: Path, out_root: Path, to_ext: str) -> tuple[int, dict]:
+    soffice = _soffice_bin()
+    if not soffice:
+        return 501, {"error": "convert needs LibreOffice (soffice). Install it "
+                              "or set SOFFICE_CMD to the binary.",
+                     "hint": "windows/mac installers usually bundle it; on "
+                             "linux: libreoffice package or a portable "
+                             "AppImage extracted next to the bridge"}
+    src_ext = src.suffix.lower()
+    family, filt, magic = _CONV_MATRIX.get(src_ext, {}).get(to_ext,
+                                                            (None, None, None))
+    if family is None:
+        pairs = ", ".join(sorted(k for k in _CONV_MATRIX.get(src_ext, {})))
+        return 400, {"error": f"cannot convert {src_ext} -> {to_ext}",
+                     "supported_targets": pairs or "none"}
+    with tempfile.TemporaryDirectory(prefix="fb-conv-") as td:
+        cmd = [soffice, "--headless", "--norestore", "--nolockcheck",
+               "--convert-to", to_ext.lstrip(".") if not filt else
+               f"{to_ext.lstrip('.')}:{filt}",
+               "--outdir", td, str(src)]
+        with _CONV_LOCK:  # soffice user-profile lock: serialize
+            try:
+                proc = subprocess.run(cmd, capture_output=True, timeout=_CONV_TIMEOUT)
+            except subprocess.TimeoutExpired:
+                return 504, {"error": f"conversion timed out after "
+                                      f"{_CONV_TIMEOUT}s"}
+        produced = list(Path(td).glob("*"))
+        produced = [f for f in produced if f.is_file() and not f.name.startswith(".")]
+        if not produced:
+            tail = (proc.stderr or proc.stdout or b"").decode(errors="replace")[-300:]
+            return 500, {"error": "soffice produced no output", "soffice": tail}
+        blob = produced[0].read_bytes()
+        if magic and not blob.startswith(magic):
+            return 500, {"error": f"conversion output failed magic check "
+                                  f"(expected {magic[:4]!r})"}
+        if len(blob) > MAX_BINARY:
+            return 413, {"error": f"converted file too large "
+                                  f"(> {MAX_BINARY} bytes)"}
+        okr, err = rate_check(len(blob))
+        if not okr:
+            return 429, {"error": err, "rate_limited": True}
+        snap = snapshot_before_write(out_root, out) if out.exists() else None
+        atomic_write_bytes(out, blob)
+        return 200, {"ok": True, "written": str(out), "bytes": len(blob),
+                     "from": src.name, "to_ext": to_ext,
+                     "soffice": "yes", "snapshot": snap}
+
+
 # ------------------------------------------------ search + edit (P1)
 
 def _search(root: Path, cfg: dict, q: dict):
@@ -3975,6 +4088,45 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not okc:
                     return self._json(400, {"error": err})
                 code, resp = docx_mailmerge(p, out_rel, oroot, _r, rows, to_zip)
+                return self._json(code, resp)
+
+
+            if u.path == "/convert":
+                # LibreOffice headless format conversion (P3)
+                rel = body.get("path", "")
+                out_rel = body.get("out", "")
+                if not rel or not out_rel:
+                    return self._json(400, {"error": "need path + out "
+                                                     "(root-relative, format "
+                                                     "follows the extension)"})
+                p, _r, _c = resolve_guarded(unquote(rel))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {rel}"})
+                to_ext = Path(out_rel).suffix.lower()
+                src_ext = p.suffix.lower()
+                if src_ext == to_ext:
+                    return self._json(400, {"error": "out extension must differ "
+                                                     "from the source format"})
+                supported = set(_CONV_MATRIX.get(src_ext, {}))
+                if to_ext not in supported:
+                    targets = ", ".join(sorted(supported)) or "none"
+                    return self._json(400, {"error": f"cannot convert {src_ext} "
+                                                     f"-> {to_ext or '(none)'}",
+                                            "supported_targets": targets})
+                op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
+                if _readonly_for(ocfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = {"op": "convert", "path": rel, "out": out_rel}
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "convert writes a new file — needs confirmation",
+                        "confirmation_required": True, **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
+                code, resp = convert_file(p, op, oroot, to_ext)
                 return self._json(code, resp)
 
 
