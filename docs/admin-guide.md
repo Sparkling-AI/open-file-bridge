@@ -47,7 +47,7 @@ Creates: public Skill `local-file-bridge` + model preset `local-files-assistant`
 
 1. **Workspace → Skills → Create**
    - Name: `Local File Bridge`, ID: `local-file-bridge`
-   - Content: paste `skill/local-file-bridge.skill.md` (without the `---` frontmatter)
+   - Content: paste `skill/local-file-bridge/SKILL.md` (without the `---` frontmatter)
    - Access → make it **public** (read for everyone)
 2. **Workspace → Models → edit/create** a preset based on your model:
    - Attach the skill

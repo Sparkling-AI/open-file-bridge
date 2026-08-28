@@ -30,7 +30,7 @@ a model and ask.
 
 | Piece | Where it lives | This repo |
 |---|---|---|
-| Skill (instructions) | OWUI Workspace, public | `skill/local-file-bridge.skill.md` |
+| Skill (instructions) | OWUI Workspace, public | `skill/local-file-bridge/SKILL.md` (+ `CHANGELOG.md`) |
 | Model preset (CI on + skill) | OWUI Workspace, public | `scripts/setup_owui.py` |
 | File Bridge app | Each user's machine | `src/file_bridge.py` + `build/` |
 
@@ -38,7 +38,7 @@ a model and ask.
 
 ```
 ├── src/file_bridge.py            # the app — single file, stdlib-only (3.8+)
-├── skill/local-file-bridge.skill.md   # importable OWUI skill (YAML frontmatter)
+├── skill/local-file-bridge/          # importable OWUI skill (SKILL.md + CHANGELOG.md)
 ├── scripts/setup_owui.py         # one-shot admin setup via OWUI REST API
 ├── build/
 │   ├── build_linux.sh            # Linux binary (native or docker/glibc-old)
