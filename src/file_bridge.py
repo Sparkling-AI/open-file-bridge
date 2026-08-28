@@ -4318,7 +4318,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ---- local picker UI (served only to localhost browser) ----
     PICKER_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>File Bridge</title>
 <style>body{font-family:system-ui;max-width:680px;margin:50px auto;padding:0 20px;color:#222}
-input{width:100%;padding:10px;font-size:16px;box-sizing:border-box}
+input:not([type=checkbox]){width:100%;padding:10px;font-size:16px;box-sizing:border-box}
+#langbox label{white-space:nowrap;cursor:pointer}
+#langbox input[type=checkbox]{width:auto;margin:0 6px 0 0;vertical-align:middle}
 button{padding:10px 22px;font-size:16px;margin-top:12px;cursor:pointer}
 .ok{color:#0a7d32;font-weight:bold}.hint{color:#666;font-size:14px}
 .warn{color:#b00;font-weight:bold}.sec{background:#f4f6f8;padding:14px 18px;border-radius:8px;margin:14px 0}
@@ -4340,16 +4342,23 @@ in <b>one folder you choose</b> on this computer. Nothing else is exposed.</p>
 file endpoints stay disabled):</p>
 <input id="origin" placeholder="http://owui.yourcompany.com:8080" value="__ORIGIN__">
 <button onclick="setOrigin()">Lock to this origin</button>
-<p class="hint">Optional extra: org-wide token (Tier&nbsp;2). Generate one and give it to
-your OWUI admin (it is embedded in the skill by setup_owui.py).</p>
-<button onclick="genToken()">Generate token</button>
+<p class="hint">Optional extra: org-wide token (Tier&nbsp;2) — matching requests must also
+send it in an <code>X-Bridge-Token</code> header. Org flow (recommended): your OWUI admin
+embeds a token in the public skill with <code>setup_owui.py --bridge-token</code>; paste
+that token here so your bridge accepts exactly your organisation's requests. Or generate
+a random one and give it to your admin to embed.</p>
+<div style="display:flex;gap:8px;align-items:stretch">
+<input id="token" placeholder="paste the org token from your OWUI admin" style="flex:1" autocomplete="off">
+<button onclick="setToken()" style="margin-top:0;white-space:nowrap">Set token</button>
+</div>
+<button onclick="genToken()">Generate random token</button>
 <button onclick="clearToken()">Clear token</button>
 <p class="hint" id="secstatus"></p>
 </div>
 <hr>
 <p>OCR language (for reading scanned PDFs / photos) — tick one or more:</p>
 <div id="langbox" style="background:#fff;border:1px solid #ddd;border-radius:6px;
-padding:10px 12px;font-size:15px;line-height:2.1"></div>
+padding:10px 14px;font-size:15px;display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center"></div>
 <p class="hint">Ticks combine automatically in tesseract syntax (e.g. <code>eng+swe</code>
 — combining is free, mixing e.g. Swedish AND English fixes å/ä/ö and digits).
 Need a code that is not listed? Type it below before saving.</p>
@@ -4399,7 +4408,7 @@ function renderLangs(avail,cur){
  const box=document.getElementById('langbox');
  const sel=new Set(String(cur||'').split('+').filter(Boolean));
  box.innerHTML=(avail&&avail.length)?avail.map(c=>
-  '<label style="margin-right:16px;white-space:nowrap">'+
+  '<label>'+
   '<input type="checkbox" value="'+esc(c)+'"'+(sel.has(c)?' checked':'')+
   ' onchange="syncBoxes(true)"> '+esc(c)+
   (LANG_NAMES[c]?' — '+LANG_NAMES[c]:'')+'</label>').join(' ')
@@ -4477,6 +4486,12 @@ async function setOrigin(){
  const d=await res.json();
  document.getElementById('secstatus').textContent = d.ok?('Security mode: '+d.security+(d.error?' — '+d.error:'')):('✗ '+(d.error||'failed'));
  if(d.ok&&d.security==='UNLOCKED')document.getElementById('secstatus').textContent+=' ⚠ set an origin to unlock file serving';}
+async function setToken(){
+ const v=document.getElementById('token').value.trim();
+ if(!v){document.getElementById('secstatus').textContent='✗ paste a token first (or use Generate)';return;}
+ const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:{set:v}})});
+ const d=await res.json();
+ document.getElementById('secstatus').textContent = d.ok?('Token set — Security mode: '+d.security):('✗ '+(d.error||'failed'));}
 async function genToken(){
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:{generate:true}})});
  const d=await res.json();
