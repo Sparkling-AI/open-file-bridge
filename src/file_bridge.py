@@ -54,6 +54,78 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 VERSION = "2.2"
 SKILL_VERSION = "2.2"   # keep in sync with skill/local-file-bridge.skill.md
 
+
+# ------------------------------------------- risk classes (P3, openworker risk.py)
+# Every endpoint declares its INTRINSIC side-effect class — the substrate
+# future confirmation/audit gating reads (policy asks ENDPOINT_RISK[path],
+# never a hardcoded name list; pattern: openworker coworker/risk.py).
+#
+#   read        — no side effects: never mutates the workspace
+#   write_local — mutates files in a shared root (confirm + snapshot +
+#                 rate-breaker pipeline applies)
+#   ui          — interacts with the user's desktop (consent-gated)
+#   meta        — no file access at all (health/versions/settings)
+#
+# Subprocess note: /ocr, /ocr_pdf and /convert spawn local helper binaries
+# (tesseract / LibreOffice) with fixed argument shapes. Their PRIMARY class
+# stays read/write_local by workspace effect; the exec surface is documented
+# here instead of a separate class because argument shape is fixed (no
+# model-chosen commands — unlike openworker's run_shell).
+
+class RiskClass:
+    READ = "read"
+    WRITE_LOCAL = "write_local"
+    UI = "ui"
+    META = "meta"
+
+
+ENDPOINT_RISK = {
+    # meta — no file access
+    "/health": RiskClass.META,
+    "/version": RiskClass.META,
+    "/state": RiskClass.META,
+    "/wheels": RiskClass.META,
+    "/picker": RiskClass.META,
+    "/api/root": RiskClass.META,
+    # reads
+    "/list": RiskClass.READ,
+    "/read": RiskClass.READ,
+    "/peek": RiskClass.READ,
+    "/read_b64": RiskClass.READ,
+    "/stat": RiskClass.READ,
+    "/pdf_text": RiskClass.READ,
+    "/ocr": RiskClass.READ,          # spawns tesseract; writes nothing
+    "/ocr/config": RiskClass.READ,
+    "/image_info": RiskClass.READ,
+    "/search": RiskClass.READ,
+    "/html_text": RiskClass.READ,
+    "/csv_head": RiskClass.READ,
+    "/csv_stats": RiskClass.READ,
+    "/xlsx_read": RiskClass.READ,
+    "/docx_read": RiskClass.READ,
+    "/pptx_read": RiskClass.READ,
+    "/directory_tree": RiskClass.READ,
+    "/versions/list": RiskClass.READ,
+    "/trash/list": RiskClass.READ,
+    # desktop interaction — consent-gated (allow_reveal)
+    "/reveal": RiskClass.UI,
+    # workspace mutation — confirm/snapshot/rate pipeline
+    "/write": RiskClass.WRITE_LOCAL,
+    "/write_b64": RiskClass.WRITE_LOCAL,
+    "/edit": RiskClass.WRITE_LOCAL,
+    "/delete": RiskClass.WRITE_LOCAL,
+    "/write_many": RiskClass.WRITE_LOCAL,
+    "/versions/restore": RiskClass.WRITE_LOCAL,
+    "/trash/restore": RiskClass.WRITE_LOCAL,
+    "/trash/purge": RiskClass.WRITE_LOCAL,   # 403 by design, but declared
+    "/zip": RiskClass.WRITE_LOCAL,
+    "/unzip": RiskClass.WRITE_LOCAL,
+    "/ocr_pdf": RiskClass.WRITE_LOCAL,       # spawns tesseract → writes a PDF
+    "/pdf_op": RiskClass.WRITE_LOCAL,
+    "/docx_merge": RiskClass.WRITE_LOCAL,
+    "/pptx_from_template": RiskClass.WRITE_LOCAL,
+}
+
 _IS_WINDOWS = sys.platform == "win32"
 
 
@@ -2342,7 +2414,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             audit_log(self._audit_ep, method=self.command,
                       path=getattr(self, "_audit_path", None),
                       args=getattr(self, "_audit_args", None), status=code,
-                      size=len(body))
+                      size=len(body), risk=self._risk())
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         if cors:
@@ -2356,6 +2428,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self._audit_ep = ep
         self._audit_path = path if path is None else str(path)
         self._audit_args = args
+
+    def _risk(self):
+        """Declared risk class for this request's endpoint (P3, openworker
+        risk.py pattern). Unknown paths report 'read' — the security gate
+        has already run by the time this is consulted."""
+        return ENDPOINT_RISK.get(urlparse(self.path).path, RiskClass.READ)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -2406,7 +2484,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "readonly": _is_readonly(),
                 "allow_reveal": bool(_state_load().get("allow_reveal")),
                 "ignore_global": _global_ignore(),
-                "rate_limits": _rate_limits()})
+                "rate_limits": _rate_limits(),
+                "endpoint_risk": {k: ENDPOINT_RISK[k] for k in
+                                  sorted(ENDPOINT_RISK)}})
 
         # ---- wheel hosting (token-free by design: static public wheels) ----
         if u.path == "/wheels":

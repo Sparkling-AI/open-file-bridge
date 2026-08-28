@@ -508,6 +508,34 @@ curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"allow
 check "reveal re-locks"       'reveal is disabled' "$(curl -s "$BRIDGE/reveal?path=notes.txt" $T)"
 check "state shows allow_reveal" 'allow_reveal'  "$(curl -s $BRIDGE/state)"
 
+# ---------- risk classes per endpoint (P3) ----------
+RS=$(curl -s $BRIDGE/state)
+check "state exposes risk map"    'endpoint_risk'  "$RS"
+check "risk: write_local on /write"    '"/write": *"write_local"'    "$RS"
+check "risk: read on /pdf_text"        '"/pdf_text": *"read"'        "$RS"
+check "risk: ui on /reveal"            '"/reveal": *"ui"'            "$RS"
+check "risk: meta on /health"          '"/health": *"meta"'          "$RS"
+# every table endpoint appears in the map (no silently-unclassified routes)
+MISSING_RISK=$(echo "$RS" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)['endpoint_risk']
+for ep in ('/write','/write_b64','/edit','/delete','/write_many','/zip','/unzip',
+           '/versions/list','/versions/restore','/trash/list','/trash/restore',
+           '/pdf_text','/ocr','/ocr_pdf','/pdf_op','/docx_merge',
+           '/pptx_from_template','/image_info','/reveal','/list','/read','/peek',
+           '/stat','/search','/html_text','/csv_head','/csv_stats','/xlsx_read',
+           '/docx_read','/pptx_read','/directory_tree'):
+    if ep not in d:
+        print('missing:', ep)
+")
+if [ -n "$MISSING_RISK" ]; then echo "  FAIL: risk map gaps — $MISSING_RISK"; fail=1; else echo "  PASS: risk map covers all endpoints"; fi
+# audit rows carry the declared class
+curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"risk-audit.txt","content":"x"}' >/dev/null
+AL=$(tail -3 "$STATEDIR/audit.log" | grep '"endpoint": "/write"' | tail -1)
+check "audit row has risk class"  '"risk": *"write_local"'  "$AL"
+AL2=$(tail -50 "$STATEDIR/audit.log" | grep '"endpoint": "/read"' | tail -1 || true)
+if [ -n "$AL2" ] && echo "$AL2" | grep -q '"risk": *"read"'; then echo "  PASS: read audit has risk class"; elif [ -z "$AL2" ]; then echo "  PASS: read audit has risk class (no /read row yet)"; else echo "  FAIL: read audit risk wrong — $AL2"; fail=1; fi
+
 # ---------- rate circuit breaker (own low-limit instance) ----------
 # The main suite bridge runs with FILE_BRIDGE_MAX_WRITES=500, so a burst can
 # never trip it there. This runs LAST because it reclaims port 8765.
