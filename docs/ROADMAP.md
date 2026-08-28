@@ -401,6 +401,35 @@ final validation pass (not after every change). Do not block on either.
    port-8765 conflict triage + FILE_BRIDGE_PORT override, Safari
    private-network hard limit, first-response checklist).
 
+## 2.4 — first-run picker UX + macOS Dock presence (2026-08-28)
+
+All four items from Dandan's macOS app feedback, same day:
+
+✅ macOS Dock presence — the shipped .app now shows a Dock icon while
+   running (LSUIElement removed; binary bootstraps NSApplication via
+   ctypes — `CocoaDock`, stdlib-only). Dock → Quit verified working;
+   settings page gained a heartbeat ● (5 s /health poll) and a
+   **Stop File Bridge** button (local-only /api/shutdown, clean exit in
+   every mode); second launch while running exits politely and opens
+   the settings page instead of a bind-traceback dialog.
+✅ Native folder picker — **Browse…** button next to the shared-folder
+   input: osascript `choose folder` (macOS), PowerShell
+   FolderBrowserDialog -STA (Windows), zenity/kdialog (Linux). Local-only
+   /api/pick_folder (RiskClass.UI — the click is the consent); open
+   dialogs are killed on bridge shutdown so no orphaned dialog remains.
+✅ OS-specific placeholder — `/Users/you/...` vs `C:\Users\...` vs
+   `/home/you/...` (was: Windows path on every OS).
+✅ OCR language multi-picker — checkboxes from the installed tessdata
+   (friendly names), combining to tesseract `a+b` syntax; free-text
+   override kept. Server-side: `eng, sv`-style input is normalized;
+   unknown/uninstalled codes are rejected with the installed list in the
+   error. /ocr/config moved to the ungated meta section (same disclosure
+   class as /health) so the picker works on FIRST RUN before the origin
+   lock exists.
+Verified: e2e (+8 checks) + addon suites green; frozen .app rebuilt and
+smoked on macOS 26/arm64 (Dock icon, Apple-event quit, Stop button,
+double-launch guard, dialog lifecycle).
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

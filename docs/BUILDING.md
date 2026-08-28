@@ -64,13 +64,31 @@ pyinstaller --onefile --windowed --name FileBridge src/file_bridge.py
 ./build/package_macos.sh              # -> FileBridge-macos.zip
 ```
 
-`package_macos.sh` wraps the binary into a proper `.app` (with `LSUIElement`
-so it runs background-only, no Dock icon) and zips it. It also copies
-`src/wheels/` + `src/tessdata/` into the `.app` next to the executable, so
-the frozen bridge serves all 8 office wheels and offers the bundled OCR
+`package_macos.sh` wraps the binary into a proper `.app` and zips it. It also
+copies `src/wheels/` + `src/tessdata/` into the `.app` next to the executable,
+so the frozen bridge serves all 8 office wheels and offers the bundled OCR
 languages (eng/swe/chi_sim/osd) out of the box — verified on macOS 26/arm64:
 `/health` reports `wheels: 8`, `addons: {pdf: true, ocr: true}`,
 `ocr_langs_available: [chi_sim, eng, osd, swe]`.
+
+The .app shows a **Dock icon while running** (2.4, user feedback): the binary
+bootstraps NSApplication via ctypes (`CocoaDock` in src/file_bridge.py), so
+Dock → Quit works too. Any bootstrap failure falls back to plain background
+serving. The icon (`build/appicon.icns`) is committed; to regenerate after
+editing its design:
+
+```bash
+# 1. edit build/appicon.svg (or your own 1024px SVG), then render + pack:
+qlmanage -t -s 1024 -o /tmp build/appicon.svg          # -> /tmp/appicon.svg.png
+mkdir /tmp/appicon.iconset
+for pair in 16:icon_16x16.png 32:icon_16x16@2x.png 32:icon_32x32.png \
+           64:icon_32x32@2x.png 128:icon_128x128.png 256:icon_128x128@2x.png \
+           256:icon_256x256.png 512:icon_256x256@2x.png 512:icon_512x512.png; do
+  sips -z ${pair%%:*} ${pair%%:*} /tmp/appicon.svg.png \
+        --out /tmp/appicon.iconset/${pair#*:} >/dev/null
+done
+iconutil -c icns -o build/appicon.icns /tmp/appicon.iconset
+```
 
 - Unsigned ⇒ Gatekeeper blocks first launch: **right-click → Open → Open** (once).
 - With an Apple Developer ID ($99/yr):

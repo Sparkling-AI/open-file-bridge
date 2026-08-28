@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f73e6"/>
+      <stop offset="1" stop-color="#0aa894"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="992" height="992" rx="228" fill="url(#g)"/>
+  <text x="200" y="668" font-family="Apple Color Emoji" font-size="330">📁</text>
+  <text x="470" y="700" font-family="Helvetica" font-weight="bold" font-size="380" fill="#ffffff">⇅</text>
+</svg>

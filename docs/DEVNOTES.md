@@ -354,3 +354,55 @@ engine for real installs).
   {"token":{"generate":true}}`, no origin set → ACAO echoed, 401
   without `X-Bridge-Token`, 200 + working write flow with it.
 
+
+## Pitfalls found this session (picker UX + macOS Dock, 2026-08-28)
+
+- **ctypes→ObjC: undeclared restype TRUNCATES pointers (segfault)**:
+  `objc_getClass`/`sel_registerName`/`objc_msgSend` default to `c_int`
+  return, silently chopping 64-bit pointers → messages to garbage
+  (KERN_INVALID_ADDRESS at 0x10). Declare `restype=c_void_p` +
+  `argtypes` for EVERY function BEFORE first use. Cost one crash loop
+  before the pattern clicked.
+- **LSUIElement=false alone does NOT give a Dock icon**: a windowed
+  PyInstaller binary never touches AppKit, so LaunchServices registers
+  it `type=BackgroundOnly` regardless of the plist. The process must
+  itself bootstrap NSApplication (`sharedApplication` +
+  `setActivationPolicy:Regular`, see `CocoaDock`) — then it checks in
+  as `Foreground` and the Dock shows it. `[NSApp run]` also parks the
+  main thread properly once AppKit is loaded in the right order
+  (load the framework FIRST — before any class lookup, or every
+  message goes to nil).
+- **Breaking `[NSApp run]` from another thread needs an EVENT**:
+  `stop:` sets a flag the run loop only checks while processing an
+  event; an idle loop sleeps forever. `performSelectorOnMainThread:`
+  alone does NOT wake it (verified). The working recipe: `stop:` +
+  a no-op application-defined event via
+  `+[NSEvent otherEventWithType:…]` + `postEvent:atStart:YES`.
+  And that factory is a CLASS method — calling it on an `alloc`'d
+  instance silently returns nil. NSPoint-by-value through ctypes works
+  when declared as a `ctypes.Structure` in argtypes.
+- **`ThreadingTCPServer.server_close()` JOINS request threads**
+  (`daemon_threads=False` default): Stop-button hung the process
+  joining the thread parked on a 10-min native dialog. Fixed with
+  `daemon_threads = True` (same as ThreadingHTTPServer) +
+  `kill_active_dialogs()` on shutdown.
+- **The picker page must work in the UNLOCKED first-run state**:
+  `/ocr/config` sat behind the security gate → 503 before the origin
+  lock exists → the new OCR checkbox box rendered "no installed
+  language files" (and the old UI's "Installed:" line was silently
+  empty). Moved to the ungated meta section next to /health (same
+  disclosure class — /health already reports ocr_langs_available).
+  Preview box likewise shows the 🔒 gate error instead of
+  "t.entries is not iterable".
+- **pgrep self-match bit me AGAIN** (documented last session, still
+  got me): `pgrep -f "osascript -e POSIX path"` matched the wrapping
+  shell, not the dialog → killed the wrong pid and concluded the
+  endpoint hung. Write patterns with a character-class split, then
+  verify with `ps -axo pid,ppid,command`.
+- **qlmanage renders SVG→PNG headlessly** (`qlmanage -t -s 1024`),
+  and `NSImage.lockFocus` is gone on macOS 26 — for offscreen icon
+  drawing use the SVG route (see docs/BUILDING.md regenerate recipe).
+- **Windows FolderBrowserDialog path is UNTESTED locally** (no
+  Windows box this session): `-NoProfile -STA` +
+  `[Console]::OutputEncoding=UTF8` before writing the path is the
+  standard recipe; needs a real-machine pass next Windows session.
