@@ -3,7 +3,7 @@
 model preset on an Open WebUI instance via its REST API. Verified against
 Open WebUI v0.11.1.
 
-The script reads the skill body from skill/local-file-bridge/SKILL.md
+The script reads the skill body from skill/open-file-bridge/SKILL.md
 in the repo. To embed an org-wide bridge token (Tier-2 enterprise
 hardening), pass --bridge-token; setup_owui injects it into the skill's
 bootstrap block.
@@ -30,9 +30,9 @@ import sys
 import urllib.request
 from pathlib import Path
 
-SKILL_ID = "local-file-bridge"
+SKILL_ID = "open-file-bridge"
 MODEL_ID = "local-files-assistant"
-STRICT_SKILL_ID = "local-file-bridge-strict"
+STRICT_SKILL_ID = "open-file-bridge-strict"
 STRICT_MODEL_ID = "local-files-assistant-strict"
 # Skill description, shared by BOTH variants (standard + strict).
 # Models are only guaranteed to SEE the name+description (tool list);
@@ -48,7 +48,7 @@ UNIFIED_DESC = (
     "skill first and run its Bootstrap. Files written with open()/os "
     "in this sandbox are LOST and INVISIBLE to the user; claiming "
     "success without a bridge response is a failure.")
-SKILL_DIR = "skill/local-file-bridge"
+SKILL_DIR = "skill/open-file-bridge"
 # keep in sync with VERSION/SKILL_VERSION in src/file_bridge.py and the
 # skill folder's CHANGELOG.md
 SKILL_VERSION = "2.3"
@@ -214,12 +214,12 @@ def main():
     installed = []
     if args.variant == "strict":
         if upsert_skill(base, tok, STRICT_SKILL_ID,
-                        "Local File Bridge (strict)",
+                        "Open File Bridge (strict)",
                         UNIFIED_DESC,
                         strict_md, args.yes):
             installed.append(STRICT_SKILL_ID)
     else:
-        if upsert_skill(base, tok, SKILL_ID, "Local File Bridge",
+        if upsert_skill(base, tok, SKILL_ID, "Open File Bridge",
                         UNIFIED_DESC,
                         std_md, args.yes):
             installed.append(SKILL_ID)
@@ -227,7 +227,7 @@ def main():
         # the strict preset needs the strict skill installed
         if STRICT_SKILL_ID not in installed:
             if upsert_skill(base, tok, STRICT_SKILL_ID,
-                            "Local File Bridge (strict)",
+                            "Open File Bridge (strict)",
                             UNIFIED_DESC,
                             strict_md, args.yes):
                 installed.append(STRICT_SKILL_ID)

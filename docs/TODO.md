@@ -88,7 +88,7 @@ Bridge must be running during chats. Non-technical users will forget.
 - [ ] Preset system prompt line: "never write without confirming the target
       filename with the user first" (cheap, catches most accident classes)
 - [ ] If weak models hallucinate bridge responses, enforce skill via
-      `$local-file-bridge` mention in prompt suggestions
+      `$open-file-bridge` mention in prompt suggestions
 
 ## 7. CI gaps
 

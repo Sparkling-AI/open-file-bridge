@@ -1,7 +1,7 @@
 # Changelog — Local File Bridge skill
 
 Notable, user-facing changes to the OWUI skill
-(`skill/local-file-bridge/SKILL.md`) that admins should announce when
+(`skill/open-file-bridge/SKILL.md`) that admins should announce when
 they re-run `scripts/setup_owui.py`. Bridge-side changes without a
 skill-visible surface stay in ROADMAP/DEVNOTES.
 
@@ -51,7 +51,7 @@ Operational:
   success). `setup_owui.py --variant strict` (strict-only org) or
   `--variant-strict-model <id>` (both skills + a second preset on
   the weak model). Standard SKILL.md unchanged.
-- Skill now ships as a folder (`skill/local-file-bridge/`) with
+- Skill now ships as a folder (`skill/open-file-bridge/`) with
   SKILL.md + CHANGELOG.md; `setup_owui.py` reads SKILL.md from there.
 - `setup_owui.py` on update shows a unified diff preview of skill-body
   changes and asks before overwriting (`--yes` to skip).
