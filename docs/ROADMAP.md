@@ -599,6 +599,11 @@ it land?"). Agreed shape: **chips stay for mentions; outcomes get links**.
    exits 0: 291/291; addon suite 127/127 (first addon run against the
    new tessdata through the real /ocr + /ocr_pdf paths).
 
+✅ Picker language checkboxes now sort by friendly name (code fallback),
+   osd pinned last — code-order read as shuffled (deu "German" before
+   eng "English"). Binary rebuilt (page HTML lives in the exe): frozen
+   e2e 291/291 exit 0; DOM-verified rendered order, vision-checked.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

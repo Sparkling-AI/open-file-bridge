@@ -5058,7 +5058,13 @@ renderPreview();}
 function renderLangs(avail,cur){
  const box=document.getElementById('langbox');
  const sel=new Set(String(cur||'').split('+').filter(Boolean));
- box.innerHTML=(avail&&avail.length)?avail.map(c=>
+ // display order = friendly name (code as fallback): code-sort reads as
+ // shuffled to humans (deu "German" before eng "English"). osd is not a
+ // language but a page-orientation helper — pinned to the end.
+ const order=[...(avail||[])].sort((a,b)=>{
+  const r=(c)=>c==='osd'?1:0;
+  return r(a)-r(b)||(LANG_NAMES[a]||a).localeCompare(LANG_NAMES[b]||b);});
+ box.innerHTML=order.length?order.map(c=>
   '<label>'+
   '<input type="checkbox" value="'+esc(c)+'"'+(sel.has(c)?' checked':'')+
   ' onchange="syncBoxes(true)"> '+esc(c)+
