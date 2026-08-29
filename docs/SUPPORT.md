@@ -59,7 +59,10 @@ ss -tlnp | grep 8765        # or: lsof -i :8765
    systemctl --user stop file-bridge
    ```
    …or just USE the running one: open http://127.0.0.1:8765 — if it's
-   ours and healthy, done.
+   ours and healthy, done. (Since 2.6.3 the user rarely needs telling:
+   clicking the app icon again opens the running bridge's page — on
+   macOS via the Dock reopen event, on Windows the second exe process
+   verifies /version, opens the page, and exits 0.)
 2. **Another app holds 8765.** The bridge supports
    `FILE_BRIDGE_PORT=xxxx` env override. For the service install,
    `scripts/install_service.py` bakes the env in. Pick e.g. 8799, then

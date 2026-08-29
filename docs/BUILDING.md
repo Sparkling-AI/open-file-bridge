@@ -76,9 +76,15 @@ languages (eng/swe/chi_sim/osd) out of the box — verified on macOS 26/arm64:
 
 The .app shows a **Dock icon while running** (2.4, user feedback): the binary
 bootstraps NSApplication via ctypes (`CocoaDock` in src/file_bridge.py), so
-Dock → Quit works too. Any bootstrap failure falls back to plain background
-serving. The icon (`build/appicon.icns`) is committed; to regenerate after
-editing its design:
+Dock → Quit works too. Since 2.6.3 the bootstrap also installs an app
+delegate, so **clicking the Dock icon (or re-opening the .app) opens the
+settings page** in the browser, and a cold launch of the packaged app always
+opens it once. Scripted/service contexts stay silent: launches with a folder
+argument skip the auto-open, and `FILE_BRIDGE_NO_UI=1` (set by
+scripts/install_service.py's units) suppresses every browser pop — set it
+yourself when running the binary headless. Any bootstrap failure falls back
+to plain background serving. The icon (`build/appicon.icns`) is committed;
+to regenerate after editing its design:
 
 ```bash
 # 1. edit build/appicon.svg (or your own 1024px SVG), then render + pack:

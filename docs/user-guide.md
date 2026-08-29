@@ -22,8 +22,10 @@ everything happens between your browser and your own machine.
    **Browse…** (native folder dialog), or paste a path, e.g.
    `C:\Users\you\Documents\my-project`, then click **Save folder**.
 4. Done. A small Open File Bridge process now runs in the background
-   (a green ● on its settings page confirms it is live). Re-launch it any
-   time from the Start menu / desktop icon; your folder choice is remembered.
+   (a green ● on its settings page confirms it is live). To see or change
+   anything later, double-click its icon again (Start menu / desktop) —
+   the settings page opens in your browser; your folder choice is
+   remembered.
 
 ### macOS
 1. Download `FileBridge-macos.zip`, unzip it, drag **FileBridge** into **Applications**.
@@ -33,10 +35,11 @@ everything happens between your browser and your own machine.
    **Browse…** (native folder dialog), or type/paste a path, e.g.
    `/Users/you/Documents/my-project`, then click **Save folder**.
 4. Done. File Bridge runs in the background with an **icon in the Dock** —
-   that is how you can see it is running. Stop it with the **Stop File Bridge**
-   button at the bottom of the settings page, or quit it from the Dock
-   (right-click → Quit). Launching it again while it runs just opens the
-   settings page.
+   that is how you can see it is running. **Click the Dock icon any time to
+   open the settings page** (status, folder, security, OCR). Stop it with
+   the **Stop File Bridge** button at the bottom of the settings page, or
+   quit it from the Dock (right-click → Quit). Launching it again while it
+   runs also just opens the settings page.
 5. OCR languages: tick one or more checkboxes (e.g. English + Swedish —
    combining fixes å/ä/ö *and* digits). Codes can also be typed manually.
 

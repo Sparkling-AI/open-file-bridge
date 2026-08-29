@@ -439,6 +439,35 @@ Verified: e2e (+8 checks) + addon suites green; frozen .app rebuilt and
 smoked on macOS 26/arm64 (Dock icon, Apple-event quit, Stop button,
 double-launch guard, dialog lifecycle).
 
+## 2.6.3 — click the app icon → the settings page opens (user request)
+
+Closes the gap Dandan hit on 2026-08-29: the .app had a Dock icon but
+clicking it did nothing — no delegate, so the "reopen" Apple event
+LaunchServices delivers to the running instance was dropped on the floor.
+
+✅ macOS Dock/Finder click on the RUNNING app — CocoaDock now installs an
+   app delegate (`objc_allocateClassPair` + `class_addMethod`, still
+   stdlib/ctypes-only) answering
+   `applicationShouldHandleReopen:hasVisibleWindows:` → opens
+   `http://127.0.0.1:8765` in the browser (2 s debounce so a dock
+   double-click = one tab). The IMP runs on the AppKit main thread and
+   only spawns a Python thread, so the run loop never blocks/forks.
+✅ Windows "click the icon again" (exe has no tray → it IS a second
+   process): the second copy verifies the listener via token-free
+   `/version`, opens the settings page, exits 0 (previously: bare error
+   + exit 1 — and before 2.6's double-start fix, a broken shared-queue
+   bind). A FOREIGN listener on the port still errors with the
+   FILE_BRIDGE_PORT hint.
+✅ Cold launch of the packaged app (no folder argument) always opens the
+   settings page — not just first-run-with-no-folder. Scripted starts
+   (folder arg) and services (`FILE_BRIDGE_NO_UI=1`, now set by
+   install_service.py in the systemd unit / LaunchAgent plist / Startup
+   .bat) stay silent.
+Verified: e2e +1 check (261 pass; 1 pre-existing env-only pymupdf
+failure, identical on master); frozen .app rebuilt + smoked on macOS
+26/arm64 (cold launch tab, `open`-again reopen tab, debounce, Quit).
+Windows paths code-reviewed only — no Windows box here (per-round norm).
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

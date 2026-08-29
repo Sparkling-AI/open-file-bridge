@@ -5001,6 +5001,9 @@ def pick_folder_dialog(prompt: str = "File Bridge — choose the folder to share
 #     daemon thread. The settings-page Stop button (and any future need
 #     to stop programmatically) breaks the loop with stop: plus
 #     CFRunLoopStop(main) — thread-safe, no NSEvent struct marshalling.
+#   - an app delegate answers applicationShouldHandleReopen: — clicking
+#     the Dock icon (or re-opening the .app) while running pops the
+#     settings/status page in the browser (2.6.3, user request).
 # ctypes pitfall (cost a segfault in testing): objc_getClass /
 # sel_registerName / objc_msgSend MUST have restype/argtypes declared,
 # or ctypes truncates 64-bit pointers to c_int.
@@ -5016,6 +5019,10 @@ class CocoaDock:
     def __init__(self):
         self.ok = False
         self._app = None
+        self._reopen_fn = None        # set via set_reopen() from main()
+        self._reopen_imp = None       # CFUNCTYPE must outlive the delegate
+        self._reopen_delegate = None
+        self._reopen_last = 0.0       # debounce: a dock double-click = 1 tab
         if not _IS_MAC_FROZEN:
             return
         try:
@@ -5041,6 +5048,91 @@ class CocoaDock:
             self.ok = True
         except Exception:
             self.ok = False
+        # Dock-click → settings page (user request 2026-08-29): add-on, never
+        # fatal — a failure here leaves the plain 2.4 dock (icon + Quit).
+        if self.ok:
+            self._install_reopen_delegate()
+
+    # ---- Dock click / Finder double-click on the RUNNING app ------------
+    # LaunchServices does not spawn a second process for an already-running
+    # bundle; it activates the instance and sends it a "reopen" Apple event,
+    # delivered to the application delegate as
+    # applicationShouldHandleReopen:hasVisibleWindows:. Without a delegate
+    # the click does nothing at all. We build one from raw ctypes — same
+    # stdlib-only discipline as the rest of CocoaDock:
+    #   NSObject subclass via objc_allocateClassPair + class_addMethod(IMP)
+    #   → [NSApp setDelegate:]. The IMP runs ON the AppKit main thread (the
+    #   run loop dispatches it), so it must not block or fork there: it
+    #   spawns a Python thread and returns YES immediately.
+
+    def set_reopen(self, fn):
+        """fn() is called (off the main thread) when the user clicks the
+        app's Dock icon or re-opens the .app while it is running."""
+        self._reopen_fn = fn
+
+    def _install_reopen_delegate(self):
+        try:
+            import ctypes
+            ob = ctypes.CDLL("/usr/lib/libobjc.dylib")
+            ob.objc_getClass.restype = ctypes.c_void_p
+            ob.objc_getClass.argtypes = [ctypes.c_char_p]
+            ob.sel_registerName.restype = ctypes.c_void_p
+            ob.sel_registerName.argtypes = [ctypes.c_char_p]
+            sel = ob.sel_registerName
+            ob.objc_allocateClassPair.restype = ctypes.c_void_p
+            ob.objc_allocateClassPair.argtypes = [ctypes.c_void_p,
+                                                  ctypes.c_char_p,
+                                                  ctypes.c_size_t]
+            ob.class_addMethod.restype = ctypes.c_bool
+            ob.class_addMethod.argtypes = [ctypes.c_void_p, ctypes.c_void_p,
+                                           ctypes.c_void_p, ctypes.c_char_p]
+            ob.objc_registerClassPair.restype = None
+            ob.objc_registerClassPair.argtypes = [ctypes.c_void_p]
+
+            # BOOL imp(id self, SEL _cmd, id sender, BOOL hasVisibleWindows)
+            REOPEN_IMP = ctypes.CFUNCTYPE(
+                ctypes.c_bool, ctypes.c_void_p, ctypes.c_void_p,
+                ctypes.c_void_p, ctypes.c_bool)
+
+            def _imp(_self, _cmd, _sender, _has_vis):
+                now = time.monotonic()
+                if now - self._reopen_last < 2.0:   # double-click = 1 tab
+                    return True
+                self._reopen_last = now
+                fn = self._reopen_fn
+                print("Dock icon clicked — opening the File Bridge page")
+                if fn is not None:
+                    threading.Thread(target=fn, daemon=True).start()
+                return True
+
+            imp = REOPEN_IMP(_imp)
+            self._reopen_imp = imp   # keep the C trampoline alive (GC-proof)
+
+            cls = ob.objc_allocateClassPair(ob.objc_getClass(b"NSObject"),
+                                            b"FileBridgeReopenDelegate", 0)
+            if not cls:
+                return
+            if not ob.class_addMethod(
+                    cls,
+                    sel(b"applicationShouldHandleReopen:hasVisibleWindows:"),
+                    ctypes.cast(imp, ctypes.c_void_p), b"B@:@B"):
+                return
+            ob.objc_registerClassPair(cls)
+            msg = ob.objc_msgSend
+            msg.restype = ctypes.c_void_p
+            msg.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+            delegate = msg(msg(cls, sel(b"alloc")), sel(b"init"))
+            if not delegate:
+                return
+            set_d = ob.objc_msgSend
+            set_d.restype = None
+            set_d.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_void_p]
+            set_d(self._app, sel(b"setDelegate:"), delegate)
+            self._reopen_delegate = delegate   # NSApplication does NOT
+            # retain its delegate; holding the raw pointer plus zero
+            # releases anywhere keeps it alive for the process lifetime.
+        except Exception:
+            self._reopen_delegate = None
 
     def run_forever(self):
         """Park the main thread in the AppKit event loop until stopped."""
@@ -5114,6 +5206,19 @@ class CocoaDock:
 
 
 _SHUTDOWN_FN = None   # set in main(): called from a server thread to stop
+
+
+def _is_file_bridge_url(url: str) -> bool:
+    """True if the listener at url answers /version like a File Bridge
+    (token-free endpoint) — tells a live bridge apart from whatever else
+    might hold the port, before we open a browser tab at it."""
+    try:
+        import urllib.request
+        with urllib.request.urlopen(f"{url.rstrip('/')}/version",
+                                    timeout=1.5) as r:
+            return r.status == 200 and b'"bridge"' in r.read(4096)
+    except Exception:
+        return False
 
 
 def main():
@@ -5200,10 +5305,15 @@ def main():
         return orig_do_GET(self)
     Handler.do_GET = do_GET_picker
 
-    # refuse to double-start: with SO_REUSEADDR a second instance can end up
-    # sharing the listen queue, and connections then land on a process that
-    # never serves them (verified: two frozen instances → /version answers,
-    # /list hangs forever)
+    # second start while a bridge is already listening. Windows: THE path —
+    # the exe has no tray icon, so "click the app icon again" IS a second
+    # process (macOS rarely gets here: LaunchServices activates the running
+    # app instead, handled by the Dock reopen delegate). We must never bind
+    # anyway: with SO_REUSEADDR a second instance can end up sharing the
+    # listen queue and connections land on a process that never serves them
+    # (verified: two frozen instances → /version answers, /list hangs
+    # forever). So: verify the listener is one of ours (/version), pop its
+    # settings page, exit 0. Only a foreign listener still errors.
     import socket as _sock
     try:
         _probe = _sock.create_connection(("127.0.0.1", PORT), timeout=1)
@@ -5212,9 +5322,22 @@ def main():
     except OSError:
         _already = False
     if _already:
-        print(f"error: a File Bridge is already listening on port {PORT} — "
-              f"stop it first (quit the app / pkill FileBridge, or set "
-              f"FILE_BRIDGE_PORT for a second instance)")
+        url = f"http://127.0.0.1:{PORT}"
+        if _is_file_bridge_url(url):
+            if os.environ.get("FILE_BRIDGE_NO_UI"):
+                print(f"File Bridge already running at {url} — this copy "
+                      f"exits (browser suppressed: FILE_BRIDGE_NO_UI).")
+            else:
+                print(f"File Bridge is already running at {url} — opening "
+                      f"its page in your browser; this copy exits (the "
+                      f"running one keeps serving).")
+                try:
+                    webbrowser.open(url)
+                except Exception:
+                    pass
+            sys.exit(0)
+        print(f"error: port {PORT} is held by something that is not a File "
+              f"Bridge — set FILE_BRIDGE_PORT to move the bridge elsewhere")
         sys.exit(1)
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
@@ -5225,15 +5348,16 @@ def main():
     try:
         httpd = socketserver.ThreadingTCPServer(("127.0.0.1", PORT), Handler)
     except OSError:
-        # second launch while the first bridge still holds the port (e.g.
-        # the Dock icon got clicked again) — die politely instead of a
-        # windowed traceback dialog, and send the user to the live picker.
+        # rare race only (the probe above lost the port between checking
+        # and binding) — die politely instead of a windowed traceback
+        # dialog, and send the user to the live settings page.
         print(f"File Bridge is already running at http://127.0.0.1:{PORT} — "
               f"this second copy exits.")
-        try:
-            webbrowser.open(f"http://127.0.0.1:{PORT}")
-        except Exception:
-            pass
+        if not os.environ.get("FILE_BRIDGE_NO_UI"):
+            try:
+                webbrowser.open(f"http://127.0.0.1:{PORT}")
+            except Exception:
+                pass
         return
 
     # macOS .app: Dock presence via the CocoaDock bootstrap — the server
@@ -5245,6 +5369,7 @@ def main():
     dock = CocoaDock()
     url = f"http://127.0.0.1:{PORT}"
     mode = security_mode()
+    dock.set_reopen(lambda: webbrowser.open(url))   # Dock/Finder click → UI
     if dock.ok:
 
         def _stop_cocoa():
@@ -5260,12 +5385,25 @@ def main():
     if mode == "UNLOCKED":
         print("⚠ UNLOCKED: file endpoints are DISABLED until you set the allowed")
         print("  Open WebUI origin (and optionally a token) in the settings page.")
+    # Clicking the app icon should always surface the UI (user request
+    # 2026-08-29), not only on first run with no folder configured. Scoped
+    # to icon-style launches: a folder ARGUMENT means a scripted/CLI start
+    # (skill, tests, shortcuts that pin a folder know what they opened),
+    # and services set FILE_BRIDGE_NO_UI=1 so a login autostart stays
+    # silent. Cold launch opens here; a click on the ALREADY-running app
+    # arrives as the Dock reopen event (see CocoaDock.set_reopen).
+    _ui_launch = (bool(getattr(sys, "frozen", False)) and not folder
+                  and not os.environ.get("FILE_BRIDGE_NO_UI"))
     if not root:
-        print("No folder set — opening folder picker in your browser...")
+        print("No folder set — opening the setup page in your browser...")
+    elif _ui_launch:
+        print("App started from its icon — opening the File Bridge page...")
+    if not root or _ui_launch:
         threading.Timer(0.5, lambda: webbrowser.open(url)).start()
     if dock.ok:
-        print("Running with a Dock icon — Quit from the Dock, or the Stop button"
-              " on the settings page, ends the bridge.")
+        print("Running with a Dock icon — click it any time to open the File"
+              " Bridge page; Quit from the Dock, or the Stop button on the"
+              " settings page, ends the bridge.")
         dock.run_forever()
     else:
         try:
