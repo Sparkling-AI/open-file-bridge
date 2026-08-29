@@ -100,6 +100,13 @@ If your admin bundled the PDF/OCR add-on (included in the standard installer):
 
 Scanned pages take ~1–3 seconds each.
 
+**"Describe this photo" needs one extra step.** OCR reads text inside
+images, and the model can show an image inline in the chat — but it
+cannot visually inspect files inside your shared folder (that's Open
+WebUI's architecture, not the bridge). To let a vision model actually
+*see* an image, attach the file to your chat message (📎) and ask about
+it there.
+
 ## Troubleshooting
 
 **"Bridge isn't running"** — Start Open File Bridge (Windows: Start menu; macOS:
