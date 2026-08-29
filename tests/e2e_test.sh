@@ -58,7 +58,10 @@ FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_MAX_WRITES=500 \
   FILE_BRIDGE_PORT="$PORT_NUM" \
   FILE_BRIDGE_LAUNCHER="$TESTDIR/fake-launcher.sh" $BRIDGE_CMD "$TESTDIR" &
 BRIDGE_PID=$!
-trap 'kill $BRIDGE_PID $SQUAT 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR" ${BRKDIR:-} ${BRKSTATE:-}' EXIT
+# cleanup guard: on macOS bash 3.2 + set -e, a failing kill in the EXIT trap
+# (both PIDs already dead) aborts the trap — temp dirs leak and the exit
+# status becomes 1 even on ALL-PASSED runs. `|| true` keeps cleanup whole.
+trap 'kill $BRIDGE_PID $SQUAT 2>/dev/null || true; rm -rf "$TESTDIR" "$STATEDIR" ${BRKDIR:-} ${BRKSTATE:-} 2>/dev/null || true' EXIT
 # readiness poll (not a blind sleep): frozen onefile binaries take ~2 s to
 # self-extract before the listener comes up
 for _ in $(seq 1 60); do curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1 && break; sleep 0.5; done
@@ -725,12 +728,14 @@ import os, sys, importlib.util
 sd = os.path.join(sys.argv[1], "langtest")
 os.environ["FILE_BRIDGE_STATE_DIR"] = sd
 os.makedirs(os.path.join(sd, "tessdata"), exist_ok=True)
-open(os.path.join(sd, "tessdata", "deu.traineddata"), "wb").write(b"fake-deu")
+# kaz: the bundled set grew to 22 langs (deu among them) — use a code that is
+# NOT bundled so the assertion still proves the drop-in merge happened.
+open(os.path.join(sd, "tessdata", "kaz.traineddata"), "wb").write(b"fake-kaz")
 spec = importlib.util.spec_from_file_location("fb_check", "src/file_bridge.py")
 m = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)          # module-level init runs the merge
 langs = m._ocr_langs_available()
-print("OK" if ("deu" in langs and "eng" in langs) else "MISSING %s" % langs)
+print("OK" if ("kaz" in langs and "eng" in langs) else "MISSING %s" % langs)
 PYEOF
 )
 check "tessdata drop-in merged" 'OK' "$TD"

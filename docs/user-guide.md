@@ -116,7 +116,11 @@ stage the skill without an embedded token and use the individual flow above.
 Open File Bridge reads scans in your language. Open `http://127.0.0.1:8765`, set
 **OCR language** (e.g. `swe+eng` for Swedish documents with English words,
 `chi_sim+eng` for Chinese). The list of installed languages is shown there.
-Changing it takes effect immediately — no restart needed.
+Changing it takes effect immediately — no restart needed. The standard install
+bundles 22 languages out of the box: English, Swedish, Danish, Norwegian,
+Finnish, German, French, Spanish, Italian, Portuguese, Russian, Polish,
+Hungarian, Latvian, Lithuanian, Estonian, Chinese (Simplified + Traditional),
+Japanese, Korean, and Arabic — plus auto-detect for page orientation.
 
 ## PDFs, scans and photos
 

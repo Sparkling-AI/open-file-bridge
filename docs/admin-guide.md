@@ -149,8 +149,11 @@ Language data (`.traineddata`) resolution order:
 2. `tessdata/` directory **next to the bridge executable** (bundled — recommended)
 3. tesseract's compiled-in system default (`/usr/share/tesseract-ocr/…`)
 
-The repo bundles `src/tessdata/` with **eng, swe, chi_sim, osd** (~20 MB).
-Ship it inside your installers (it's just files — no install needed).
+The repo bundles `src/tessdata/` with **22 languages + osd** (~74 MB):
+eng, swe, dan, nor, fin, deu, fra, spa, ita, por, rus, pol, hun, lav,
+lit, est, chi_sim, chi_tra, jpn, kor, ara, plus osd (script/orientation
+detection). All are tessdata_fast builds. Ship it inside your installers
+(it's just files — no install needed).
 
 ### Adding languages
 

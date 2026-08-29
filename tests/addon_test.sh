@@ -6,7 +6,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BRIDGE="http://127.0.0.1:8765"
+# honor FILE_BRIDGE_PORT so the suite can run beside a live bridge on 8765
+# (default stays 8765 = the real deployment port; same hook as e2e_test.sh)
+PORT_NUM=${FILE_BRIDGE_PORT:-8765}
+BRIDGE="http://127.0.0.1:${PORT_NUM}"
 TESTDIR=$(mktemp -d)
 STATEDIR=$(mktemp -d)
 
@@ -18,12 +21,15 @@ if ! curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1; then
   # full deps: the suite exercises pypdfium2 (pdf images mode), python-docx
   # (docx_merge, mailmerge), python-pptx (templates) and openpyxl (xlsx rows)
   FILE_BRIDGE_MAX_WRITES=500 FILE_BRIDGE_STATE_DIR="$STATEDIR" \
+    FILE_BRIDGE_PORT="$PORT_NUM" \
     uv run --with pymupdf --with fpdf2 --with pypdfium2 \
            --with python-docx --with python-pptx --with openpyxl \
            python src/file_bridge.py "$TESTDIR" &
   BPID=$!
   started_here=1
-  trap 'kill $BPID 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR"' EXIT
+  # || true guards: macOS bash 3.2 + set -e aborts the EXIT trap on a dead
+  # pid's kill — leaking temp dirs and forcing exit 1 on passing runs.
+  trap 'kill $BPID 2>/dev/null || true; rm -rf "$TESTDIR" "$STATEDIR" 2>/dev/null || true' EXIT
   sleep 8
   # security gate (v2): unlock file serving by locking an origin
   curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' \
