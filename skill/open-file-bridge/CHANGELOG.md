@@ -2,6 +2,23 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.8 — 2026-08-30
+
+Data analysis on local tabular files (pandas / matplotlib).
+
+- New "Data analysis" section: `micropip.install(["pandas", "matplotlib"])`
+  resolves against the Pyodide distribution OWUI itself bundles (numpy and
+  other deps come automatically). CSV via `/read` + `pd.read_csv`, Excel
+  grids via `/xlsx_read`; charts saved with `bridge_write_bytes` and shown
+  in chat via `/image_b64`.
+- Compiled (wasm32) packages deliberately NOT added to the bridge's
+  `/wheels` — they must match the running Pyodide's Python/ABI exactly, so
+  the bridge serves pure-Python office packages only. Skill text now says
+  this explicitly (a wrong-ABI wheel fails with a confusing
+  ModuleNotFoundError, not a clear version error).
+- Offline fallback note: stdlib `csv` + `statistics` for simple
+  aggregations when micropip cannot reach a package index.
+
 ## 2.7 — 2026-08-29 (staged with bridge 2.7)
 
 Outcome links: files the assistant creates or changes become clickable

@@ -128,6 +128,26 @@ already emits the right format — one skill-text update would enable it.
 Any of these moving in a release = `setup_owui.py` needs a patch before
 that version is supported.
 
+## Pyodide data-stack packages (numpy / pandas / matplotlib)
+
+Since skill 2.8 the skill text instructs the model to
+`micropip.install(["pandas", "matplotlib"])` for tabular analysis. These are
+COMPILED packages: micropip resolves them against the pyodide-lock.json that
+OWUI itself serves (`${origin}/pyodide/`), so they always match the running
+interpreter's Python/ABI — verified on the 2026-08 `:main` image (Python
+3.14.0 / emscripten 5.0.3 / abi 2026_0; numpy 2.4.3, pandas 3.0.2,
+matplotlib 3.10.8, scipy, statsmodels, scikit-learn all present, CORS `*`).
+
+**The bridge's `/wheels` deliberately does NOT carry these.** Rule of thumb:
+`py3-none-any` (pure Python: openpyxl, python-docx, fpdf2, …) → bridge-served,
+version-agnostic; `*-wasm32` (compiled) → Pyodide-lock-resolved, ABI-exact.
+A wasm wheel from the wrong Pyodide generation fails at import with a
+confusing `ModuleNotFoundError`, not a version error — don't ship them.
+
+Upgrade check: after an OWUI bump, `curl <owui>/pyodide/pyodide-lock.json`
+and confirm `pandas`/`matplotlib` are still in `packages` (one line of
+python; also re-run one data-analysis chat smoke).
+
 ## Upgrade checklist (run once per new OWUI minor)
 
 1. Snapshot the test stack: `docker exec owui-test ...` or just note the
@@ -145,5 +165,8 @@ that version is supported.
    to token mode; if a new sandbox shape appears, re-verify tier 2.
 5. Full chat round-trip: $-mention the skill → model runs Python →
    `/list` + `/read` + one write with confirmation round-trip.
-6. If a Jupyter interpreter option appeared or Pyodide was demoted:
+6. Data-stack check: `curl <owui>/pyodide/pyodide-lock.json` still lists
+   pandas/matplotlib (see the section above); run one data-analysis chat
+   (xlsx → pandas → chart via `/image_b64`).
+7. If a Jupyter interpreter option appeared or Pyodide was demoted:
    STOP, document in DEVNOTES, decide Plan B timing (do not roll out).

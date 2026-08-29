@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v2.7
+# Local File Bridge — skill v2.8
 
 Access files in **the user's own computer** through their local Open File Bridge service (running at `http://127.0.0.1:8765`). The user has explicitly installed and authorized this — files NEVER pass through the Open WebUI server; all access happens from the user's browser via the Code Interpreter (Pyodide), which runs on the user's machine.
 
@@ -383,6 +383,62 @@ out file follows the 409 confirmation flow.
 
 Use `/read` + `/write` (text endpoints) — no libraries needed. CSV parses
 with the stdlib `csv` module from a `StringIO`.
+
+## Data analysis (pandas / matplotlib)
+
+For real tabular analysis — grouping, pivots, joins, time series, charts —
+install **pandas + matplotlib via micropip**. These are COMPILED packages:
+they resolve against the Pyodide distribution OWUI itself runs, using its
+bundled package lock (numpy and friends come as dependencies automatically —
+do NOT list them). One install per chat session:
+
+```python
+import micropip
+await micropip.install(["pandas", "matplotlib"])   # deps auto-resolve
+import pandas as pd, matplotlib
+```
+
+Data in: fetch raw bytes via the bridge (`/read` for CSV, `/xlsx_read` for
+Excel as a JSON grid) and wrap in pandas. Write results back with
+`bridge_write_bytes(...)` (see bootstrap helpers), then show charts in chat
+with `/image_b64`.
+
+```python
+# CSV → DataFrame (bytes from the bridge, no CORS/file-system access needed)
+from io import StringIO
+csv = await bridge_get("/read", {"path": "data/sales-2026.csv"})
+df = pd.read_csv(StringIO(csv["content"]))
+monthly = df.groupby("month")["amount"].sum()
+
+# Chart → save locally → show in chat (Agg only; no GUI backends in wasm)
+import matplotlib.pyplot as plt
+matplotlib.use("Agg")
+ax = monthly.plot(kind="bar", figsize=(7, 4), title="Monthly sales")
+ax.set_xlabel("Month"); ax.set_ylabel("SEK")
+plt.tight_layout()
+buf = io.BytesIO(); plt.savefig(buf, format="png", dpi=110); plt.close()
+await bridge_write_bytes("charts/monthly-sales.png", buf.getvalue())
+
+d = await bridge_get("/image_b64", {"path": "charts/monthly-sales.png",
+                                    "max_bytes": 500000})
+# then in your ANSWER:  ![monthly-sales.png](<the data_url value>)
+```
+
+Excel: `/xlsx_read` returns the grid as JSON (`data: [[...]]`, first row =
+headers when `header_row=1`) — `pd.DataFrame(d["data"][1:], columns=d["data"][0])`.
+For WRITING Excel with formatting, stay on openpyxl from the bridge's local
+wheels (see Office files section) — pandas `to_excel` also uses openpyxl,
+installed from the same local wheels.
+
+**Do NOT take pandas/numpy/matplotlib from `/wheels`** — those bridge-served
+wheels are pure-Python office packages only. Compiled wasm packages must come
+from the running Pyodide's own lock (micropip resolves them by name); a
+version mismatch (wrong Python/ABI tag) fails at import with a confusing
+`ModuleNotFoundError`/`AttributeError`, not a clear version error.
+
+If micropip cannot reach the package index (strictly-offline OWUI without
+its bundled package dir), say so and fall back to stdlib `csv` + `statistics`
+for simple aggregations — most group-by sums/means/counts still work.
 
 ## Outcome links — files you created or changed
 
