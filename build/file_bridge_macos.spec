@@ -38,7 +38,7 @@ exe = EXE(
     exclude_binaries=True,
     name='FileBridge',
     console=False,
-    icon=None,              # add icon='filebridge.icns' when you have one
+    icon='appicon.icns',    # raw-binary Dock icon; the .app wrapper sets its own copy
 )
 
 coll = COLLECT(

@@ -534,3 +534,42 @@ deeper collapsed), per-folder child counts in the summary row,
 auto-refresh (paths recorded from details[open] before re-render and
 reapplied). Truncation notice mirrors the cap the MODEL sees.
 Verified live in-browser: probe file appeared within one 5 s cycle.
+
+## 2.6 — real app icon replaces emoji placeholder (user pick)
+
+The old appicon.svg was a gradient squircle with the 📁 **emoji** and a
+Unicode ⇅ pasted as <text> — output depended on whatever fonts the build
+machine had, and the Windows side had no icon at all. Replaced with a
+pure-vector design (same brand gradient): big yellow folder low-left,
+white circular badge on its top-right corner carrying blue up/down
+arrows (user's layout call). Drafts + review loop live in
+build/icon-drafts/ (preview.html shows every candidate at Dock sizes).
+
+Shipped everywhere the app has a face:
+- build/appicon.svg → regenerated build/appicon.icns (qlmanage/sips/
+  iconutil pipeline below, now also 1024 px @2x tier).
+- NEW build/appicon.ico — 7 PNG-compressed sizes 16–256 px, assembled
+  by a ~15-line struct.pack script (no Pillow/ImageMagick needed on
+  this machine); wired as icon= in file_bridge_windows.spec and as
+  SetupIconFile in installer_windows.iss, so exe, shortcuts and the
+  setup exe all show it.
+- file_bridge_macos.spec now sets icon='appicon.icns' too (the raw
+  onefile/onefolder binary gets a Dock icon even before the .app
+  wrapper adds its own copy).
+
+Still missing: web UI favicon (browser tab) — same SVG could become a
+/static route later.
+
+## 2.5.3 — pathological-share protections for the preview (user question)
+
+"What if the user shares ~ or /?" Three layers: (1) the state-dir
+containment rule REJECTS / and ~ outright (the root would contain the
+bridge's own state dir — e2e-covered since the macOS symlink fix);
+(2) entry/depth caps bound every walk (preview 500, /list 500 + walk
+5000); (3) NEW: directory_tree gained a wall-clock budget (budget_s,
+default 1.5 s, 0.5–10 clamp) — a single 100k-entry directory is fully
+readdir'd before any entry cap bites, so past the budget we stop
+DESCENDING (already-listed children render; truncated flagged). Picker
+auto-refresh is now adaptive: a >1.5 s walk switches the poll to 30 s
+until walks are fast again (plus the existing visible-tab + no-overlap
+guards). e2e 246/246.

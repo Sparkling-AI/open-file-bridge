@@ -1325,9 +1325,16 @@ def zip_extract(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
 
 def directory_tree(p: Path, cfg: dict, q: dict) -> dict:
     """Recursive tree (openapi-servers /directory_tree pattern), respecting
-    ignore lists, with entry caps + depth limit for huge folders."""
+    ignore lists, with entry caps + depth limit for huge folders, plus a
+    wall-clock budget: a single huge directory (100k entries) is fully
+    readdir'd before any entry cap can bite, so once the budget elapses we
+    stop DESCENDING further (children already listed still render) and
+    report truncated. Caps pathological-but-allowed shares — mounting the
+    whole disk is separately rejected by the state-dir containment rule."""
     max_entries = min(int(q.get("max_entries", "500") or 500), 2000)
     max_depth = min(int(q.get("max_depth", "6") or 6), 12)
+    budget_s = min(max(float(q.get("budget_s", "1.5") or 1.5), 0.5), 10.0)
+    t0 = time.time()
     pats = list(cfg.get("ignore", [])) + _global_ignore()
     truncated = False
     count = 0
@@ -1357,7 +1364,11 @@ def directory_tree(p: Path, cfg: dict, q: dict) -> dict:
                 except OSError:
                     pass
             elif depth < max_depth:
-                entry["children"] = build(item, depth + 1, rel)
+                if time.time() - t0 > budget_s:
+                    truncated = True
+                    entry["truncated"] = True   # listed, not expanded
+                else:
+                    entry["children"] = build(item, depth + 1, rel)
             else:
                 entry["truncated"] = True
             entries.append(entry)
@@ -4640,6 +4651,7 @@ setInterval(beat,5000);beat();
 async function renderPreview(){
  if(window._pvBusy)return;window._pvBusy=true;
  const box=document.getElementById('preview'), info=document.getElementById('previnfos');
+ const t0=performance.now();
  try{
   const h=await (await fetch('/health')).json();
   if(!h.ok){box.innerHTML='🔒 '+(h.hint||'no folder chosen yet');info.textContent='';return;}
@@ -4672,9 +4684,20 @@ async function renderPreview(){
    (t.truncated?' · TRUNCATED at cap — the model sees the same limit':'')+
    ' · ignore lists applied · symlinks never shown';
  }catch(e){box.innerHTML='preview unavailable: '+esc(e.message||e);}
- finally{window._pvBusy=false;}
+ finally{
+  window._pvBusy=false;
+  // adaptive cadence: a slow walk (huge folder / cold cache) means the
+  // user mounted something big — poll gently (30 s) until it's fast again
+  window._pvMs=performance.now()-t0;
+ }
 }
-setInterval(()=>{if(document.visibilityState==='visible')renderPreview()},5000);
+(function pvLoop(){
+ setTimeout(async()=>{
+  if(document.visibilityState==='visible')await renderPreview();
+  const slow=(window._pvMs||0)>1500?30000:5000;
+  pvLoop();
+ },(window._pvMs||0)>1500?30000:5000);
+})();
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')renderPreview()});
 async function setLang(){
  const l=document.getElementById('ocrlang').value.trim();
