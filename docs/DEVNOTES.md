@@ -444,3 +444,25 @@ Also: picker now states on refresh whether a token is configured (the
 field stays empty by design — the secret is never echoed back; users
 read "Security mode: token+origin · a token IS configured"). Found the
 token was persisted all along; only the UI was silent about it.
+
+## Skill 2.4 — "list files" in two calls, not four (2026-08-29)
+
+Dandan's trace of a plain listing: /version (skill-mandated) → /health
+(skill-mandated) → /directory_tree WITHOUT token → AbortError → blind
+retry with token. Four executions, one wasted on a version mismatch note
+(bridge 2.4 vs skill 2.3) that only made the model hesitant.
+
+- root cause of the tokenless GET: the skill's own bridge_get example
+  omitted BRIDGE_HEADERS (only bridge_post sent them). Both variants now
+  send headers on every call; the injected org-token block (now incl.
+  Content-Type) says "use verbatim, do not redefine".
+- /version preflight step removed from both skill variants: /health
+  already returns version; check it there, once per session.
+- new rule in both skills: non-200 bodies are JSON {error, hint} — read
+  and adjust (401 → add token, retry once); never blind-retry.
+- bridge: SKILL_VERSION 2.4 (synced, mismatch note gone) and null-origin
+  401s are now CORS-readable — a missing token reads as "missing or
+  invalid bridge token" instead of an opaque AbortError, so models
+  self-correct in one retry. Enumerated the reachable bodies: public
+  endpoints, token-valid responses, token-error messages — no secrets.
+  e2e updated (denial-readable + denial-explains checks), 230/230.

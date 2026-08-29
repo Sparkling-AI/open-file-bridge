@@ -52,7 +52,7 @@ MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
 VERSION = "2.4"
-SKILL_VERSION = "2.3"   # keep in sync with skill/open-file-bridge/SKILL.md
+SKILL_VERSION = "2.4"   # keep in sync with skill/open-file-bridge/SKILL.md
 
 
 # ------------------------------------------- risk classes (P3, openworker risk.py)
@@ -2958,13 +2958,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
         raw_origin = (self.headers.get("Origin") or "").strip()
         origin = _request_origin(self.headers)      # null/absent → None
         allowed = get_allowed_origin()
-        # Opaque origins additionally require that THIS request passed the
-        # auth gate (public endpoints and preflights set the flag too).
-        # Denials (bad/missing token) stay browser-unreadable — no secrets
-        # in those bodies, but hiding them gives a probing sandbox nothing.
+        # Opaque origins are granted CORS whenever the token tier is active.
+        # Enumerating null-origin requests: public endpoints, token-valid
+        # calls, and 401 token failures — every response body reachable this
+        # way is either public or an error message with no secrets, and a
+        # READABLE 401 ("missing or invalid bridge token") lets the model
+        # self-correct in one retry instead of hitting an opaque CORS block.
+        # Origin-only mode keeps refusing null (an unmatched sandbox must
+        # read nothing).
         opaque_ok = (raw_origin.lower() == "null"
-                     and get_configured_token() is not None
-                     and getattr(self, "_authorized", False))
+                     and get_configured_token() is not None)
         if allowed is None or (origin and origin == allowed) or opaque_ok:
             echo = "null" if opaque_ok else (origin or "*")
             self.send_header("Access-Control-Allow-Origin", echo)
@@ -3003,7 +3006,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         return ENDPOINT_RISK.get(urlparse(self.path).path, RiskClass.READ)
 
     def do_OPTIONS(self):
-        self._authorized = True   # preflight: no auth possible, grants nothing
         self.send_response(204)
         self._add_matching_cors()
         self.send_header("Access-Control-Max-Age", "86400")
@@ -3012,10 +3014,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ---- GET ----
 
     def do_GET(self):
-        # everything before the auth gate below is a public endpoint
-        # (/health /version /ocr/config /wheels…) — readable by opaque origins
-        # while the token tier is active (see _add_matching_cors)
-        self._authorized = True
         root = load_root()
         u = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(u.query).items()}
@@ -3038,13 +3036,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(200, info)
 
         if u.path == "/version":
-            # token-free like /health: just versions, no fs info.
-            # The skill calls this at session start; a mismatch means the
-            # admin updated one side but not the other → nudge.
+            # token-free like /health: just versions, no fs info. Skill 2.4+
+            # reads the version from /health instead (one fewer round trip);
+            # /version stays for older skills and manual debugging.
             return self._json(200, {"bridge": VERSION, "skill": SKILL_VERSION,
                                     "skill_expected": SKILL_VERSION,
-                                    "note": "skill markdown must match; re-run "
-                                            "scripts/setup_owui.py to sync"})
+                                    "note": "bridge and skill versions should "
+                                            "match; re-run scripts/setup_owui.py "
+                                            "to sync the skill"})
 
         if u.path == "/state":
             return self._json(200, {
@@ -3098,7 +3097,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # ---- security gate: everything below serves files ----
         ok, status, reason = check_request(self.headers)
         if not ok:
-            self._authorized = False
             return self._json(status, {"error": reason})
 
         if root is None:
@@ -3523,9 +3521,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         root = load_root()
         ok, status, reason = check_request(self.headers)
         if not ok:
-            self._authorized = False
             return self._json(status, {"error": reason})
-        self._authorized = True   # POST file ops: CORS for opaque origins
         if root is None:
             return self._json(409, {"error": "No folder chosen yet."})
         try:

@@ -18,8 +18,8 @@ Bridge" skill instead — more endpoints, more freedom.)
 2. **NEVER use `open()`, `os.*`, or `pathlib` to read or write user
    files.** A file written inside the sandbox is LOST — the user will
    never see it. Telling the user it was created would be a lie.
-3. First action of every session: run the bootstrap block below, then
-   `GET /health` and `GET /version`.
+3. First action of every session: run the bootstrap block below (its
+   `GET /health` doubles as the version check).
 4. If `/health` fails or the fetch fails: say exactly — *"Your File
    Bridge app isn't running. Please start the Open File Bridge app on your
    computer, then ask me again."* — and STOP. Do NOT look in
@@ -53,17 +53,18 @@ from pyodide.http import pyfetch
 import json
 
 # If your admin gave the org a Tier-2 token it appears as an injected
-# BRIDGE_HEADERS line above — use that instead of this default:
+# BRIDGE_HEADERS block above — use that instead of this default:
 BRIDGE_HEADERS = {"Content-Type": "application/json"}
 
 async def bridge_get(path, params=None):
     url = f"http://127.0.0.1:8765{path}"
     if params:
         url += "?" + "&".join(f"{k}={v}" for k, v in params.items())
-    r = await pyfetch(url)
+    r = await pyfetch(url, headers=BRIDGE_HEADERS)
+    t = await r.text()
     if r.status != 200:
-        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {await r.text()}")
-    return await r.json()
+        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {t}")
+    return json.loads(t)
 
 async def bridge_post(path, payload):
     r = await pyfetch(f"http://127.0.0.1:8765{path}", method="POST",
@@ -73,15 +74,17 @@ async def bridge_post(path, payload):
         raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {await r.text()}")
     return await r.json()
 
-# session start (Rule 3):
+# session start (Rule 3) — ONE call: /health already carries the version:
 h = await bridge_get("/health")
-v = await bridge_get("/version")
-print(h.get("ok"), h.get("root"), v.get("bridge"))
+print(h.get("ok"), h.get("root"), h.get("version"))
 ```
 
-`/health` → `{"ok": true, ...}` means running; the response also shows
-the shared root folder. `/version` mismatch with v2.3 → tell the user
-"the bridge app and the skill are out of sync — re-run the installer".
+`/health` → `{"ok": true, ...}` means running; it also shows the shared
+root folder and the `version` (older than v2.4 → tell the user "the bridge
+app and the skill are out of sync — re-run the installer"). Send
+`BRIDGE_HEADERS` on EVERY call, GETs included. Non-200 bodies are JSON with
+an `error` (+ often `hint`) — read and adjust; e.g. 401 "missing or invalid
+bridge token" → add the token header, retry once.
 
 ## Recipe A — find and read a file (in this order)
 
@@ -155,4 +158,5 @@ d = await bridge_post("/convert", {"path": "old.doc", "out": "new.docx"})
 ## Detection
 
 `await bridge_get("/health")` → `{"ok": true}` = running. Anything
-else → Rule 4. `/version` reports the bridge + skill versions.
+else → Rule 4. `/health` reports the bridge version; older than v2.4
+→ out of sync.

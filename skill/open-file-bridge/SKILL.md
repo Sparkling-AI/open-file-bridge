@@ -93,32 +93,34 @@ replacements in one file, one `/edit` call beats several `/write` calls.
 
 ## Bootstrap helpers (run once per session)
 
-**Version check first:** call `/version` (no token needed). If the
-response's `bridge` version doesn't match what this skill documents
-(v2.3), tell the user "the bridge app and the skill are out of sync —
-re-run the Open File Bridge installer or scripts/setup_owui.py" and continue
-carefully: newer bridges keep old skills working, but new endpoints
-(like /convert, /pdf_from_text, /docx_mailmerge) won't be in an old
-skill's vocabulary.
+**First call (and only preflight-ish call you need):** `GET /health` — no
+token required. One call answers everything: bridge running, `version`,
+`security` mode, `addons`. If the fetch itself fails, the bridge isn't
+running — tell the user and stop (do not retry more than once). Version
+rule: if `bridge` is OLDER than this skill (v2.4), mention once that some
+endpoints may be missing; newer bridges are fine. There is no separate
+version-check step.
+
+**Headers:** send `BRIDGE_HEADERS` on EVERY call — GETs included, not just
+POSTs. If an org-token block was injected at the top of this skill, it has
+already defined `BRIDGE_HEADERS` (with the token) — use that definition
+verbatim and do not redefine it. Otherwise use the default below.
 
 ```python
 from pyodide.http import pyfetch
 import json, base64, io
 
-# If the org set a Tier-2 token (admin will have told you; it looks like
-# BRIDGE_TOKEN = "..." in an injected block above), send it on EVERY call:
 BRIDGE_HEADERS = {"Content-Type": "application/json"}   # default, no token
-# BRIDGE_HEADERS = {"Content-Type": "application/json",
-#                   "X-Bridge-Token": BRIDGE_TOKEN}      # when token exists
 
 async def bridge_get(path, params=None):
     url = f"http://127.0.0.1:8765{path}"
     if params:
         url += "?" + "&".join(f"{k}={v}" for k, v in params.items())
-    r = await pyfetch(url)
+    r = await pyfetch(url, headers=BRIDGE_HEADERS)
+    t = await r.text()
     if r.status != 200:
-        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {await r.text()}")
-    return await r.json()
+        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {t}")
+    return json.loads(t)
 
 async def bridge_post(path, payload):
     r = await pyfetch(f"http://127.0.0.1:8765{path}", method="POST",
@@ -139,6 +141,12 @@ async def write_binary(path, data: bytes):
 async def write_text(path, text: str):
     return await bridge_post("/write", {"path": path, "content": text})
 ```
+
+**Errors are JSON — read them, don't blind-retry.** Every non-200 response
+carries an `error` field (often a `hint` telling you the next step). Example:
+HTTP 401 `"missing or invalid bridge token"` → your `BRIDGE_HEADERS` lacks
+the org token → fix the headers and retry once. HTTP 409 → confirmation
+flow (see write rules). Never repeat a failed request unchanged.
 
 ## Office files (Word / Excel / PowerPoint / PDF)
 
@@ -340,9 +348,11 @@ with the stdlib `csv` module from a `StringIO`.
 
 ## Workflow rules
 
-1. **Check first:** `await bridge_get("/health")` — if not ok or fetch fails,
-   tell the user: "Your Open File Bridge isn't running — start the Open File Bridge app,
-   then ask me again." Do NOT retry more than once.
+1. **Check once per session:** `await bridge_get("/health")` — it doubles as
+   the version check (see Bootstrap). If not ok or fetch fails, tell the
+   user: "Your Open File Bridge isn't running — start the Open File Bridge
+   app, then ask me again." Do NOT retry more than once. Within the same
+   chat session you do not need to re-check before every call.
 2. **`/stat` or `/peek` before `/read`:** if kind is `zip`/`pdf`/`image`, use the
    format reader (`/xlsx_read` `/docx_read` `/pptx_read`) or b64 endpoints;
    only `text` kinds work with `/read`. Unknown extension or unsure →
@@ -368,4 +378,6 @@ with the stdlib `csv` module from a `StringIO`.
 ## Detection
 
 `await bridge_get("/health")` → `{"ok": true}` means running; the response also
-shows the shared root folder.
+shows the shared root folder, version, security mode and addons. For a plain
+"what's in my folder" request, `/health` (once per session) followed directly
+by `/list` or `/directory_tree` is enough — two calls total.
