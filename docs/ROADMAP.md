@@ -603,6 +603,16 @@ it land?"). Agreed shape: **chips stay for mentions; outcomes get links**.
    osd pinned last — code-order read as shuffled (deu "German" before
    eng "English"). Binary rebuilt (page HTML lives in the exe): frozen
    e2e 291/291 exit 0; DOM-verified rendered order, vision-checked.
+✅ Follow-up (user ask: what is osd?): it's tesseract's orientation-
+   and-script-detection model, not a language — the bridge never passes
+   --psm 0/1, so it was dead weight, and ticking it alone actually
+   degrades OCR (verified: -l osd on a digits image → garbage; eng+osd
+   merely wasted a model load; a 90°-rotated scan OCR'd FINE on plain
+   eng, with AND without osd in the dir — tesseract 5's line finder
+   handles rotation for simple pages). So: osd removed from the
+   tickable list (21 languages remain) + explanatory hint added under
+   the box. Saved langs containing osd still validate (graceful).
+   Rebuilt/repackaged/relaunched; DOM + vision verified; e2e 291/291.
 
 ## Format support matrix (current)
 

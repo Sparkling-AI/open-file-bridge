@@ -4975,6 +4975,9 @@ colleagues. Prefer per-user private tokens when you can.</p>
 <summary>🔤 OCR language</summary>
 <p class="hint">For reading scanned PDFs / photos — tick one or more:</p>
 <div id="langbox" class="panel" style="font-size:15px;display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center"></div>
+<p class="hint">Also bundled: <code>osd</code> — tesseract's page-orientation
+model. It is a helper, not a language, so it is not tickable above; the
+engine handles most rotated pages on its own without it.</p>
 <p class="hint">Ticks combine automatically in tesseract syntax (e.g. <code>eng+swe</code>
 — combining is free, mixing e.g. Swedish AND English fixes å/ä/ö and digits).
 Need a code that is not listed? Type it below before saving.</p>
@@ -5059,11 +5062,10 @@ function renderLangs(avail,cur){
  const box=document.getElementById('langbox');
  const sel=new Set(String(cur||'').split('+').filter(Boolean));
  // display order = friendly name (code as fallback): code-sort reads as
- // shuffled to humans (deu "German" before eng "English"). osd is not a
- // language but a page-orientation helper — pinned to the end.
- const order=[...(avail||[])].sort((a,b)=>{
-  const r=(c)=>c==='osd'?1:0;
-  return r(a)-r(b)||(LANG_NAMES[a]||a).localeCompare(LANG_NAMES[b]||b);});
+ // shuffled to humans (deu "German" before eng "English"). osd is not
+ // tickable — it's the page-orientation helper (hint under the box).
+ const order=[...(avail||[])].filter(c=>c!=='osd').sort((a,b)=>
+  (LANG_NAMES[a]||a).localeCompare(LANG_NAMES[b]||b));
  box.innerHTML=order.length?order.map(c=>
   '<label>'+
   '<input type="checkbox" value="'+esc(c)+'"'+(sel.has(c)?' checked':'')+
