@@ -69,10 +69,11 @@ pyinstaller --onefile --windowed --name OpenFileBridge src/file_bridge.py
 
 `package_macos.sh` wraps the binary into a proper `.app` and zips it. It also
 copies `src/wheels/` + `src/tessdata/` into the `.app` next to the executable,
-so the frozen bridge serves all 8 office wheels and offers the bundled OCR
-languages (eng/swe/chi_sim/osd) out of the box — verified on macOS 26/arm64:
-`/health` reports `wheels: 8`, `addons: {pdf: true, ocr: true}`,
-`ocr_langs_available: [chi_sim, eng, osd, swe]`.
+so the frozen bridge serves all 8 office wheels and offers 22 bundled OCR
+languages out of the box — verified on macOS: `/health` reports
+`wheels: 8`, `addons: {pdf: true, ocr: true}`, `ocr_langs_available` with all
+22 codes (ara chi_sim chi_tra dan deu eng est fin fra hun ita jpn kor lav
+lit nor osd pol por rus spa swe).
 
 The .app shows a **Dock icon while running** (2.4, user feedback): the binary
 bootstraps NSApplication via ctypes (`CocoaDock` in src/file_bridge.py), so
@@ -138,8 +139,9 @@ pyinstaller ... --collect-all pymupdf ...
   + the tesseract engine itself (see PREP notes inside the script). The
   bridge auto-detects `{app}\tesseract\tesseract.exe` — the user needs
   nothing on PATH.
-- Bundle `src/tessdata/` (eng/swe/chi_sim/osd, ~20 MB) **next to the bridge
-  executable** — auto-detected, zero config.
+- Bundle `src/tessdata/` (22 languages + osd, ~74 MB — eng swe chi_sim/tra,
+  Nordics, major EU, Baltics, hun pol rus jpn kor ara; tessdata_fast builds)
+  **next to the bridge executable** — auto-detected, zero config.
 - Other platforms: bundle a tesseract build as `tesseract/bin/tesseract`
   next to the exe, or set `TESSERACT_CMD`, or rely on system PATH
   (Linux distro package is fine).
@@ -166,7 +168,7 @@ pyinstaller ... --collect-all pymupdf ...
 <OpenFileBridge install>/
 ├── OpenFileBridge(.exe)      # everything python baked in (82 MB)
 ├── wheels/               # browser-side Office libs (8 .whl)
-├── tessdata/             # eng swe chi_sim osd (.traineddata)
+├── tessdata/             # 22 languages + osd (.traineddata, ~74 MB)
 └── tesseract/            # engine binary (Windows installer only)
 ```
 

@@ -53,8 +53,10 @@ Add every new gotcha here, not to memory.
   LD_LIBRARY_PATH — wrap in a local runner script when driving from
   the agent).
 - tessdata there has 10 langs incl swe/chi_sim (we added). Repo bundle:
-  `src/tessdata/` = eng swe chi_sim osd + `configs/` (tesseract's 25
-  config files, needed by /ocr_pdf's `pdf` renderer).
+  `src/tessdata/` = 22 langs + osd (2026-08-29: eng swe dan nor fin deu
+  fra spa ita por rus pol hun lav lit est chi_sim chi_tra jpn kor ara,
+  all tessdata_fast — 18 added on user request) + `configs/` (tesseract's
+  25 config files, needed by /ocr_pdf's `pdf` renderer).
 - No system tesseract, no sudo — NEVER `apt install`; use the persistent copy.
 
 ## Pyodide/browser testing

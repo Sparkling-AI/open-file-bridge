@@ -573,6 +573,32 @@ it land?"). Agreed shape: **chips stay for mentions; outcomes get links**.
    decision and its Hardening section was rewritten to the two-tier
    picker reality (was pre-settings-page stale).
 
+## 2.7.1 — bundled OCR languages: 4 → 22 (user request, 2026-08-29)
+
+✅ Added 18 tessdata_fast languages to the bundle (`src/tessdata/`):
+   common-10 (fra deu spa ita por rus jpn kor chi_tra ara), Nordics
+   (dan nor fin), and the Baltic/Central-EU set (lav lit est hun pol).
+   Every new model load-tested against brew tesseract 5.5.2 (digits
+   OCR per language); tesseract `--list-langs` shows all 22 + osd.
+✅ Zero code changes needed: the picker list is discovered from the
+   tessdata dir at runtime, and LANG_NAMES already covered all 18
+   friendly names. Binary byte-identical — only `package_macos.sh`
+   re-ran (tessdata is copied into the .app, not frozen into the exe).
+   Sizes: tessdata 20 → 74 MB; .app 56 → 110 MB; zip 47 → 80 MB.
+   Verified live: /ocr/config lists all 22; saved chi_sim+eng+swe
+   setting survived the restart.
+✅ e2e drop-in check re-anchored: it asserted `deu` via a fake drop-in,
+   but deu is bundled now — switched to `kaz` so the merge is still
+   proven. e2e honors FILE_BRIDGE_PORT; addon_test.sh now does too
+   (was hardcoded 8765 — running it beside the live deployment made
+   every token-authed check hit the REAL bridge and fail).
+✅ Test-harness exit-code bug (found on the way): macOS bash 3.2 +
+   `set -e` aborts an EXIT trap on a dead-pid `kill` — passing runs
+   exited 1 and leaked temp dirs. `|| true` guards added to both
+   suites' traps (Linux CI bash 5 was unaffected). Frozen e2e now
+   exits 0: 291/291; addon suite 127/127 (first addon run against the
+   new tessdata through the real /ocr + /ocr_pdf paths).
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
