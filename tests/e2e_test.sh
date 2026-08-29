@@ -295,6 +295,8 @@ print('LEAKED:'+str(bad) if bad else 'clean')")"
 check "write global-ignored refused" 'excluded\|refused' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"new.zap","content":"x"}')"
 check "write refusal names the settings page" 'settings page' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"new.zap","content":"x"}')"
 PP=$(curl -s "$BRIDGE/" $T)
+check "picker titled Open File Bridge" '<title>Open File Bridge</title>' "$PP"
+check "picker favicon from app icon" 'id="favlink"' "$PP"
 check "picker has ignore editor" 'id="ignorepats"' "$PP"
 check "picker seeds saved patterns" '\*.zap' "$PP"
 check "picker shows junk floor" 'Thumbs' "$PP"

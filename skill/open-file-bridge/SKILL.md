@@ -94,7 +94,7 @@ standard 409 confirmation flow (snapshot + token). For many scattered
 replacements in one file, one `/edit` call beats several `/write` calls.
 Writes into ignored paths are refused (`excluded by ignore settings`) — that
 is the user's deliberate ignore configuration, not a bug: tell the user
-(patterns are editable in the File Bridge settings page) instead of retrying
+(patterns are editable in the Open File Bridge settings page) instead of retrying
 or writing somewhere else.
 
 ## Bootstrap helpers (run once per session)

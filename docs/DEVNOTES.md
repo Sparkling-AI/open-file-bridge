@@ -717,3 +717,23 @@ carry their own margin); one kept before the footer. IDs/handlers/
 placeholders untouched — JS and e2e greps unaffected. Vision-checked
 (glm-4.6V): order correct, cards uniform, no defects. e2e 262 pass
 (1 env-only pymupdf failure unchanged).
+
+## 2.6.4 — "Open File Bridge" branding: app icon as favicon/logo (user request)
+
+Page <title>, h2, Stop button, confirm dialog and every model-facing
+"settings page" string (ExcludedPath, read/write hints, unlock 503,
+reveal 403, SKILL.md) now say Open File Bridge — matching the repo
+name. The h2 emoji 📁 is replaced by the REAL app icon: 128px PNG
+extracted from build/appicon.icns (iconutil -c iconset), base64-baked
+into PICKER_HTML once as the favicon data-URL; the header <img> copies
+its src from the link element via JS (one copy of the ~16 KB payload).
+macOS .app CFBundleName/CFBundleDisplayName → "Open File Bridge"
+(Dock shows the new name; CFBundleExecutable stays FileBridge).
+
+DELIBERATELY NOT renamed (compat floor): binary/process name
+(FileBridge — pkill patterns here + scripts reference it), bundle id,
+zip/installer artifact names, state-dir paths (~/.file-bridge.json —
+renaming would orphan existing users' state), endpoint names. A full
+identifier rename buys nothing user-visible; the display name is what
+users see. e2e +2 checks (title + favlink); 264 pass source-side
+(1 env-only pymupdf fail), frozen build passes all incl. image-shrink.
