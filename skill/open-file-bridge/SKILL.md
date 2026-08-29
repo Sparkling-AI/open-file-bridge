@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge
+# Local File Bridge — skill v2.7
 
 Access files in **the user's own computer** through their local Open File Bridge service (running at `http://127.0.0.1:8765`). The user has explicitly installed and authorized this — files NEVER pass through the Open WebUI server; all access happens from the user's browser via the Code Interpreter (Pyodide), which runs on the user's machine.
 
@@ -31,6 +31,7 @@ Access files in **the user's own computer** through their local Open File Bridge
 | `/image_info?path=X` | GET | Image dimensions/format/megapixels + EXIF orientation (effective size) — stdlib, no addon |
 | `/image_b64?path=X&max_bytes=` | GET | Image as a **data URL** (`data:image/png;base64,…`), size-capped (default 4 MB; auto-downscaled when pymupdf is present) — for showing images in chat |
 | `/reveal?path=X` | GET | Open the user's file manager at the file — **consent-gated** (403 unless the user enabled it in settings) |
+| `/link` | POST | `{"path":"x.pdf"}` → user-clickable links for your ANSWER: `open_url` (default app) + `reveal_url` (file manager), ~1 h TTL — **outcome links** (v2.7+) |
 | `/ocr/config` | GET | Current OCR language + installed languages |
 | `/convert` | POST | `{"path":"old.doc","out":"new.docx"}` — **LibreOffice headless conversion**: legacy .doc/.xls/.ppt → modern, office → PDF, xlsx → csv, docx → png/html. Format pair comes from the extensions; confirm flow; 501 with install hint if the user has no LibreOffice |
 | `/pdf_from_text` | POST | `{"out":"x.pdf","blocks":[{"style":"title\|h1\|h2\|body\|pagebreak","text":"…"}]}` — create PDF natively (fpdf2 addon, no Pyodide shim); confirm flow |
@@ -110,7 +111,11 @@ version-check step.
 **Headers:** send `BRIDGE_HEADERS` on EVERY call — GETs included, not just
 POSTs. If an org-token block was injected at the top of this skill, it has
 already defined `BRIDGE_HEADERS` (with the token) — use that definition
-verbatim and do not redefine it. Otherwise use the default below.
+verbatim and do not redefine it. If there is no injected block and the USER
+tells you their personal bridge token in chat, honor it for the session:
+`BRIDGE_HEADERS = {"Content-Type": "application/json", "X-Bridge-Token": "<it>"}`
+— define it once, use it on every call, and NEVER echo the token back in
+your answer. Otherwise use the default below.
 
 ```python
 from pyodide.http import pyfetch
@@ -378,6 +383,40 @@ out file follows the 409 confirmation flow.
 
 Use `/read` + `/write` (text endpoints) — no libraries needed. CSV parses
 with the stdlib `csv` module from a `StringIO`.
+
+## Outcome links — files you created or changed
+
+When a step ENDS with a new or changed file the user will care about
+(created, edited, converted), the write response ALREADY carries clickable
+links — no extra call:
+
+```python
+d = await bridge_post("/write", {"path": "notes v2.md", "content": ...})
+# d["written"], d["bytes"] — and d["links"]["open_url"] + d["links"]["reveal_url"]
+```
+
+`POST /link {"path":…}` exists for one case only: RE-MINTING after a user
+reports an expired link (links live ~1 h).
+
+Then in your ANSWER (not code), for a file:
+
+> **`Fortnox Bookkeeping Context.pdf`** · [📄 Open](open_url) · [📂 Show in folder](reveal_url)
+
+For a folder: name + [📂 Show in folder](reveal_url) only.
+
+- Labels are ALWAYS "📄 Open" and "📂 Show in folder" — OS-neutral words; the
+  clicked page itself names Finder / Explorer / Files.
+- Paste the URLs exactly as returned — never construct a /click/… URL yourself,
+  and never fetch one (they are for the user's browser click; the bridge
+  refuses scripted/cross-site triggers).
+- **Outcomes only.** Passing mentions — listings, "I found 9 files",
+  citations — stay plain code spans (click copies the name). Never wrap a
+  whole listing in links. One link pair per outcome file; with many outcome
+  files, link the headline ones and list the rest as code spans.
+- Links are multi-use and expire after ~1 hour. If the user reports an
+  expired page, call `POST /link` with the path and give the fresh URLs.
+- `/link` 404s on bridges older than 2.7 → skip the links silently and keep
+  the plain code span (at most one attempt).
 
 ## Workflow rules
 

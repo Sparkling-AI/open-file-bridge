@@ -795,3 +795,86 @@ All five picker cards fold and remember their state:
   FILE_BRIDGE_STATE_DIR launch) because the real bridge held 8765 —
   all four launches (main, dup-start, breaker, foreign-port) shift
   coherently. TODO-ish: promote to a PORT var in the script.
+
+## 2.7 outcome links — design decisions worth remembering (2026-08-29)
+
+- Trust model split, the core of the whole feature: `allow_reveal` gates
+  MODEL-initiated desktop popups (a remote model must not open windows
+  unasked); a /click nonce is minted by the model but fired by the USER's
+  browser navigation — the click is the consent (same stance as the picker
+  buttons, `_do_click` header comment). This is why /click bypasses
+  check_request entirely and is NOT gated by allow_reveal.
+- Why /click must skip the token tier: chat-answer links are clicked as
+  top-level navigations — no custom headers possible. The 128-bit nonce
+  (token_hex(16)) is the whole capability: one path, one desktop action,
+  no bytes of file content. Multi-use within TTL (1 h, FILE_BRIDGE_LINK_TTL)
+  because chat links get re-clicked; unlike confirmation tokens they are
+  never burned. Store = click-links.json (0600, swept on load) — cloned
+  from pending-confirmations.json.
+- CSRF hardening: a page that learns a nonce (leaked/shared chat) could
+  still fetch() it cross-site. `Sec-Fetch-Site: cross-site` requests are
+  refused with an explanatory page (user-click navigations from OWUI arrive
+  as same-site: host is the site, ports don't split it). Absent header
+  (old browsers) stays allowed. Pyodide-origin scripted probes would read
+  as cross-site and get the refusal page — by design; the refusal text
+  says the link is for the user's click so the model doesn't misread it
+  as broken.
+- Path is stored AS MINTED and re-resolved at click time (roots, ignore
+  patterns, lock state can all change within the TTL) — resolve_guarded
+  at click, then exists() check, so moved/deleted/unshared all degrade to
+  friendly pages instead of surprises.
+- `_launch_external(kind, path)`: single dispatch for open+reveal on all
+  platforms; Linux reveal upgraded to FileManager1.ShowItems via
+  dbus-send (falls back to xdg-open of the parent). FILE_BRIDGE_LAUNCHER
+  env overrides everything — real feature (custom file managers) and the
+  e2e hook. Side effect: the /reveal e2e tests no longer pop a real
+  Finder window on the dev machine; click dispatch is assertable via the
+  launcher's log.
+- The PORT-var TODO from the 2.6.4 note is DONE: e2e honors
+  FILE_BRIDGE_PORT (default 8765) across main/dup/breaker/squat
+  launches. Run beside a live bridge with FILE_BRIDGE_PORT=8899.
+- Skill wording rule (from the design chat): chat labels are ALWAYS
+  OS-neutral ("📄 Open" / "📂 Show in folder") — the model never learns
+  the platform, so it can never say "Finder" on Windows; only the
+  server-rendered page (which owns sys.platform) says the native word.
+
+## Private-token guidance + personal-token-in-chat (2026-08-29 late)
+
+Dandan asked whether we (a) clearly tell users WHERE to paste a token and
+(b) steer companies/users to private tokens instead of a shared one.
+Survey: picker help had paste instructions but recommended the ORG token;
+user-guide had zero token content (and stale endpoint claims — "no
+delete", "~200 KB read cap" — pre-2.x text, now corrected); admin-guide's
+"Hardening" section still described the pre-settings-page world (hardcoded
+OWUI_ORIGIN constant, invented X-Bridge-Key header) — rewritten to the
+two-tier picker reality. Structural gap: a per-user private token was
+UNUSABLE with a public skill (model had no way to learn it) — fixed by a
+skill rule (2.7, both variants): user-provided token in chat →
+BRIDGE_HEADERS for the session, never echoed back. Guidance now
+recommends private tokens first (picker help, user-guide Token section,
+admin-guide Option A) and frames the org token honestly: company-boundary
+credential, visible to all org members, avoid with guest accounts. Note:
+picker text change requires an app rebuild to be live (2.7 rebuild covers
+it).
+
+## Outcome links v2: server-minted in write responses (2026-08-29 late)
+
+Dandan's first real-chat test (Test Model, "Local Markdown Files") created
+`Fortnox Bookkeeping Context - copy 2.md` with NO links. Audit log: /write
+200, /link never called — the model read the skill (it had the injected
+token) but skipped the optional-feeling extra call. Fix follows the
+ignore-enforcement lesson: guarantees live in the bridge, not model
+goodwill — `_json` now attaches `links` (open_url + reveal_url + a `say`
+format hint) to every 200 POST on a WRITE_LOCAL endpoint whose response
+names the produced/edited file ("written", or /edit's path+edited). Models
+echo response fields reliably (that's what Rule 8 verify-after-write
+already leans on), and it saves a round trip. /link demoted to re-mint
+duty (expired links). TRAP found by the new e2e check: write responses
+carry the ABSOLUTE written path but resolve_any REJECTS absolute input —
+a link minted from it 400s at click ("Path not accessible"; /tmp vs
+/private/tmp made it visible). `_link_addr()` normalizes: absolute-inside-
+root → bare rel (default root) or '<root-id>/rel' (multi-root), relative
+passes through; both _attach_links and /link use it (models echo
+d["written"] into /link, so /link had the same latent bug). Restores
+inherit no links (message-shaped "restored" field, rare — skipped
+deliberately); /write_many results[] too (top-level only for now).

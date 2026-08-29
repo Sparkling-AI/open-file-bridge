@@ -6,7 +6,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-BRIDGE="http://127.0.0.1:8765"
+# honor FILE_BRIDGE_PORT so the suite can run beside a live bridge
+# (default stays 8765 = the real deployment port)
+PORT_NUM=${FILE_BRIDGE_PORT:-8765}
+BRIDGE="http://127.0.0.1:${PORT_NUM}"
 BRIDGE_CMD=${FILE_BRIDGE_CMD:-python3 src/file_bridge.py}
 TESTDIR=$(mktemp -d)
 STATEDIR=$(mktemp -d)
@@ -23,7 +26,7 @@ stat_mode() {
 port_accepting() {
   python3 -c "import socket,sys
 s = socket.socket(); s.settimeout(1)
-sys.exit(0 if s.connect_ex(('127.0.0.1', 8765)) == 0 else 1)"
+sys.exit(0 if s.connect_ex(('127.0.0.1', ${PORT_NUM})) == 0 else 1)"
 }
 
 # true when the port is BINDABLE by a new bridge instance (superseded by
@@ -33,7 +36,7 @@ port_bindable() {
 s = socket.socket()
 s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 try:
-    s.bind(('127.0.0.1', 8765)); sys.exit(0)
+    s.bind(('127.0.0.1', ${PORT_NUM})); sys.exit(0)
 except OSError:
     sys.exit(1)
 finally:
@@ -42,12 +45,18 @@ finally:
 
 echo "test content $(date)" > "$TESTDIR/notes.txt"
 mkdir -p "$TESTDIR/sub" && echo "nested" > "$TESTDIR/sub/n.txt"
+# fake desktop launcher: records kind+path instead of popping a real
+# Finder/Explorer window (also the custom-launcher feature hook)
+printf '#!/bin/sh\nprintf "%%s %%s\n" "$1" "$2" >> "%s/launched.log"\nexit 0\n' "$TESTDIR" > "$TESTDIR/fake-launcher.sh"
+chmod +x "$TESTDIR/fake-launcher.sh"
 
 if port_accepting; then
   echo "ERROR: something already listens on $BRIDGE — stop it first." >&2
   exit 1
 fi
-FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_MAX_WRITES=500 $BRIDGE_CMD "$TESTDIR" &
+FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_MAX_WRITES=500 \
+  FILE_BRIDGE_PORT="$PORT_NUM" \
+  FILE_BRIDGE_LAUNCHER="$TESTDIR/fake-launcher.sh" $BRIDGE_CMD "$TESTDIR" &
 BRIDGE_PID=$!
 trap 'kill $BRIDGE_PID $SQUAT 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR" ${BRKDIR:-} ${BRKSTATE:-}' EXIT
 # readiness poll (not a blind sleep): frozen onefile binaries take ~2 s to
@@ -65,7 +74,7 @@ check() { # name, expected_substring, actual
 # FILE_BRIDGE_NO_UI=1 keeps the verification headless (no browser tab).
 # (No GNU `timeout` on stock macOS: background + bounded poll + kill.)
 DUP_OUT=$(mktemp); DUP_RC=0
-FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_NO_UI=1 \
+FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_PORT="$PORT_NUM" FILE_BRIDGE_NO_UI=1 \
   $BRIDGE_CMD >"$DUP_OUT" 2>&1 &
 DUP=$!
 for _ in $(seq 1 40); do kill -0 $DUP 2>/dev/null || break; sleep 0.5; done
@@ -737,6 +746,73 @@ curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"allow
 check "reveal re-locks"       'reveal is disabled' "$(curl -s "$BRIDGE/reveal?path=notes.txt" $T)"
 check "state shows allow_reveal" 'allow_reveal'  "$(curl -s $BRIDGE/state)"
 
+# ---------- outcome links: /link mint + /click use (v2.7) ----------
+# minting is token-authed like every file endpoint
+check "link mint needs token"  'missing or invalid bridge token' \
+  "$(curl -s -X POST $BRIDGE/link -H 'Content-Type: application/json' -d '{"path":"notes.txt"}')"
+LNK=$(curl -s -X POST $BRIDGE/link -H 'Content-Type: application/json' $T -d '{"path":"notes.txt"}')
+check "link mints open url"    'open_url'   "$LNK"
+check "link mints reveal url"  'reveal_url' "$LNK"
+check "link url absolute"      "http://127.0.0.1:${PORT_NUM}/click/" "$LNK"
+check "link reports manager"   '"manager":' "$LNK"
+check "link usage hint"        'Show in folder' "$LNK"
+OPEN_URL=$(echo "$LNK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["open_url"])')
+REV_URL=$(echo "$LNK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reveal_url"])')
+rm -f "$TESTDIR/launched.log"
+# clicking = browser navigation: NO token header — the nonce is the capability
+curl -si "$OPEN_URL" | head -1 | grep -q ' 200 ' \
+  && echo "  PASS: click open returns 200" || { echo "  FAIL: click open status"; fail=1; }
+check "click open page"        'Opened'        "$(curl -s "$OPEN_URL")"
+check "click page sibling btn" 'Show in'       "$(curl -s "$OPEN_URL")"
+grep -q '^open ' "$TESTDIR/launched.log" \
+  && echo "  PASS: open dispatched via launcher" || { echo "  FAIL: open not dispatched"; fail=1; }
+curl -s "$REV_URL" >/dev/null
+grep -q '^reveal ' "$TESTDIR/launched.log" \
+  && echo "  PASS: reveal dispatched via launcher" || { echo "  FAIL: reveal not dispatched"; fail=1; }
+# multi-use within TTL: chat links must survive a second click
+curl -s "$OPEN_URL" | grep -q 'Opened' \
+  && echo "  PASS: link reusable within TTL" || { echo "  FAIL: link burned after first click"; fail=1; }
+# cross-site trigger refused (Sec-Fetch-Site hardening)
+check "click cross-site refused" 'refused' \
+  "$(curl -s -H 'Sec-Fetch-Site: cross-site' "$OPEN_URL")"
+# malformed / unknown nonce → friendly page, not a stack trace
+check "click malformed nonce"   'not recognized' \
+  "$(curl -s "$BRIDGE/click/zz-not-a-nonce")"
+check "click unknown nonce"     'expired' \
+  "$(curl -s "$BRIDGE/click/00000000dead")"
+# expiry: backdate the minted pair in the state store → expired page
+python3 - "$STATEDIR" "$OPEN_URL" "$REV_URL" <<'PYX'
+import json, re, sys, pathlib
+sd, *urls = sys.argv[1:]
+f = pathlib.Path(sd) / "click-links.json"
+d = json.loads(f.read_text())
+for u in urls:
+    d[re.search(r"/click/([0-9a-f]+)", u).group(1)]["expiry"] = 0
+f.write_text(json.dumps(d))
+PYX
+check "click expired nonce"    'expired' "$(curl -s "$OPEN_URL")"
+# deleted file: mint-then-delete → friendly "no longer there" page
+curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T \
+  -d '{"path":"link-gone.txt","content":"x"}' >/dev/null
+GONE=$(curl -s -X POST $BRIDGE/link -H 'Content-Type: application/json' $T \
+  -d '{"path":"link-gone.txt"}' | python3 -c 'import json,sys; print(json.load(sys.stdin)["reveal_url"])')
+rm -f "$TESTDIR/link-gone.txt"
+check "click deleted file"     'No longer there' "$(curl -s "$GONE")"
+# traversal refused at mint time (before any nonce exists)
+check "link traversal refused" 'escapes' \
+  "$(curl -s -X POST $BRIDGE/link -H 'Content-Type: application/json' $T -d '{"path":"../../etc/passwd"}')"
+# write responses carry outcome links (server-minted — no model call needed)
+WLNK=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"link-echo.txt","content":"x"}')
+check "write response has links"   '"links": *{'   "$WLNK"
+check "write links have open_url"  'open_url'      "$WLNK"
+check "write links have say hint"  '"say":'        "$WLNK"
+WL_OPEN=$(printf '%s' "$WLNK" | python3 -c 'import json,sys; print(json.load(sys.stdin)["links"]["open_url"])')
+curl -s "$WL_OPEN" | grep -q 'Opened' \
+  && echo "  PASS: response link clickable" || { echo "  FAIL: response link click"; fail=1; }
+rm -f "$TESTDIR/link-echo.txt"
+check "risk: ui on /click"     '"/click": *"ui"'   "$(curl -s $BRIDGE/state)"
+check "risk: read on /link"    '"/link": *"read"'  "$(curl -s $BRIDGE/state)"
+
 # ---------- .eml parsing (P3, stdlib) ----------
 python3 - "$TESTDIR" <<'PYEOF'
 import sys, pathlib
@@ -798,7 +874,7 @@ for ep in ('/write','/write_b64','/edit','/delete','/write_many','/zip','/unzip'
            '/pptx_from_template','/image_info','/reveal','/list','/read','/peek',
            '/stat','/search','/html_text','/csv_head','/csv_stats','/xlsx_read',
            '/docx_read','/pptx_read','/directory_tree','/api/pick_folder',
-           '/api/shutdown'):
+           '/api/shutdown','/link','/click'):
     if ep not in d:
         print('missing:', ep)
 ")
@@ -812,7 +888,7 @@ if [ -n "$AL2" ] && echo "$AL2" | grep -q '"risk": *"read"'; then echo "  PASS: 
 
 # ---------- rate circuit breaker (own low-limit instance) ----------
 # The main suite bridge runs with FILE_BRIDGE_MAX_WRITES=500, so a burst can
-# never trip it there. This runs LAST because it reclaims port 8765.
+# never trip it there. This runs LAST because it reclaims the test port.
 kill $BRIDGE_PID 2>/dev/null || true
 wait $BRIDGE_PID 2>/dev/null || true
 # wait until a new bridge could bind the port again (the old listener must
@@ -820,7 +896,7 @@ wait $BRIDGE_PID 2>/dev/null || true
 for _ in $(seq 1 40); do port_bindable && break; sleep 0.25; done
 BRKDIR=$(mktemp -d); BRKSTATE=$(mktemp -d)
 echo "b1" > "$BRKDIR/f.txt"
-FILE_BRIDGE_STATE_DIR="$BRKSTATE" FILE_BRIDGE_MAX_WRITES=3 $BRIDGE_CMD "$BRKDIR" &
+FILE_BRIDGE_STATE_DIR="$BRKSTATE" FILE_BRIDGE_PORT="$PORT_NUM" FILE_BRIDGE_MAX_WRITES=3 $BRIDGE_CMD "$BRKDIR" &
 BRIDGE_PID=$!
 for _ in $(seq 1 60); do curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1 && break; sleep 0.5; done
 curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"allowed_origin":"http://owui.test:8080"}' >/dev/null
@@ -839,10 +915,10 @@ check "breaker err mentions limit" 'limits 3 /' "$BRK"
 kill $BRIDGE_PID 2>/dev/null || true
 wait $BRIDGE_PID 2>/dev/null || true
 for _ in $(seq 1 40); do port_bindable && break; sleep 0.25; done
-python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &
+python3 -m http.server "$PORT_NUM" --bind 127.0.0.1 >/dev/null 2>&1 &
 SQUAT=$!
 for _ in $(seq 1 20); do port_accepting && break; sleep 0.25; done
-RC=0; OUT=$(FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_NO_UI=1 \
+RC=0; OUT=$(FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_PORT="$PORT_NUM" FILE_BRIDGE_NO_UI=1 \
   $BRIDGE_CMD 2>&1) || RC=$?
 check "foreign port holder refused (exit 1)" \
   "not an Open File Bridge.*(exit 1)" "$OUT (exit $RC)"

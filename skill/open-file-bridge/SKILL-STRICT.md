@@ -3,7 +3,7 @@ name: open-file-bridge-strict
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — STRICT variant
+# Local File Bridge — STRICT variant — skill v2.7
 
 Built for models that need guardrails: fixed recipes, bridge-only writes,
 verify-after-write. (Stronger models: use the standard "Local File
@@ -53,7 +53,9 @@ from pyodide.http import pyfetch
 import json
 
 # If your admin gave the org a Tier-2 token it appears as an injected
-# BRIDGE_HEADERS block above — use that instead of this default:
+# BRIDGE_HEADERS block above — use that instead of this default. No block
+# but the user told you their personal token in chat? Add
+# "X-Bridge-Token": "<it>" here for the session — never echo it back.
 BRIDGE_HEADERS = {"Content-Type": "application/json"}
 
 async def bridge_get(path, params=None):
@@ -133,7 +135,11 @@ lists — a missing file may be excluded on purpose; say so).
    response's `"written"` path and byte count. Example:
    `d = await bridge_post("/write", …)` → tell the user
    `d["written"]` — never "I created it" without this.
-5. State the exact final path in your answer.
+5. State the exact final path in your answer, then make it clickable:
+   the write response already has `d["links"]` — append
+   `**`name`** · [📄 Open](d["links"]["open_url"]) · [📂 Show in folder](d["links"]["reveal_url"])`
+   (folders: Show in folder only). Passing mentions stay plain code spans.
+   No `d["links"]` (older bridge) → plain code span, no extra call.
 
 ## Recipe C — legacy formats (.doc/.xls/.ppt)
 

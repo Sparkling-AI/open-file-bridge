@@ -509,6 +509,70 @@ unchanged). NOTE: suite run on a shifted port while the real bridge
 held 8765 (sed 8765→8892 + FILE_BRIDGE_PORT on all four launches —
 candidate for a PORT variable in the script itself).
 
+## 2.7 — outcome links: click a created file to open it / reveal it (user request)
+
+From the 2026-08-29 design discussion (DB-grounded: model emitted filenames
+as inline-code chips, click copies the name — copy is right for passing
+mentions, wrong for outcomes where the user's real question is "where did
+it land?"). Agreed shape: **chips stay for mentions; outcomes get links**.
+
+✅ `POST /link {"path"}` (token-authed like every file endpoint) mints a
+   short-lived nonce PAIR (128-bit hex, ~1 h TTL, multi-use — chat links
+   get clicked again) and returns absolute `open_url` + `reveal_url` +
+   the OS file-manager word. The model embeds both in the answer:
+   `**name** · [📄 Open](url) · [📂 Show in folder](url)`; folders get
+   the reveal link only; link labels stay OS-neutral, the served page
+   says Finder/Explorer/Files.
+✅ `GET /click/<nonce>` — served BEFORE check_request (a browser
+   top-level navigation cannot send headers; the nonce IS the
+   capability). The click itself is the consent (picker-button stance,
+   `file_bridge.py` `_do_click`) — NOT gated by `allow_reveal`, which
+   exists for model-initiated popups only. Re-resolves the stored path
+   at click time (roots/ignore may have changed); friendly pages for
+   expired/malformed/unknown nonce, deleted file, unlocked bridge;
+   `Sec-Fetch-Site: cross-site` refused (CSRF hardening for a leaked
+   nonce); `Cache-Control: no-store`; sibling-action button on the
+   success page links the pair's other nonce. State:
+   `click-links.json` (0600, swept on load) — pattern copied from
+   pending-confirmations.
+✅ Desktop dispatch unified in `_launch_external(kind, path)` —
+   open/reveal on all three platforms; Linux reveal upgraded from
+   bare `xdg-open parent` to freedesktop FileManager1.ShowItems
+   (dbus-send) with xdg-open fallback; `/reveal` now shares it.
+   `FILE_BRIDGE_LAUNCHER` env overrides dispatch (custom file
+   managers + the e2e hook, below).
+✅ e2e: +23 checks (286 pass; same 1 pre-existing env-only pymupdf
+   failure as master). Fake launcher (`FILE_BRIDGE_LAUNCHER` →
+   script appending `kind path` to a log) means the suite no longer
+   pops a real Finder window for the /reveal tests, and click
+   dispatch is asserted. Also: the suite now honors `FILE_BRIDGE_PORT`
+   (default 8765) end-to-end — the PORT-var promotion DEVNOTES kept
+   asking for — so it runs beside a live bridge
+   (`FILE_BRIDGE_PORT=8899 bash tests/e2e_test.sh`).
+✅ Skill 2.7: `/link` row + an "Outcome links" section (SKILL.md) and
+   Recipe B step 5 (SKILL-STRICT.md) — outcomes only, neutral labels,
+   never fetch the URLs yourself, bridges <2.7 → plain code span.
+   Frozen builds: dist .app still 2.6 — rebuild pending (per-round
+   packaging step).
+✅ Outcome links v2 (same night, after Dandan's first real-chat test):
+   the model read the skill but skipped the optional /link call — so
+   minting moved INTO the bridge: every successful write response now
+   carries `links` (open_url + reveal_url + `say` format hint) via a
+   `_json` hook on WRITE_LOCAL 200s; `_link_addr()` normalizes the
+   absolute written path to a root-addressed rel (resolve_any rejects
+   absolute input — caught by e2e, /tmp-vs-/private/tmp); /link demoted
+   to re-mint duty. e2e +4 → 291 (source uv ALL PASSED; frozen rerun
+   below).
+✅ Private-token guidance (same night, user request): skill (both
+   variants) now honors a user-provided token in chat (BRIDGE_HEADERS
+   for the session, never echoed) — makes per-user private tokens
+   usable with a public skill; picker Set-token help rewritten
+   private-first with paste location; user-guide gained a Token
+   section (and its stale pre-2.x security bullets were corrected);
+   admin-guide documents --bridge-token with the private-vs-org
+   decision and its Hardening section was rewritten to the two-tier
+   picker reality (was pre-settings-page stale).
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

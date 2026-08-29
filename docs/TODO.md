@@ -120,3 +120,15 @@ frozen addons. Still needs a real Windows desktop, per the original plan:
       drive letters `C:\`, UNC `\\server\share` and backslash traversal are
       rejected by design and unit-checked on macOS; NTFS reparse points
       need real-Windows confirmation)
+
+## 9. Outcome links (2.7) — follow-ups
+
+- [ ] Rebuild frozen artifacts (.app + zip) at 2.7 so packaged users get
+      /link + /click (dist still 2.6); restage skill is done via
+      scripts/setup_owui.py
+- [ ] Windows real-machine check of `_launch_external`: `explorer /select,`
+      with quoted paths containing spaces, and `os.startfile` on a folder
+      (code-reviewed only — no Windows box this round)
+- [ ] After some real usage: consider surfacing "link expired" reports in
+      the model's own words (skill says just re-mint) — if users hit
+      expiries often, raise FILE_BRIDGE_LINK_TTL default instead

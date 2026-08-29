@@ -81,10 +81,35 @@ python3 file_bridge.py ~/my-folder
 - Open File Bridge **only** exposes the **one folder** you selected. Nothing else.
   It's technically impossible for the AI to read outside it (path traversal is
   rejected server-side — tested).
-- Only `list`, `read`, and `write` exist. No delete, no move, no execute.
+- Destructive operations are guarded: every overwrite/delete asks for
+  confirmation, snapshots previous versions first, and moves deleted files to
+  a trash folder instead of erasing them.
 - The service binds to `127.0.0.1` only — not reachable from your network or
   the internet, only from your own browser.
-- Files are read as plain text; the bridge caps reads at ~200 KB per file.
+- Every request is logged to a local audit file in the bridge's state folder.
+
+### Token (optional extra lock)
+
+On the settings page (`http://127.0.0.1:8765`), under **🔒 Security**, the
+**token** field is an optional second lock: when set, requests must also
+carry it in an `X-Bridge-Token` header.
+
+**Recommended for individuals — a private token nobody else has:**
+
+1. Click **Generate random token** (🔒 Security section).
+2. Tell the model the token once in chat — e.g. *"my bridge token is
+   `<the token>`, use it for this session"* — the skill instructs the model
+   to add it to every request. (Or, to avoid repeating it: make your own
+   private copy of the skill in Open WebUI and paste the token into its
+   bootstrap block.)
+3. Don't share it. It never leaves your machine except to your own bridge.
+
+**If your company gave you a token:** paste that exact token into the same
+field (🔒 Security → token field → **Set token**). Everyone in the company
+receives the same one — it's a company-boundary credential (it stops local
+programs and other websites from using your bridge), not a secret from
+colleagues. If you'd rather have a private one anyway, ask your admin to
+stage the skill without an embedded token and use the individual flow above.
 
 ## OCR language
 

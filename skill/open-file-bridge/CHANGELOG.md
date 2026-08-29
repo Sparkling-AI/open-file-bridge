@@ -2,6 +2,33 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.7 — 2026-08-29 (staged with bridge 2.7)
+
+Outcome links: files the assistant creates or changes become clickable
+in the chat answer.
+
+- Every successful write response now carries `links.open_url` +
+  `links.reveal_url` — render
+  `**name** · [📄 Open](open_url) · [📂 Show in folder](reveal_url)`
+  beside the file name (folders: Show in folder only). No extra call:
+  real-chat testing showed models echo response fields but skip
+  optional extra calls. The user's click opens the file with its
+  default app, or reveals it in Finder/Explorer/Files — the bridge
+  serves a small confirmation page with the native wording.
+  `POST /link` remains for re-minting an expired link (~1 h TTL).
+- Scope rule: outcomes only. Passing mentions (listings, citations)
+  stay plain code spans — link spam was the explicit design concern.
+- Labels are always OS-neutral; the page names the real file manager.
+- Links are multi-use, expire after ~1 h; expired click → friendly
+  page, just re-mint. Never fetch a /click URL from code — it is for
+  the user's browser (cross-site/scripted triggers are refused).
+- Bridges older than 2.7: `/link` 404s → keep the plain code span,
+  at most one attempt.
+- Personal tokens: if no org-token block was injected and the user tells
+  you their bridge token in chat, add it to `BRIDGE_HEADERS` for the
+  session (never echo it back). Makes per-user private tokens usable
+  with the public skill (pair with the bridge's Generate button).
+
 ## 2.4 — 2026-08-29 (staged with bridge 2.4)
 
 Cut from a real trace: "list files" cost 4 code executions (version
