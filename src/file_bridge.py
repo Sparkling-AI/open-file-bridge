@@ -4569,17 +4569,26 @@ textarea{font-family:ui-monospace,monospace}
 button{padding:10px 22px;font-size:16px;margin-top:12px;cursor:pointer}
 button.small{margin-top:0;padding:4px 12px;font-size:13px}
 .btnrow{display:flex;gap:8px;align-items:stretch}
-h3{margin:0 0 8px}
 .ok{color:#0a7d32;font-weight:bold}.hint{color:#666;font-size:14px}
-.warn{color:#b00;font-weight:bold}.sec{background:#f4f6f8;padding:14px 18px;border-radius:8px;margin:16px 0}
+.warn{color:#b00;font-weight:bold}
+details.sec{background:#f4f6f8;padding:14px 18px;border-radius:8px;margin:16px 0}
+details.sec>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:10px;
+font-weight:bold;font-size:1.17em;user-select:none}
+details.sec>summary::-webkit-details-marker{display:none}
+details.sec>summary::after{content:'▸';font-size:.8em;color:#999;margin-left:auto;
+transition:transform .15s ease}
+details.sec[open]>summary{margin-bottom:8px}
+details.sec[open]>summary::after{transform:rotate(90deg)}
+details.sec[open]>*:not(summary){animation:secopen .18s ease}
+@keyframes secopen{from{opacity:0;transform:translateY(-2px)}to{opacity:1;transform:none}}
 .panel{background:#fff;border:1px solid #ddd;border-radius:6px;padding:10px 14px}
 code{background:#eee;padding:2px 6px;border-radius:4px}</style></head><body>
 <h2><img id="logo" alt="" style="width:26px;height:26px;vertical-align:-5px"> Open File Bridge <span id="beat" style="font-size:18px;color:#999">●</span></h2>
 <p class="hint" id="beatinfo">checking whether the bridge is running…</p>
 <p>This little service lets <b>Open WebUI in your browser</b> read &amp; write files
 in <b>one folder you choose</b> on this computer. Nothing else is exposed.</p>
-<div class="sec">
-<h3>📁 Shared folder</h3>
+<details class="sec" id="sec-root" open>
+<summary>📁 Shared folder</summary>
 <p class="hint">Only this folder is exposed — nothing else on this computer.</p>
 <div class="btnrow">
 <input id="root" placeholder="__ROOTPH__" value="__ROOT__" style="flex:1">
@@ -4587,9 +4596,9 @@ in <b>one folder you choose</b> on this computer. Nothing else is exposed.</p>
 </div>
 <button onclick="setRoot()">Save folder</button>
 <p class="ok" id="status"></p>
-</div>
-<div class="sec">
-<h3>🔒 Security</h3>
+</details>
+<details class="sec" id="sec-security" open>
+<summary>🔒 Security</summary>
 <p class="hint">Lock the bridge to your Open WebUI address (required — until set,
 file endpoints stay disabled):</p>
 <input id="origin" placeholder="http://owui.yourcompany.com:8080" value="__ORIGIN__">
@@ -4606,9 +4615,9 @@ a random one and give it to your admin to embed.</p>
 <button onclick="genToken()">Generate random token</button>
 <button onclick="clearToken()">Clear token</button>
 <p class="hint" id="secstatus"></p>
-</div>
-<div class="sec">
-<h3>🔤 OCR language</h3>
+</details>
+<details class="sec" id="sec-ocr" open>
+<summary>🔤 OCR language</summary>
 <p class="hint">For reading scanned PDFs / photos — tick one or more:</p>
 <div id="langbox" class="panel" style="font-size:15px;display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center"></div>
 <p class="hint">Ticks combine automatically in tesseract syntax (e.g. <code>eng+swe</code>
@@ -4617,9 +4626,9 @@ Need a code that is not listed? Type it below before saving.</p>
 <input id="ocrlang" placeholder="eng+swe" value="__OCRLANG__" style="max-width:200px" oninput="syncBoxes(false)">
 <button onclick="setLang()">Save language</button>
 <p class="hint" id="langs"></p>
-</div>
-<div class="sec">
-<h3>🚫 Ignore patterns</h3>
+</details>
+<details class="sec" id="sec-ignore" open>
+<summary>🚫 Ignore patterns</summary>
 <p class="hint">Files matching these patterns are invisible to the AI — not
 listed, not readable, and <b>writes to them are refused</b>. One pattern per
 line, gitignore-style: <code>*.zip</code>, <code>secrets/</code> (that folder,
@@ -4632,12 +4641,10 @@ depth. The preview below updates within seconds of saving.</p>
 </div>
 <p class="hint">Always ignored (built in, not editable):
 <b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b></p>
-</div>
-<div class="sec">
-<div class="btnrow" style="align-items:center;gap:10px">
-<h3 style="margin:0">👁 What the AI can see</h3>
-<button onclick="renderPreview()" class="small">↻ Refresh</button>
-</div>
+</details>
+<details class="sec" id="sec-preview" open>
+<summary><span style="flex:1">👁 What the AI can see</span>
+<button onclick="event.preventDefault();renderPreview()" class="small">↻ Refresh</button></summary>
 <p class="hint">Exactly what Open WebUI's model sees when it lists your folders —
 after ignore lists and security rules. Folders are collapsible; the view
 auto-refreshes every 5&nbsp;s while this tab is visible. Nothing here is
@@ -4645,7 +4652,7 @@ editable; change the folder above instead.</p>
 <div id="preview" class="panel hint" style="max-height:340px;overflow:auto;font-family:ui-monospace,monospace;
 font-size:13px;color:#333;text-align:left"></div>
 <p class="hint" id="previnfos"></p>
-</div>
+</details>
 <hr>
 <p class="hint">Status: __STATUS__<br>
 You can close this browser tab — the service keeps running in the background.
@@ -4666,6 +4673,18 @@ vie:'Vietnamese',ind:'Indonesian',cat:'Catalan',glg:'Galician',eus:'Basque',
 lit:'Lithuanian',lav:'Latvian',est:'Estonian',osd:'auto-detect (page orientation)'};
 function esc(s){return String(s).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
 function fmtSize(n){if(n==null)return '';if(n<1024)return n+' B';if(n<1048576)return (n/1024).toFixed(1)+' KB';return (n/1048576).toFixed(1)+' MB';}
+// foldable sections: keep each card's fold state across visits (localStorage)
+const FOLD_KEY='ofb.folded';
+try{
+ const saved=JSON.parse(localStorage.getItem(FOLD_KEY)||'{}');
+ document.querySelectorAll('details.sec').forEach(d=>{
+  if(d.id&&d.id in saved)d.open=!saved[d.id];
+  d.addEventListener('toggle',()=>{
+   const f={};
+   document.querySelectorAll('details.sec').forEach(x=>{if(x.id&&!x.open)f[x.id]=1;});
+   try{localStorage.setItem(FOLD_KEY,JSON.stringify(f));}catch(e){}});
+ });
+}catch(e){}
 async function refresh(){const s=await (await fetch('/state')).json();
 document.getElementById('root').value=s.root||'';
 document.getElementById('origin').value=s.allowed_origin||'';
