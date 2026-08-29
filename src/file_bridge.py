@@ -43,6 +43,7 @@ import threading
 import time
 import webbrowser
 import zipfile
+from html import escape as _hesc
 from pathlib import Path
 from urllib.parse import urlparse, parse_qs, unquote
 
@@ -51,8 +52,8 @@ MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
-VERSION = "2.5"
-SKILL_VERSION = "2.5"   # keep in sync with skill/open-file-bridge/SKILL.md
+VERSION = "2.6"
+SKILL_VERSION = "2.6"   # keep in sync with skill/open-file-bridge/SKILL.md
 
 
 # ------------------------------------------- risk classes (P3, openworker risk.py)
@@ -2854,7 +2855,8 @@ class ExcludedPath(Exception):
                    f"excluded by default, nothing to configure")
         else:
             msg = (f"'{rel}' is excluded by ignore settings (pattern: {pattern}); "
-                   f"ask the user to adjust File Bridge settings if this is intended")
+                   f"tell the user — ignore patterns are editable in the File "
+                   f"Bridge settings page (the local picker)")
         super().__init__(msg)
 
 
@@ -3670,8 +3672,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         except ExcludedPath as e:
             return self._json(404, {"error": str(e), "excluded": True,
-                                    "hint": "excluded by settings — ask the user "
-                                            "to adjust File Bridge settings"})
+                                    "hint": "excluded by settings — tell the user; "
+                                            "ignore patterns are editable in the "
+                                            "File Bridge settings page"})
         except PermissionError as e:
             return self._json(400, {"error": str(e)})
         except Exception as e:
@@ -4432,9 +4435,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self._json(200, {"ok": all(r.get("ok") for r in results),
                                         "results": results})
         except ExcludedPath as e:
-            return self._json(403, {"error": str(e), "excluded": True,
-                                    "hint": "write into an ignored path is refused; "
-                                            "ask the user to adjust settings"})
+            return self._json(404, {"error": str(e), "excluded": True,
+                                    "hint": "excluded by settings — tell the user; "
+                                            "ignore patterns are editable in the "
+                                            "File Bridge settings page"})
         except PermissionError as e:
             return self._json(400, {"error": str(e)})
         except Exception as e:
@@ -4585,6 +4589,22 @@ a random one and give it to your admin to embed.</p>
 <p class="hint" id="secstatus"></p>
 </div>
 <hr>
+<div class="sec">
+<h3 style="margin:0">🚫 Ignore patterns</h3>
+<p class="hint">Files matching these patterns are invisible to the AI — not
+listed, not readable, and <b>writes to them are refused</b>. One pattern per
+line, gitignore-style: <code>*.zip</code>, <code>secrets/</code> (that folder,
+anywhere), <code>/build</code> (top level only); bare names match at any
+depth. The preview below updates within seconds of saving.</p>
+<textarea id="ignorepats" rows="4" placeholder="*.zip&#10;.secrets&#10;node_modules/" style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace">__IGNORE__</textarea>
+<div style="display:flex;gap:10px;align-items:center;margin-top:6px">
+<button onclick="setIgnore()" style="margin-top:0">Save patterns</button>
+<span class="hint" id="ignstat" style="margin:0"></span>
+</div>
+<p class="hint">Always ignored (built in, not editable):
+<b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b></p>
+</div>
+<hr>
 <p>OCR language (for reading scanned PDFs / photos) — tick one or more:</p>
 <div id="langbox" style="background:#fff;border:1px solid #ddd;border-radius:6px;
 padding:10px 14px;font-size:15px;display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center"></div>
@@ -4726,6 +4746,13 @@ async function renderPreview(){
  },(window._pvMs||0)>1500?30000:5000);
 })();
 document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')renderPreview()});
+async function setIgnore(){
+ const pats=document.getElementById('ignorepats').value.split('\\n').map(s=>s.trim()).filter(Boolean);
+ const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ignore_global:pats})});
+ const d=await res.json();
+ const st=document.getElementById('ignstat');
+ if(d.ok){st.textContent='✓ saved — '+(pats.length?pats.length+' pattern'+(pats.length>1?'s':''):'ignoring nothing extra');renderPreview();}
+ else{st.textContent='✗ '+(d.error||'failed');}}
 async function setLang(){
  const l=document.getElementById('ocrlang').value.trim();
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ocr_lang:l})});
@@ -5150,6 +5177,7 @@ def main():
             html = Handler.PICKER_HTML.replace("__ROOT__", str(root) if root else "")
             html = html.replace("__ORIGIN__", get_allowed_origin() or "")
             html = html.replace("__OCRLANG__", _get_ocr_lang())
+            html = html.replace("__IGNORE__", _hesc("\n".join(_global_ignore())))
             html = html.replace("__STATUS__",
                                 f"sharing {root} · security {security_mode()}" if root
                                 else f"no folder chosen yet · security {security_mode()}")

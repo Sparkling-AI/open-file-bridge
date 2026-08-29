@@ -123,3 +123,19 @@ Operational:
   (state-dir/tessdata) over the bundled set — extra languages without
   rebuilding the app. Picker shows the drop-in path.
 - Picker: token field shows •••• when a token is configured.
+
+## 2.6 — 2026-08-29 (staged with bridge 2.6)
+
+Scope control made real for users and respected by the model.
+
+- OS junk floor: `.DS_Store`, `._*`, `Thumbs.db`, `desktop.ini` are always
+  hidden at any depth — never listed, zipped, extracted, read or written —
+  with zero configuration. Bare ignore names (`.git/`, `secrets/`) now
+  match at any depth, true gitignore semantics.
+- New "Ignore patterns" editor in the File Bridge settings page: global
+  gitignore-style patterns (`*.zip`, `.secrets`, …) saved without restart;
+  the "What the AI can see" preview refreshes seconds later. Ignored means
+  invisible AND unwritable.
+- When a read 404s or a write is refused with `excluded by ignore
+  settings`, tell the user — patterns are editable in the bridge settings
+  page. Never retry or route around it.
