@@ -540,9 +540,11 @@ Verified live in-browser: probe file appeared within one 5 s cycle.
 The old appicon.svg was a gradient squircle with the 📁 **emoji** and a
 Unicode ⇅ pasted as <text> — output depended on whatever fonts the build
 machine had, and the Windows side had no icon at all. Replaced with a
-pure-vector design (same brand gradient): big yellow folder low-left,
-white circular badge on its top-right corner carrying blue up/down
-arrows (user's layout call). Drafts + review loop live in
+pure-vector design (same brand gradient): variant C's max-size yellow
+folder (tab top-left) + variant B's up/down arrows in a white circular
+badge pinned on the folder's top-right corner, circle tightened around
+the glyphs (final = user-directed hybrid; iterated in build/icon-drafts/).
+Drafts + review loop live in
 build/icon-drafts/ (preview.html shows every candidate at Dock sizes).
 
 Shipped everywhere the app has a face:
