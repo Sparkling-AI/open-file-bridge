@@ -55,7 +55,7 @@ MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
 VERSION = "2.7"
-SKILL_VERSION = "2.7"   # keep in sync with skill/open-file-bridge/SKILL.md
+SKILL_VERSION = "2.8"   # keep in sync with skill/open-file-bridge/SKILL.md
 
 
 # ------------------------------------------- risk classes (P3, openworker risk.py)
