@@ -125,6 +125,12 @@ check "null-origin denial readable"   'Access-Control-Allow-Origin: null' "$(cat
 check "null-origin denial explains"   'missing or invalid bridge token' "$(cat /tmp/gn2.b)"
 rm -f /tmp/gn2.h /tmp/gn2.b
 
+# ---------- picker API: token-free preview + CSRF guard ----------
+PV=$(curl -s "$BRIDGE/api/preview")
+check "picker preview token-free" '"entries"' "$PV"
+CTG=$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: text/plain' -d '{"readonly":false}')
+check "picker API needs json ctype" 'application/json' "$CTG"
+
 # ---------- normal endpoints (with token) ----------
 T="-H X-Bridge-Token:$TOKEN"
 check "health ok"          '"ok": *true'          "$(curl -s $BRIDGE/health)"

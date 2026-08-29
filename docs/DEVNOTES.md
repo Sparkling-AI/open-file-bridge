@@ -503,3 +503,18 @@ packages, image reading for vision models.
   Every bridge request touching the old test-folder wedged — root
   repointed to ~/owui-demo-files (also reboot-safe, unlike /tmp which
   the day's reboot had cleared).
+
+## 2.5.1 — picker preview under token tier; /api/root CSRF guard
+
+The "What the AI can see" pane called /directory_tree with NO token —
+correct before the token tier existed (loopback, no Origin → served),
+401 the moment a token was configured. The picker can never send the
+token (it is only stored hashed), so the preview now uses GET
+/api/preview: loopback-only, token-free, no CORS headers (cross-origin
+pages can fire it but never read the response; locals can read the
+folder from disk anyway).
+
+While there: /api/root accepted any Content-Type — a cross-site page
+could POST a text/plain JSON body (simple request = no preflight) and
+change security settings. Now requires application/json (non-simple ⇒
+preflight ⇒ foreign origins blocked). e2e: +2 checks, 246/246.
