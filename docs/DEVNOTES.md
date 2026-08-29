@@ -518,3 +518,19 @@ While there: /api/root accepted any Content-Type — a cross-site page
 could POST a text/plain JSON body (simple request = no preflight) and
 change security settings. Now requires application/json (non-simple ⇒
 preflight ⇒ foreign origins blocked). e2e: +2 checks, 246/246.
+
+## 2.5.2 — preview: auto-refresh + collapsible tree (user request)
+
+Cost question answered by building it: auto-refresh is nearly free —
+/api/preview is one bounded local walk (same as /list; 5000-entry/10 s
+server caps) every 5 s, only while the picker tab is visible
+(visibilitychange), and never overlapping a slow previous fetch
+(window._pvBusy guard — matters after the Downloads stall episode).
+Plus an explicit ↻ Refresh button.
+
+Long-list UX: native <details> collapsible folders (depth 0 open,
+deeper collapsed), per-folder child counts in the summary row,
+"N files · M folders" line, and the user's open/closed choices survive
+auto-refresh (paths recorded from details[open] before re-render and
+reapplied). Truncation notice mirrors the cap the MODEL sees.
+Verified live in-browser: probe file appeared within one 5 s cycle.

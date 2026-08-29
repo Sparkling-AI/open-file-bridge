@@ -1,0 +1,25 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#2563eb"/>
+      <stop offset="1" stop-color="#06b6d4"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="992" height="992" rx="228" fill="url(#bg)"/>
+
+  <!-- AI sparkle above the bridge -->
+  <path d="M512 232 Q 524 296 586 308 Q 524 320 512 384 Q 500 320 438 308 Q 500 296 512 232 Z"
+        fill="#ffffff"/>
+
+  <!-- deck -->
+  <rect x="168" y="540" width="688" height="48" rx="24" fill="#ffffff"/>
+
+  <!-- arch -->
+  <path d="M216 588 Q 512 836 808 588" fill="none" stroke="#ffffff"
+        stroke-width="44" stroke-linecap="round"/>
+
+  <!-- water -->
+  <path d="M272 872 q 40 -26 80 0 q 40 26 80 0 q 40 -26 80 0 q 40 26 80 0 q 40 -26 80 0 q 40 26 80 0"
+        fill="none" stroke="#ffffff" stroke-width="26" stroke-linecap="round" opacity="0.45"/>
+</svg>

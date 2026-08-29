@@ -1,0 +1,36 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <clipPath id="sq"><rect x="16" y="16" width="992" height="992" rx="228"/></clipPath>
+    <linearGradient id="gl" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#60a5fa"/>
+      <stop offset="1" stop-color="#2563eb"/>
+    </linearGradient>
+    <linearGradient id="gr" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#6d28d9"/>
+    </linearGradient>
+  </defs>
+
+  <g clip-path="url(#sq)">
+    <rect x="16" y="16" width="496" height="992" fill="url(#gl)"/>
+    <rect x="512" y="16" width="496" height="992" fill="url(#gr)"/>
+  </g>
+
+  <!-- folder (files side) -->
+  <g transform="translate(-24,-10)">
+    <path d="M126 420 h96 l40 40 h148 a30 30 0 0 1 30 30 v112 a30 30 0 0 1 -30 30 H156 a30 30 0 0 1 -30 -30 V450 a30 30 0 0 1 30 -30 Z"
+          fill="#ffffff"/>
+  </g>
+
+  <!-- connecting beam + nodes -->
+  <rect x="372" y="470" width="280" height="84" rx="42" fill="#ffffff"/>
+  <circle cx="372" cy="512" r="48" fill="#ffffff"/>
+  <circle cx="652" cy="512" r="48" fill="#ffffff"/>
+
+  <!-- chat bubble (assistant side) -->
+  <rect x="704" y="428" width="188" height="148" rx="40" fill="#ffffff"/>
+  <path d="M736 568 l-12 52 l58 -40 Z" fill="#ffffff"/>
+  <circle cx="748" cy="502" r="15" fill="#6d28d9"/>
+  <circle cx="790" cy="502" r="15" fill="#6d28d9"/>
+  <circle cx="832" cy="502" r="15" fill="#6d28d9"/>
+</svg>

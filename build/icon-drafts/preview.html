@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>File Bridge — icon drafts</title>
+<style>
+  body { background:#111318; color:#e5e7eb; font-family:-apple-system,Helvetica,Arial,sans-serif;
+         margin:0; padding:40px; }
+  h1 { font-size:22px; font-weight:600; }
+  h1.sec { margin-top:56px; font-size:18px; color:#93c5fd; }
+  p.sub { color:#9ca3af; margin-top:-10px; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:28px; margin-top:32px; }
+  .card { background:#1b1e26; border-radius:20px; padding:28px; text-align:center; }
+  .card.current { outline:2px dashed #4b5563; }
+  .big img { width:256px; height:256px; }
+  .row { display:flex; gap:18px; justify-content:center; align-items:flex-end; margin-top:22px; }
+  h2 { font-size:16px; margin:18px 0 4px; }
+  p.desc { color:#9ca3af; font-size:13px; line-height:1.5; margin:6px 12px; }
+</style>
+</head>
+<body>
+<h1>File Bridge — app icon drafts</h1>
+<p class="sub">Top row: rendered size. Bottom row: 64 / 32 / 16 px to judge Dock legibility.</p>
+
+<h1 class="sec">Round 2 — refinements of the current icon (bigger folder, thicker arrows)</h1>
+<div class="grid">
+  <div class="card">
+    <div class="big"><img src="variant-a-bolder.svg" alt="variant A"></div>
+    <div class="row">
+      <img src="variant-a-bolder.svg" width="64" height="64" alt="">
+      <img src="variant-a-bolder.svg" width="32" height="32" alt="">
+      <img src="variant-a-bolder.svg" width="16" height="16" alt="">
+    </div>
+    <h2>A — Same layout, bolder</h2>
+    <p class="desc">Current composition kept: folder left, ⇅ column right. Folder enlarged, arrows redrawn as thick vector strokes (66px) with a clean gap. No emoji/font dependency anymore.</p>
+  </div>
+
+  <div class="card">
+    <div class="big"><img src="variant-b-corner-badge.svg" alt="variant B"></div>
+    <div class="row">
+      <img src="variant-b-corner-badge.svg" width="64" height="64" alt="">
+      <img src="variant-b-corner-badge.svg" width="32" height="32" alt="">
+      <img src="variant-b-corner-badge.svg" width="16" height="16" alt="">
+    </div>
+    <h2>B — Arrows on the folder's corner</h2>
+    <p class="desc">Your corner idea: big folder low-right, white badge on the folder's top-left corner carrying blue ⇅. The badge keeps the arrows legible at Dock size.</p>
+  </div>
+
+  <div class="card">
+    <div class="big"><img src="variant-c-front-arrows.svg" alt="variant C"></div>
+    <div class="row">
+      <img src="variant-c-front-arrows.svg" width="64" height="64" alt="">
+      <img src="variant-c-front-arrows.svg" width="32" height="32" alt="">
+      <img src="variant-c-front-arrows.svg" width="16" height="16" alt="">
+    </div>
+    <h2>C — Arrows on the folder body</h2>
+    <p class="desc">Maximum folder, white ⇅ printed on the front like a stamp. Simplest silhouette of the three; strongest at 16 px.</p>
+  </div>
+</div>
+
+<h1 class="sec">Round 1 — earlier concept drafts</h1>
+<div class="grid">
+  <div class="card current">
+    <div class="big"><img src="../appicon.svg" alt="current"></div>
+    <div class="row">
+      <img src="../appicon.svg" width="64" height="64" alt="">
+      <img src="../appicon.svg" width="32" height="32" alt="">
+      <img src="../appicon.svg" width="16" height="16" alt="">
+    </div>
+    <h2>Current (shipping)</h2>
+    <p class="desc">Emoji 📁 + Unicode ⇅ as text glyphs — renders differently on every OS/font. Round 2 variants replace both with real paths.</p>
+  </div>
+
+  <div class="card">
+    <div class="big"><img src="draft-1-bridge.svg" alt="draft 1"></div>
+    <div class="row">
+      <img src="draft-1-bridge.svg" width="64" height="64" alt="">
+      <img src="draft-1-bridge.svg" width="32" height="32" alt="">
+      <img src="draft-1-bridge.svg" width="16" height="16" alt="">
+    </div>
+    <h2>Draft 1 — The Bridge</h2>
+    <p class="desc">Literal product name: white arch bridge over water, AI sparkle above.</p>
+  </div>
+
+  <div class="card">
+    <div class="big"><img src="draft-2-linked-file.svg" alt="draft 2"></div>
+    <div class="row">
+      <img src="draft-2-linked-file.svg" width="64" height="64" alt="">
+      <img src="draft-2-linked-file.svg" width="32" height="32" alt="">
+      <img src="draft-2-linked-file.svg" width="16" height="16" alt="">
+    </div>
+    <h2>Draft 2 — Linked File</h2>
+    <p class="desc">Document with a chain-link badge: "your files, linked to the assistant".</p>
+  </div>
+
+  <div class="card">
+    <div class="big"><img src="draft-3-terminal.svg" alt="draft 3"></div>
+    <div class="row">
+      <img src="draft-3-terminal.svg" width="64" height="64" alt="">
+      <img src="draft-3-terminal.svg" width="32" height="32" alt="">
+      <img src="draft-3-terminal.svg" width="16" height="16" alt="">
+    </div>
+    <h2>Draft 3 — Local Terminal</h2>
+    <p class="desc">Shell prompt + cyan cursor on dark graphite: the local side of the bridge.</p>
+  </div>
+
+  <div class="card">
+    <div class="big"><img src="draft-4-split-link.svg" alt="draft 4"></div>
+    <div class="row">
+      <img src="draft-4-split-link.svg" width="64" height="64" alt="">
+      <img src="draft-4-split-link.svg" width="32" height="32" alt="">
+      <img src="draft-4-split-link.svg" width="16" height="16" alt="">
+    </div>
+    <h2>Draft 4 — Two Worlds</h2>
+    <p class="desc">Folder ⋯ beam ⋯ chat bubble on a split square. Most conceptual; fades below 48 px.</p>
+  </div>
+</div>
+</body>
+</html>

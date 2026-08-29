@@ -4558,10 +4558,14 @@ Need a code that is not listed? Type it below before saving.</p>
 <p class="hint" id="langs"></p>
 <hr>
 <div class="sec">
-<h3>👁 What the AI can see</h3>
+<div style="display:flex;align-items:center;gap:10px">
+<h3 style="margin:0">👁 What the AI can see</h3>
+<button onclick="renderPreview()" style="margin-top:0;padding:4px 12px;font-size:13px">↻ Refresh</button>
+</div>
 <p class="hint">Exactly what Open WebUI's model sees when it lists your folders —
-after ignore lists and security rules. Nothing here is editable; change folders
-or ignore patterns above instead.</p>
+after ignore lists and security rules. Folders are collapsible; the view
+auto-refreshes every 5&nbsp;s while this tab is visible. Nothing here is
+editable; change the folder above instead.</p>
 <div id="preview" class="hint" style="max-height:340px;overflow:auto;background:#fff;
 border:1px solid #ddd;border-radius:6px;padding:10px;font-family:ui-monospace,monospace;
 font-size:13px;color:#333;text-align:left"></div>
@@ -4634,27 +4638,44 @@ async function beat(){
  }}
 setInterval(beat,5000);beat();
 async function renderPreview(){
+ if(window._pvBusy)return;window._pvBusy=true;
  const box=document.getElementById('preview'), info=document.getElementById('previnfos');
  try{
   const h=await (await fetch('/health')).json();
   if(!h.ok){box.innerHTML='🔒 '+(h.hint||'no folder chosen yet');info.textContent='';return;}
   const t=await (await fetch('/api/preview')).json();
   if(!t.ok&&t.error&&!t.entries){box.innerHTML='🔒 '+esc(t.error);info.textContent='';return;}
-  let lines=[],count=0;
-  function walk(node,depth){
-   if(count>=500){return;}
+  // remember which folders the user had open so auto-refresh doesn't collapse them
+  const openPaths=new Set([...box.querySelectorAll('details[open]')].map(d=>d.dataset.p));
+  let nf=0,nd=0,count=0;
+  function row(node,depth,path){
+   if(count>=500)return '';
    count++;
-   const pad='&nbsp;'.repeat(depth*2);
-   const icon=node.type==='dir'?'📁':(node.type==='symlink'?'🔗':'📄');
-   lines.push(pad+icon+' '+esc(node.name)+(node.size!=null?' <span style="color:#999">'+fmtSize(node.size)+'</span>':''));
-   if(node.children)for(const ch of node.children)walk(ch,depth+1);
+   const p=path+'/'+node.name;
+   const size=node.size!=null?' <span style="color:#999">'+fmtSize(node.size)+'</span>':'';
+   if(node.children){
+    nd++;
+    const n=node.children.length;
+    const open=openPaths.has(p)||depth<1;
+    const kids=node.children.map(ch=>row(ch,depth+1,p)).join('');
+    return '<details data-p="'+esc(p)+'"'+(open?' open':'')+'>'+
+     '<summary style="cursor:pointer">📁 '+esc(node.name)+
+     ' <span style="color:#999">'+n+'</span></summary>'+
+     '<div style="margin-left:14px">'+kids+'</div></details>';
+   }
+   nf++;
+   return '<div>📄 '+esc(node.name)+size+'</div>';
   }
-  for(const n of t.entries)walk(n,0);
-  if(t.truncated)lines.push('… (truncated — '+(t.entry_count||'500+')+' entries max)');
-  box.innerHTML=lines.join('<br>')||'(empty folder)';
-  info.textContent=(t.entry_count||0)+' entries · ignore lists applied · symlinks never shown';
+  const html=t.entries.map(n=>row(n,0,'')).join('');
+  box.innerHTML=html||'(empty folder)';
+  info.textContent=(nf)+' file'+(nf===1?'':'s')+' · '+nd+' folder'+(nd===1?'':'s')+
+   (t.truncated?' · TRUNCATED at cap — the model sees the same limit':'')+
+   ' · ignore lists applied · symlinks never shown';
  }catch(e){box.innerHTML='preview unavailable: '+esc(e.message||e);}
+ finally{window._pvBusy=false;}
 }
+setInterval(()=>{if(document.visibilityState==='visible')renderPreview()},5000);
+document.addEventListener('visibilitychange',()=>{if(document.visibilityState==='visible')renderPreview()});
 async function setLang(){
  const l=document.getElementById('ocrlang').value.trim();
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({ocr_lang:l})});
