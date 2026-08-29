@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-File Bridge — service installer (P2 rollout item).
+Open File Bridge — service installer (P2 rollout item).
 
 Installs a per-user background service so the bridge starts at login:
-  Linux:   systemd user unit  (~/.config/systemd/user/file-bridge.service)
-  macOS:   LaunchAgent plist  (~/Library/LaunchAgents/com.filebridge.bridge.plist),
+  Linux:   systemd user unit  (~/.config/systemd/user/open-file-bridge.service)
+  macOS:   LaunchAgent plist  (~/Library/LaunchAgents/com.openfilebridge.bridge.plist),
            loaded via launchctl (RunAtLoad + KeepAlive)
   Windows: writes a .bat + Startup shortcut instructions (real service
            registration — NSSM/Task Scheduler — is the user's final phase).
@@ -13,10 +13,10 @@ Usage:
   python scripts/install_service.py            # install + start now
   python scripts/install_service.py --status   # show unit + service state
   python scripts/install_service.py --remove   # stop + uninstall
-  python scripts/install_service.py --exec dist/FileBridge --arg ~/my-folder
+  python scripts/install_service.py --exec dist/OpenFileBridge --arg ~/my-folder
 
 The service runs the bridge from its repo/source location with the CURRENT
-python. For the frozen binary, pass --exec /path/to/FileBridge (plus --arg
+python. For the frozen binary, pass --exec /path/to/OpenFileBridge (plus --arg
 <folder> to pre-select the shared folder).
 Idempotent: reinstall overwrites the unit file cleanly.
 """
@@ -29,8 +29,8 @@ import sys
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-UNIT_NAME = "file-bridge.service"
-PLIST_NAME = "com.filebridge.bridge.plist"
+UNIT_NAME = "open-file-bridge.service"
+PLIST_NAME = "com.openfilebridge.bridge.plist"
 
 
 def bridge_cmd(exec_path: str | None) -> list:
@@ -50,10 +50,10 @@ def linux_install(cmd: list) -> bool:
     unit = linux_unit_path()
     unit.parent.mkdir(parents=True, exist_ok=True)
     state = Path(os.environ.get("FILE_BRIDGE_STATE_DIR")
-                 or Path.home() / ".local" / "state" / "file-bridge")
+                 or Path.home() / ".local" / "state" / "open-file-bridge")
     state.mkdir(parents=True, exist_ok=True)
     unit.write_text(f"""[Unit]
-Description=File Bridge (local file access for Open WebUI)
+Description=Open File Bridge (local file access for Open WebUI)
 After=network.target
 
 [Service]
@@ -117,7 +117,7 @@ def mac_install(cmd: list) -> bool:
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-  <key>Label</key><string>com.filebridge.bridge</string>
+  <key>Label</key><string>com.openfilebridge.bridge</string>
   <key>ProgramArguments</key>
   <array>{escaped}</array>
   <key>RunAtLoad</key><true/>
@@ -128,15 +128,15 @@ def mac_install(cmd: list) -> bool:
     <key>FILE_BRIDGE_NO_UI</key><string>1</string>
   </dict>
   <key>StandardErrorPath</key>
-  <string>{Path.home()}/Library/Logs/file-bridge.log</string>
+  <string>{Path.home()}/Library/Logs/open-file-bridge.log</string>
   <key>StandardOutPath</key>
-  <string>{Path.home()}/Library/Logs/file-bridge.log</string>
+  <string>{Path.home()}/Library/Logs/open-file-bridge.log</string>
 </dict>
 </plist>
 """)
     print(f"plist written: {plist}")
     # replace any previously loaded instance, then load the new one
-    _launchctl("bootout", f"gui/{os.getuid()}/com.filebridge.bridge")
+    _launchctl("bootout", f"gui/{os.getuid()}/com.openfilebridge.bridge")
     r = _launchctl("bootstrap", f"gui/{os.getuid()}", str(plist))
     if r.returncode != 0:
         print(f"FAILED: launchctl bootstrap\n{r.stderr.strip()}")
@@ -148,7 +148,7 @@ def mac_install(cmd: list) -> bool:
 def mac_status() -> bool:
     p = mac_plist_path()
     print(f"plist: {p} ({'exists' if p.exists() else 'missing'})")
-    r = _launchctl("print", f"gui/{os.getuid()}/com.filebridge.bridge")
+    r = _launchctl("print", f"gui/{os.getuid()}/com.openfilebridge.bridge")
     loaded = r.returncode == 0
     print(f"loaded: {loaded}")
     if loaded:
@@ -160,7 +160,7 @@ def mac_status() -> bool:
 
 
 def mac_remove() -> bool:
-    r = _launchctl("bootout", f"gui/{os.getuid()}/com.filebridge.bridge")
+    r = _launchctl("bootout", f"gui/{os.getuid()}/com.openfilebridge.bridge")
     if r.returncode != 0 and "No such process" not in (r.stderr or ""):
         print(f"note: bootout: {(r.stderr or '').strip()}")
     p = mac_plist_path()
@@ -176,7 +176,7 @@ def win_install(cmd: list) -> bool:
     # write-only (user's final phase does real testing): Startup folder .bat
     startup = (Path(os.environ["APPDATA"]) / "Microsoft" / "Windows"
                / "Start Menu" / "Programs" / "Startup")
-    bat = startup / "file-bridge.bat"
+    bat = startup / "open-file-bridge.bat"
     bat.parent.mkdir(parents=True, exist_ok=True)
     joined = " ".join(f'"{c}"' for c in cmd)
     bat.write_text(f"@echo off\r\nset \"FILE_BRIDGE_NO_UI=1\"\r\n{joined}\r\n",
@@ -188,7 +188,7 @@ def win_install(cmd: list) -> bool:
 def win_status() -> bool:
     startup = (Path(os.environ["APPDATA"]) / "Microsoft" / "Windows"
                / "Start Menu" / "Programs" / "Startup")
-    bat = startup / "file-bridge.bat"
+    bat = startup / "open-file-bridge.bat"
     print(f"startup script: {bat} ({'exists' if bat.exists() else 'missing'})")
     return bat.exists()
 
@@ -196,7 +196,7 @@ def win_status() -> bool:
 def win_remove() -> bool:
     startup = (Path(os.environ["APPDATA"]) / "Microsoft" / "Windows"
                / "Start Menu" / "Programs" / "Startup")
-    bat = startup / "file-bridge.bat"
+    bat = startup / "open-file-bridge.bat"
     if bat.exists():
         bat.unlink()
         print(f"removed: {bat}")

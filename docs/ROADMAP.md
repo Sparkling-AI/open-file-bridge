@@ -244,7 +244,7 @@ final validation pass (not after every change). Do not block on either.
      Remaining for a real Windows desktop: Inno Setup compile,
      SmartScreen first-run, NTFS symlink/junction confirmation.
 ☐ Inno Setup compile run on Windows (script written, never executed;
-   spec output layout now matches its expected `dist\FileBridge\` path).
+   spec output layout now matches its expected `dist\OpenFileBridge\` path).
 ✅ **Audit log** — JSONL at `state_dir/audit.log` (from OpenWorker audit.py
    pattern): every file-touching call logs ts, endpoint, method, path, size,
    status + **secret-scrubbed args** (`_SECRET_KEYS` scrub list adopted;
@@ -418,7 +418,7 @@ All four items from Dandan's macOS app feedback, same day:
    running (LSUIElement removed; binary bootstraps NSApplication via
    ctypes — `CocoaDock`, stdlib-only). Dock → Quit verified working;
    settings page gained a heartbeat ● (5 s /health poll) and a
-   **Stop File Bridge** button (local-only /api/shutdown, clean exit in
+   **Stop Open File Bridge** button (local-only /api/shutdown, clean exit in
    every mode); second launch while running exits politely and opens
    the settings page instead of a bind-traceback dialog.
 ✅ Native folder picker — **Browse…** button next to the shared-folder

@@ -63,7 +63,7 @@ off-recipe; the strict body forecloses both (found 2026-08-28, GLM
 ### Option B — by hand in the UI
 
 1. **Workspace → Skills → Create**
-   - Name: `Local File Bridge`, ID: `open-file-bridge`
+   - Name: `Open File Bridge`, ID: `open-file-bridge`
    - Content: paste `skill/open-file-bridge/SKILL.md` (without the `---` frontmatter)
    - Access → make it **public** (read for everyone)
 2. **Workspace → Models → edit/create** a preset based on your model:
@@ -117,7 +117,7 @@ misconfigured CORS can only ever be reached from the user's own machine.)
 Further options if you need them:
 - Add a shared secret: OWUI skill sends `X-Bridge-Key` header; bridge validates.
 - Read-only mode: remove the `/write` handler.
-- Audit log: append each request to `~/.file-bridge.log`.
+- Audit log: append each request to the state dir (`~/Library/Application Support/open-file-bridge/audit.log`).
 
 ## OCR engine & language packs (tesseract)
 

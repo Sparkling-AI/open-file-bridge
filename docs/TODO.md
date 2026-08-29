@@ -61,7 +61,7 @@ Keep the 200 KB cap or make it size-aware per mime type.
 
 ## 3. Code signing — removes install friction
 
-- [ ] **Windows:** EV cert + `signtool` on `FileBridge.exe` kills the
+- [ ] **Windows:** EV cert + `signtool` on `OpenFileBridge.exe` kills the
       SmartScreen "More info → Run anyway" step. Without it, expect a couple
       of support questions per hundred users.
 - [ ] **macOS:** Apple Developer ID + `build/package_macos.sh --sign`
@@ -72,7 +72,7 @@ Keep the 200 KB cap or make it size-aware per mime type.
 Bridge must be running during chats. Non-technical users will forget.
 
 - [ ] Windows installer option: registry Run key (Inno Setup `[Registry]` section)
-- [ ] macOS: LaunchAgent plist (`~/Library/LaunchAgents/com.yourorg.filebridge.plist`)
+- [ ] macOS: LaunchAgent plist (`~/Library/LaunchAgents/com.yourorg.openfilebridge.plist`)
 - [ ] Linux: note in user guide about systemd --user unit
 - [ ] Tray icon / menu-bar indicator so users can see it's running (needs a
       GUI dep — currently avoided deliberately to stay stdlib-only; acceptable
@@ -86,7 +86,7 @@ Bridge must be running during chats. Non-technical users will forget.
 
 - [ ] Optional read-only mode (`FILE_BRIDGE_READONLY=1` disables `/write`)
 - [ ] Append-only mode for notes-type folders
-- [ ] `.filebridge-ignore` file support (like .gitignore) for secrets inside
+- [ ] `.ofb-ignore` file support (like .gitignore) for secrets inside
       the shared folder (e.g. `.env`, `id_rsa`)
 
 ## 6. Model-side robustness
@@ -114,7 +114,7 @@ CI smoke (GitHub Actions windows-latest) covers build + startup + health +
 frozen addons. Still needs a real Windows desktop, per the original plan:
 
 - [ ] First real Inno Setup compile of `build/installer_windows.iss`
-      (spec output layout now matches its expected `dist\FileBridge\` path)
+      (spec output layout now matches its expected `dist\OpenFileBridge\` path)
 - [ ] SmartScreen "More info → Run anyway" flow on first run
 - [ ] NTFS symlink/junction behavior of the resolve guards (POSIX paths,
       drive letters `C:\`, UNC `\\server\share` and backslash traversal are

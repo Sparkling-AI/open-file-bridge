@@ -56,7 +56,7 @@ ss -tlnp | grep 8765        # or: lsof -i :8765
    # Windows
    taskkill /pid <pid> /f
    # Linux (service install)
-   systemctl --user stop file-bridge
+   systemctl --user stop open-file-bridge
    ```
    …or just USE the running one: open http://127.0.0.1:8765 — if it's
    ours and healthy, done. (Since 2.6.3 the user rarely needs telling:
@@ -113,5 +113,5 @@ not more support.
 4. One line from the user: what they asked the AI, what came back.
 
 The state dir holds the rest if needed (audit log, bridge log):
-Linux `~/.local/state/file-bridge/`, Windows
-`%APPDATA%\file-bridge\`, macOS `~/Library/Application Support/file-bridge/`.
+Linux `~/.local/state/open-file-bridge/`, Windows
+`%APPDATA%\open-file-bridge\`, macOS `~/Library/Application Support/open-file-bridge/`.

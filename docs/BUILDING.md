@@ -7,10 +7,10 @@ file (3.8+), so the "build" is just freezing it with PyInstaller per OS.
 
 | OS | Command | Output |
 |---|---|---|
-| Linux | `build/build_linux.sh` | `dist/FileBridge` (single binary) |
-| Windows | `pyinstaller build/file_bridge_windows.spec` (on Windows) | `dist/FileBridge/FileBridge.exe` |
-| Windows installer | Inno Setup on `build/installer_windows.iss` | `FileBridge-Setup.exe` |
-| macOS | `pyinstaller --onefile --windowed --name FileBridge src/file_bridge.py` then `build/package_macos.sh` | `FileBridge-macos.zip` (.app inside) |
+| Linux | `build/build_linux.sh` | `dist/OpenFileBridge` (single binary) |
+| Windows | `pyinstaller build/open_file_bridge_windows.spec` (on Windows) | `dist/OpenFileBridge/OpenFileBridge.exe` |
+| Windows installer | Inno Setup on `build/installer_windows.iss` | `OpenFileBridge-Setup.exe` |
+| macOS | `pyinstaller --onefile --windowed --name OpenFileBridge src/file_bridge.py` then `build/package_macos.sh` | `OpenFileBridge-macos.zip` (.app inside) |
 | All three (CI) | push a `v*` tag | GitHub Actions artifacts |
 
 PyInstaller **cannot cross-compile** — build each OS on that OS (or use the
@@ -55,7 +55,7 @@ Optional proper installer (Start-menu entry, uninstaller, desktop icon):
 
 1. Install [Inno Setup](https://jrsoftware.org/isinfo.php)
 2. Build the exe first (above)
-3. Compile `build/installer_windows.iss` → `FileBridge-Setup.exe`
+3. Compile `build/installer_windows.iss` → `OpenFileBridge-Setup.exe`
 
 ## macOS
 
@@ -63,8 +63,8 @@ On a Mac:
 
 ```bash
 pip install pyinstaller
-pyinstaller --onefile --windowed --name FileBridge src/file_bridge.py
-./build/package_macos.sh              # -> FileBridge-macos.zip
+pyinstaller --onefile --windowed --name OpenFileBridge src/file_bridge.py
+./build/package_macos.sh              # -> OpenFileBridge-macos.zip
 ```
 
 `package_macos.sh` wraps the binary into a proper `.app` and zips it. It also
@@ -145,9 +145,9 @@ pyinstaller ... --collect-all pymupdf ...
   (Linux distro package is fine).
 - Extra languages WITHOUT touching the app package: drop `.traineddata`
   files from https://github.com/tesseract-ocr/tessdata_fast into the
-  **user drop-in dir** — `~/Library/Application Support/file-bridge/tessdata/`
-  (macOS), `~/.local/state/file-bridge/tessdata/` (Linux),
-  `%APPDATA%\file-bridge\tessdata\` (Windows, or
+  **user drop-in dir** — `~/Library/Application Support/open-file-bridge/tessdata/`
+  (macOS), `~/.local/state/open-file-bridge/tessdata/` (Linux),
+  `%APPDATA%\open-file-bridge\tessdata\` (Windows, or
   `%LOCALAPPDATA%\Programs\Open File Bridge\tessdata\` next to the exe).
   The bridge merges them with the bundled set at startup (restart to
   pick up new files); the settings page shows the exact path. Package
@@ -163,8 +163,8 @@ pyinstaller ... --collect-all pymupdf ...
   `tesseract/` next to the installed exe are found correctly. Layout:
 
 ```
-<FileBridge install>/
-├── FileBridge(.exe)      # everything python baked in (82 MB)
+<OpenFileBridge install>/
+├── OpenFileBridge(.exe)      # everything python baked in (82 MB)
 ├── wheels/               # browser-side Office libs (8 .whl)
 ├── tessdata/             # eng swe chi_sim osd (.traineddata)
 └── tesseract/            # engine binary (Windows installer only)
@@ -176,7 +176,7 @@ else works.
 ## Smoke-testing a build
 
 ```bash
-./FileBridge /tmp/test-folder &
+./OpenFileBridge /tmp/test-folder &
 sleep 1
 curl -s http://127.0.0.1:8765/health     # {"ok": true, "root": "/tmp/test-folder", ...}
 kill %1
@@ -188,7 +188,7 @@ macOS's stock bash 3.2 and BSD userland) and can run against a **frozen
 binary** instead of the source:
 
 ```bash
-FILE_BRIDGE_CMD="$PWD/dist/FileBridge.app/Contents/MacOS/FileBridge" \
+FILE_BRIDGE_CMD="$PWD/dist/OpenFileBridge.app/Contents/MacOS/OpenFileBridge" \
   uv run --with pymupdf bash tests/e2e_test.sh
 ```
 
