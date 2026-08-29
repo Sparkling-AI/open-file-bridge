@@ -96,6 +96,9 @@ read-only toggle gives an easy "AI may look but not touch my Drive" mode.
   bridge refuses writes before rclone ever sees them.
 - **Ignore lists still apply.** `.git/`, `*.tmp`, secrets patterns —
   all evaluated after the mount resolves, so they work identically.
+  OS junk (`.DS_Store`, `._*`, `Thumbs.db`, `desktop.ini`) is always
+  skipped even without any ignore entry, so cloud copies made on macOS
+  don't pollute listings or archives.
 - **Quota/lock errors from the cloud surface as 5xx.** The bridge wraps
   OS errors from the mounted path; a Google Drive rate-limit shows up as
   a generic read failure. Check `rclone`'s log (`--log-file`) for the

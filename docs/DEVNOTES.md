@@ -575,3 +575,27 @@ DESCENDING (already-listed children render; truncated flagged). Picker
 auto-refresh is now adaptive: a >1.5 s walk switches the poll to 30 s
 until walks are fast again (plus the existing visible-tab + no-overlap
 guards). e2e 246/246.
+
+## 2.6.1 — OS junk ignored by default: .DS_Store & friends (user request)
+
+Finder writes .DS_Store into EVERY folder it touches; Explorer drops
+Thumbs.db/desktop.ini; non-HFS volumes grow AppleDouble `._*` files.
+They polluted /list, /directory_tree, the picker preview, /search and
+/zip output with zero value to the model. New `DEFAULT_IGNORE` floor
+(`.DS_Store`, `._*`, `Thumbs.db`, `desktop.ini`) is composed into every
+pattern consumer via `_all_ignore(cfg)` (per-root ignore + floor +
+user global) — never listed, zipped, extracted, read or written, no
+configuration involved. ExcludedPath got a distinct message for floor
+hits ("always excluded by default") so the model doesn't send the user
+to settings for something that isn't in settings.
+
+Fix that made the floor possible: `_ignore_match` promised gitignore
+semantics but matched bare names only against the joined path — so
+`.git/` pruned a top-level .git but NOT `sub/.git/` (Finder-style junk
+lives at every depth). Slash-free patterns now match any path SEGMENT
+(path-shaped patterns and `/x` anchoring unchanged; `*` always crossed
+`/` in fnmatch). This also makes user patterns like `secrets/` behave
+as documented at depth. e2e: +10 checks (list/read/write/tree/zip/unzip
+junk exclusion, nested .git pruning) — 252 pass, 1 env-only failure
+(`img big auto-shrunk` needs pymupdf, absent from the current default
+python3; fails identically on unmodified master).

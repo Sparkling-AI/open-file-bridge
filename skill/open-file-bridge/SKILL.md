@@ -84,7 +84,8 @@ files. If you only need to answer a question about a file, never install.
 
 **Finding things:** `/search` is the top office query tool ("which contract
 mentions the termination clause"). It returns per-file matches with context
-lines and respects the user's ignore lists — if a file you expect is absent,
+lines and respects the user's ignore lists (plus OS junk like `.DS_Store`,
+always hidden at any depth) — if a file you expect is absent,
 it may be excluded in settings; say so rather than scanning manually.
 
 **Editing text files:** prefer `/edit` with `dry_run: true` — it returns a

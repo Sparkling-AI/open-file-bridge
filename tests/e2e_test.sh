@@ -250,6 +250,24 @@ check "read ignored 404s"   'excluded by settings' "$(curl -s "$BRIDGE/read?path
 check "read dotgit 404s"    'excluded' "$(curl -s "$BRIDGE/read?path=.git/config" $T)"
 check "write ignored refused" 'refused\|excluded' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"secrets/new.txt","content":"x"}')"
 check "pdf-like ignored too" 'excluded\|no such' "$(curl -s "$BRIDGE/read?path=junk.tmp" $T)"
+# built-in junk floor: .DS_Store & friends hidden at ANY depth, unreadable,
+# unwritable — zero configuration (2026-08)
+mkdir -p "$TESTDIR/sub2/.git"
+printf 'junk' > "$TESTDIR/.DS_Store"
+printf 'junk' > "$TESTDIR/sub2/.DS_Store"
+printf 'junk' > "$TESTDIR/sub2/Thumbs.db"
+printf 'junk' > "$TESTDIR/sub2/._n.txt"
+printf 'ref'  > "$TESTDIR/sub2/.git/config"
+check "list omits OS junk" 'clean' "$(curl -s "$BRIDGE/list?path=." $T | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+paths=[e['path'] for e in d['entries']]
+bad=[p for p in paths if '.DS_Store' in p or 'Thumbs.db' in p or '/._' in p or p.startswith('._')]
+print('LEAKED:'+str(bad) if bad else 'clean')")"
+check "read junk 404s" 'excluded by default' "$(curl -s "$BRIDGE/read?path=sub2/.DS_Store" $T)"
+check "write junk refused" 'refused\|excluded' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":".DS_Store","content":"x"}')"
+# bare ignore names prune NESTED copies too (gitignore depth semantics)
+check "nested .git pruned" 'excluded' "$(curl -s "$BRIDGE/read?path=sub2/.git/config" $T)"
 # self-protection: state dir never reachable even if a root were to overlap
 check "state file unreadable" 'escapes shared root\|never accessible' "$(curl -s "$BRIDGE/read?path=../../../.local/state/file-bridge/state.json" $T 2>/dev/null || echo unreachable)"
 # root-in-state rejected by set_roots
@@ -541,6 +559,7 @@ check "normal file still readable" 'test content' "$(curl -s "$BRIDGE/read?path=
 mkdir -p "$TESTDIR/pack/sub"
 echo "alpha" > "$TESTDIR/pack/a.txt"
 echo "beta"  > "$TESTDIR/pack/sub/b.txt"
+printf 'junk' > "$TESTDIR/pack/.DS_Store"   # must NOT reach any archive
 echo "loose" > "$TESTDIR/loose.txt"
 check "zip creates archive"   '"ok": *true'    "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack","loose.txt"],"out":"bundle.zip"}')"
 check "zip counts files"     '"files": *2'     "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack"],"out":"p2.zip"}')"
@@ -564,6 +583,15 @@ PY
 check "zip-slip blocked"    'unsafe member'  "$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"evil.zip","dest":"unpacked"}')"
 if [ -f "$TESTDIR/../escaped.txt" ] || [ -f "/tmp/escaped.txt" ]; then echo "  FAIL: zip-slip escaped the root"; fail=1; else echo "  PASS: no file escaped"; fi
 check "unzip non-zip refused" 'not a zip\|not a valid' "$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"loose.txt","dest":"d"}')"
+# archives that CARRY OS junk: extraction drops the junk members
+python3 - "$TESTDIR/junky.zip" <<'PY'
+import sys, zipfile
+with zipfile.ZipFile(sys.argv[1], "w") as z:
+    z.writestr("real.txt", "kept")
+    z.writestr(".DS_Store", "junk")
+PY
+check "unzip skips OS junk" '"files": *1' "$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"junky.zip","dest":"unjunked"}')"
+check "unzip keeps real files" 'kept' "$(cat "$TESTDIR/unjunked/real.txt")"
 # directory_tree
 DT=$(curl -s "$BRIDGE/directory_tree?path=." $T)
 check "tree lists root files"   'notes.txt'  "$DT"
@@ -572,6 +600,7 @@ check "tree counts entries"     'entry_count' "$DT"
 DT2=$(curl -s "$BRIDGE/directory_tree?path=pack" $T)
 check "tree subdir works"       'a.txt'      "$DT2"
 if echo "$DT" | grep -q 'TOPSECRET'; then echo "  FAIL: tree leaked ignored path"; fail=1; else echo "  PASS: tree respects ignore lists"; fi
+if echo "$DT" | grep -q 'DS_Store\|Thumbs\.db'; then echo "  FAIL: tree leaked OS junk"; fail=1; else echo "  PASS: tree omits OS junk"; fi
 
 # pdf_text/ocr functional tests: run suite WITH addons via:
 #   uv run --with pymupdf,rapidocr-onnxruntime bash tests/e2e_test.sh
