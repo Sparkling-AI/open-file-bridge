@@ -42,7 +42,7 @@ exe = EXE(
     exclude_binaries=True,
     name='FileBridge',
     console=False,          # no console window; runs quietly in background
-    icon=None,              # add icon='filebridge.ico' when you have one
+    icon='appicon.ico',     # embedded in the exe (Taskbar/Explorer/shortcuts)
     uac_admin=False,        # normal user rights, no admin needed
 )
 

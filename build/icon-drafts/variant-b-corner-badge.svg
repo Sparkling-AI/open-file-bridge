@@ -12,16 +12,19 @@
 
   <rect x="16" y="16" width="992" height="992" rx="228" fill="url(#bg)"/>
 
-  <!-- big folder, low-right -->
-  <path d="M230 478 Q230 430 278 430 H462 Q490 430 508 452 L534 486 H788 Q836 486 836 534 V772 Q836 820 788 820 H278 Q230 820 230 772 Z"
-        fill="url(#fd)"/>
+  <!-- badge mirrored to the folder's top-right corner; background gradient kept unflipped -->
+  <g transform="translate(1024,0) scale(-1,1)">
+    <!-- big folder, low-right (mirrored: low-left) -->
+    <path d="M230 478 Q230 430 278 430 H462 Q490 430 508 452 L534 486 H788 Q836 486 836 534 V772 Q836 820 788 820 H278 Q230 820 230 772 Z"
+          fill="url(#fd)"/>
 
-  <!-- arrows badge on the folder's top-left corner -->
-  <circle cx="330" cy="330" r="212" fill="#ffffff"/>
-  <g fill="none" stroke="#1f73e6" stroke-width="48" stroke-linecap="round" stroke-linejoin="round">
-    <path d="M330 330 V282"/>
-    <path d="M264 282 L330 210 L396 282"/>
-    <path d="M330 400 V448"/>
-    <path d="M264 448 L330 516 L396 448"/>
+    <!-- arrows badge on the folder's top-left corner -->
+    <circle cx="330" cy="330" r="212" fill="#ffffff"/>
+    <g fill="none" stroke="#1f73e6" stroke-width="48" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M330 330 V282"/>
+      <path d="M264 282 L330 210 L396 282"/>
+      <path d="M330 400 V448"/>
+      <path d="M264 448 L330 516 L396 448"/>
+    </g>
   </g>
 </svg>

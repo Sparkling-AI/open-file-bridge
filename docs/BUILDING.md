@@ -45,6 +45,9 @@ pyinstaller --noconfirm file_bridge_windows.spec
 ```
 
 - `console=False` — no black window pops up; it runs in the background.
+- The exe **embeds `build/appicon.ico`** (7 sizes, 16–256 px, generated from
+  `build/appicon.svg`) — Explorer, Taskbar and shortcuts show it. Regenerate
+  alongside the `.icns` below; both come from the same SVG.
 - Unsigned exe ⇒ SmartScreen "Windows protected your PC" on first run.
   Users click **More info → Run anyway**. An EV code-signing cert removes this.
 
@@ -83,7 +86,8 @@ qlmanage -t -s 1024 -o /tmp build/appicon.svg          # -> /tmp/appicon.svg.png
 mkdir /tmp/appicon.iconset
 for pair in 16:icon_16x16.png 32:icon_16x16@2x.png 32:icon_32x32.png \
            64:icon_32x32@2x.png 128:icon_128x128.png 256:icon_128x128@2x.png \
-           256:icon_256x256.png 512:icon_256x256@2x.png 512:icon_512x512.png; do
+           256:icon_256x256.png 512:icon_256x256@2x.png 512:icon_512x512.png \
+           1024:icon_512x512@2x.png; do
   sips -z ${pair%%:*} ${pair%%:*} /tmp/appicon.svg.png \
         --out /tmp/appicon.iconset/${pair#*:} >/dev/null
 done

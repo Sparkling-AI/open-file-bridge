@@ -36,6 +36,7 @@ AppPublisher=Your Org
 DefaultDirName={autopf}\File Bridge
 DefaultGroupName=File Bridge
 UninstallDisplayIcon={app}\FileBridge.exe
+SetupIconFile=appicon.ico           ; icon of the setup exe itself
 OutputBaseFilename=FileBridge-Setup
 Compression=lzma2
 SolidCompression=yes
