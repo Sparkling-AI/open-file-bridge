@@ -4551,24 +4551,32 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ---- local picker UI (served only to localhost browser) ----
     PICKER_HTML = """<!doctype html><html><head><meta charset="utf-8"><title>File Bridge</title>
 <style>body{font-family:system-ui;max-width:680px;margin:50px auto;padding:0 20px;color:#222}
-input:not([type=checkbox]){width:100%;padding:10px;font-size:16px;box-sizing:border-box}
+input:not([type=checkbox]),textarea{width:100%;padding:10px;font-size:16px;box-sizing:border-box}
+textarea{font-family:ui-monospace,monospace}
 #langbox label{white-space:nowrap;cursor:pointer}
 #langbox input[type=checkbox]{width:auto;margin:0 6px 0 0;vertical-align:middle}
 button{padding:10px 22px;font-size:16px;margin-top:12px;cursor:pointer}
+button.small{margin-top:0;padding:4px 12px;font-size:13px}
+.btnrow{display:flex;gap:8px;align-items:stretch}
+h3{margin:0 0 8px}
 .ok{color:#0a7d32;font-weight:bold}.hint{color:#666;font-size:14px}
-.warn{color:#b00;font-weight:bold}.sec{background:#f4f6f8;padding:14px 18px;border-radius:8px;margin:14px 0}
+.warn{color:#b00;font-weight:bold}.sec{background:#f4f6f8;padding:14px 18px;border-radius:8px;margin:16px 0}
+.panel{background:#fff;border:1px solid #ddd;border-radius:6px;padding:10px 14px}
 code{background:#eee;padding:2px 6px;border-radius:4px}</style></head><body>
 <h2>📁 File Bridge <span id="beat" style="font-size:18px;color:#999">●</span></h2>
 <p class="hint" id="beatinfo">checking whether the bridge is running…</p>
 <p>This little service lets <b>Open WebUI in your browser</b> read &amp; write files
 in <b>one folder you choose</b> on this computer. Nothing else is exposed.</p>
-<p>Shared folder:</p>
-<div style="display:flex;gap:8px;align-items:stretch">
+<div class="sec">
+<h3>📁 Shared folder</h3>
+<p class="hint">Only this folder is exposed — nothing else on this computer.</p>
+<div class="btnrow">
 <input id="root" placeholder="__ROOTPH__" value="__ROOT__" style="flex:1">
-<button id="browsebtn" onclick="browse()" style="margin-top:0;white-space:nowrap">Browse…</button>
+<button id="browsebtn" onclick="browse()" class="small" style="white-space:nowrap">Browse…</button>
 </div>
 <button onclick="setRoot()">Save folder</button>
 <p class="ok" id="status"></p>
+</div>
 <div class="sec">
 <h3>🔒 Security</h3>
 <p class="hint">Lock the bridge to your Open WebUI address (required — until set,
@@ -4580,52 +4588,50 @@ send it in an <code>X-Bridge-Token</code> header. Org flow (recommended): your O
 embeds a token in the public skill with <code>setup_owui.py --bridge-token</code>; paste
 that token here so your bridge accepts exactly your organisation's requests. Or generate
 a random one and give it to your admin to embed.</p>
-<div style="display:flex;gap:8px;align-items:stretch">
+<div class="btnrow">
 <input id="token" placeholder="paste the org token from your OWUI admin" style="flex:1" autocomplete="off">
-<button onclick="setToken()" style="margin-top:0;white-space:nowrap">Set token</button>
+<button onclick="setToken()" class="small" style="white-space:nowrap">Set token</button>
 </div>
 <button onclick="genToken()">Generate random token</button>
 <button onclick="clearToken()">Clear token</button>
 <p class="hint" id="secstatus"></p>
 </div>
-<hr>
 <div class="sec">
-<h3 style="margin:0">🚫 Ignore patterns</h3>
-<p class="hint">Files matching these patterns are invisible to the AI — not
-listed, not readable, and <b>writes to them are refused</b>. One pattern per
-line, gitignore-style: <code>*.zip</code>, <code>secrets/</code> (that folder,
-anywhere), <code>/build</code> (top level only); bare names match at any
-depth. The preview below updates within seconds of saving.</p>
-<textarea id="ignorepats" rows="4" placeholder="*.zip&#10;.secrets&#10;node_modules/" style="width:100%;box-sizing:border-box;font-family:ui-monospace,monospace">__IGNORE__</textarea>
-<div style="display:flex;gap:10px;align-items:center;margin-top:6px">
-<button onclick="setIgnore()" style="margin-top:0">Save patterns</button>
-<span class="hint" id="ignstat" style="margin:0"></span>
-</div>
-<p class="hint">Always ignored (built in, not editable):
-<b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b></p>
-</div>
-<hr>
-<p>OCR language (for reading scanned PDFs / photos) — tick one or more:</p>
-<div id="langbox" style="background:#fff;border:1px solid #ddd;border-radius:6px;
-padding:10px 14px;font-size:15px;display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center"></div>
+<h3>🔤 OCR language</h3>
+<p class="hint">For reading scanned PDFs / photos — tick one or more:</p>
+<div id="langbox" class="panel" style="font-size:15px;display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center"></div>
 <p class="hint">Ticks combine automatically in tesseract syntax (e.g. <code>eng+swe</code>
 — combining is free, mixing e.g. Swedish AND English fixes å/ä/ö and digits).
 Need a code that is not listed? Type it below before saving.</p>
 <input id="ocrlang" placeholder="eng+swe" value="__OCRLANG__" style="max-width:200px" oninput="syncBoxes(false)">
 <button onclick="setLang()">Save language</button>
 <p class="hint" id="langs"></p>
-<hr>
+</div>
 <div class="sec">
-<div style="display:flex;align-items:center;gap:10px">
+<h3>🚫 Ignore patterns</h3>
+<p class="hint">Files matching these patterns are invisible to the AI — not
+listed, not readable, and <b>writes to them are refused</b>. One pattern per
+line, gitignore-style: <code>*.zip</code>, <code>secrets/</code> (that folder,
+anywhere), <code>/build</code> (top level only); bare names match at any
+depth. The preview below updates within seconds of saving.</p>
+<textarea id="ignorepats" rows="4" placeholder="*.zip&#10;.secrets&#10;node_modules/">__IGNORE__</textarea>
+<div class="btnrow" style="align-items:center;gap:10px;margin-top:6px">
+<button onclick="setIgnore()" class="small" style="padding:6px 16px;font-size:14px">Save patterns</button>
+<span class="hint" id="ignstat" style="margin:0"></span>
+</div>
+<p class="hint">Always ignored (built in, not editable):
+<b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b></p>
+</div>
+<div class="sec">
+<div class="btnrow" style="align-items:center;gap:10px">
 <h3 style="margin:0">👁 What the AI can see</h3>
-<button onclick="renderPreview()" style="margin-top:0;padding:4px 12px;font-size:13px">↻ Refresh</button>
+<button onclick="renderPreview()" class="small">↻ Refresh</button>
 </div>
 <p class="hint">Exactly what Open WebUI's model sees when it lists your folders —
 after ignore lists and security rules. Folders are collapsible; the view
 auto-refreshes every 5&nbsp;s while this tab is visible. Nothing here is
 editable; change the folder above instead.</p>
-<div id="preview" class="hint" style="max-height:340px;overflow:auto;background:#fff;
-border:1px solid #ddd;border-radius:6px;padding:10px;font-family:ui-monospace,monospace;
+<div id="preview" class="panel hint" style="max-height:340px;overflow:auto;font-family:ui-monospace,monospace;
 font-size:13px;color:#333;text-align:left"></div>
 <p class="hint" id="previnfos"></p>
 </div>

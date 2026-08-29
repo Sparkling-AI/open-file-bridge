@@ -702,3 +702,18 @@ old binary; always check the binary mtime/`BUILD OK`), and the correct
 build interpreter is the uv-archive python at
 `~/.cache/uv/archive-v0/J7oC40Dxb_VBEmxhD_i89/bin/python3.12`
 (PyInstaller 6.22.2 + pymupdf 1.28.2 — the default python3 has neither).
+
+## 2.6.3 — picker restyle: unified cards + Ignore patterns moved under OCR (user request)
+
+Every config section is now the same .sec card with an icon h3: 📁 Shared
+folder (was bare), 🔒 Security, 🔰→🔤 OCR language (was bare with a lone
+white langbox), 🚫 Ignore patterns (moved BELOW OCR per user), 👁 preview.
+New shared CSS instead of inline styles: h3{margin:0 0 8px} (Security's
+h3 previously had default margins, others margin:0 — the inconsistency
+that prompted this), .panel (white box: langbox + preview), .btnrow
+(flex input+button rows), button.small (Browse/Set token/Refresh), and
+textarea joined the input padding rule. <hr> separators dropped (cards
+carry their own margin); one kept before the footer. IDs/handlers/
+placeholders untouched — JS and e2e greps unaffected. Vision-checked
+(glm-4.6V): order correct, cards uniform, no defects. e2e 262 pass
+(1 env-only pymupdf failure unchanged).
