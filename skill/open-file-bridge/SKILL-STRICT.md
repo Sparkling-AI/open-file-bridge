@@ -80,7 +80,7 @@ print(h.get("ok"), h.get("root"), h.get("version"))
 ```
 
 `/health` → `{"ok": true, ...}` means running; it also shows the shared
-root folder and the `version` (older than v2.4 → tell the user "the bridge
+root folder and the `version` (older than v2.5 → tell the user "the bridge
 app and the skill are out of sync — re-run the installer"). Send
 `BRIDGE_HEADERS` on EVERY call, GETs included. Non-200 bodies are JSON with
 an `error` (+ often `hint`) — read and adjust; e.g. 401 "missing or invalid
@@ -102,7 +102,7 @@ bridge token" → add the token header, retry once.
 | .docx | `/docx_read?path=X` |
 | .pptx | `/pptx_read?path=X` |
 | .pdf | `/pdf_text?path=X` — empty text = scanned → `/ocr?path=X` |
-| image (png/jpg/…) | `/image_info?path=X` then `/ocr` if text is needed |
+| image (png/jpg/…) | `/image_info?path=X` then `/ocr` if text is needed; `/image_b64` to SHOW it in chat |
 | .eml | `/eml_read?path=X` |
 | .html | `/html_text?path=X` |
 | .doc/.xls/.ppt (legacy) | Recipe C first |
@@ -158,5 +158,5 @@ d = await bridge_post("/convert", {"path": "old.doc", "out": "new.docx"})
 ## Detection
 
 `await bridge_get("/health")` → `{"ok": true}` = running. Anything
-else → Rule 4. `/health` reports the bridge version; older than v2.4
+else → Rule 4. `/health` reports the bridge version; older than v2.5
 → out of sync.

@@ -487,6 +487,37 @@ if grep -q "outside data" "$TESTDIR/realdir/outside.txt" 2>/dev/null; then echo 
 LEFT2=$(find "$TESTDIR" -maxdepth 1 -name '.fb-*' | wc -l | tr -d ' ')
 if [ "$LEFT2" = "0" ]; then echo "  PASS: still no temp leftovers after symlink tests"; else echo "  FAIL: $LEFT2 temp files left"; fail=1; fi
 
+# ---------- walk hardening: symlink cycles + caps (P2) ----------
+# pathlib rglob FOLLOWS dir symlinks — a cycle used to hang /list forever
+mkdir -p "$TESTDIR/loopdir/sub"
+echo "in loop" > "$TESTDIR/loopdir/sub/deep.txt"
+ln -sfn "$TESTDIR" "$TESTDIR/loopdir/up"
+L=$(curl -s -m 15 "$BRIDGE/list?path=." $T)
+check "list survives symlink cycle" 'loopdir/sub/deep.txt' "$L"
+if echo "$L" | grep -q '"path": "loopdir/up'; then
+  echo "  FAIL: /list listed a dir symlink"; fail=1
+else
+  echo "  PASS: /list skips dir symlinks"
+fi
+S=$(curl -s -m 15 "$BRIDGE/search?q=in+loop" $T)
+check "search survives symlink cycle" 'deep.txt' "$S"
+Z=$(curl -s -m 20 -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["loopdir"],"out":"loop.zip"}')
+check "zip survives symlink cycle" '"ok": *true' "$Z"
+# entry cap: MAX_LIST is 500 — exceed it and expect truncated:true
+mkdir -p "$TESTDIR/manydir"
+python3 -c "
+import sys
+d = '$TESTDIR/manydir'
+for i in range(600):
+    open(f'{d}/f{i:04}.txt', 'w').write('x')
+"
+LC=$(curl -s -m 20 "$BRIDGE/list?path=manydir" $T)
+check "list caps entries"     '"truncated": *true' "$LC"
+CNT=$(echo "$LC" | python3 -c "import json,sys; print(len(json.load(sys.stdin)['entries']))" 2>/dev/null)
+if [ "$CNT" = "500" ]; then echo "  PASS: capped at MAX_LIST (500)"; else echo "  FAIL: entries=$CNT"; fail=1; fi
+# clean up the bulky fixtures so later root-wide assertions stay deterministic
+rm -rf "$TESTDIR/manydir" "$TESTDIR/loopdir"
+
 # ---------- sensitive-name blacklist (P2) ----------
 printf 'AWS_KEY=AKIATEST\n' > "$TESTDIR/.env"
 printf '%s\n' '-----BEGIN PRIVATE KEY-----' > "$TESTDIR/cert.pem"
@@ -579,6 +610,50 @@ check "bmp dims"              '"width": *2'      "$(curl -s "$BRIDGE/image_info?
 check "image_info non-image"  'not a supported image' "$(curl -s "$BRIDGE/image_info?path=notes.txt" $T)"
 check "image_info missing"    'no such file'     "$(curl -s "$BRIDGE/image_info?path=ghost.png" $T)"
 check "image_info traversal"  'escapes'          "$(curl -s "$BRIDGE/image_info?path=../../etc/passwd" $T)"
+# ---------- image_b64: data URL for chat display (size-capped) ----------
+IB=$(curl -s "$BRIDGE/image_b64?path=tiny.png" $T)
+check "img data_url prefix"    'data:image/png;base64,' "$IB"
+check "img reports mime"       '"mime": *"image/png"'   "$IB"
+check "img reports dims"       '"width": *3'            "$IB"
+check "img non-image rejected" 'not a supported image' "$(curl -s "$BRIDGE/image_b64?path=notes.txt" $T)"
+check "img missing 404"        'no such file'       "$(curl -s "$BRIDGE/image_b64?path=ghost.png" $T)"
+check "img traversal"          'escapes'            "$(curl -s "$BRIDGE/image_b64?path=../../etc/passwd" $T)"
+# big real image (random noise ≈ incompressible): pymupdf in this env must
+# shrink it under the requested cap
+python3 - "$TESTDIR" <<'PYEOF'
+import sys, struct, zlib, pathlib, os
+d = pathlib.Path(sys.argv[1])
+def chunk(tag, payload):
+    return struct.pack(">I", len(payload)) + tag + payload + struct.pack(">I", zlib.crc32(tag + payload) & 0xFFFFFFFF)
+W = H = 1400
+raw = b"".join(b"\x00" + os.urandom(W * 3) for _ in range(H))
+png = (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", W, H, 8, 2, 0, 0, 0))
+       + chunk(b"IDAT", zlib.compress(raw, 1)) + chunk(b"IEND", b""))
+(d / "big.png").write_bytes(png)
+print("big.png bytes:", len(png))
+PYEOF
+IBG=$(curl -s "$BRIDGE/image_b64?path=big.png&max_bytes=900000" $T)
+IBGN=$(echo "$IBG" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('bytes', -1))" 2>/dev/null || echo -1)
+if [ "$IBGN" -gt 0 ] && [ "$IBGN" -le 900000 ]; then
+  echo "  PASS: img big auto-shrunk under cap ($IBGN bytes)"
+else
+  echo "  FAIL: img big not shrunk — got: $(echo "$IBG" | head -c 200)"; fail=1
+fi
+# ---------- tessdata user drop-in: extra languages without a rebuild ----------
+TD=$(python3 - "$STATEDIR" <<'PYEOF'
+import os, sys, importlib.util
+sd = os.path.join(sys.argv[1], "langtest")
+os.environ["FILE_BRIDGE_STATE_DIR"] = sd
+os.makedirs(os.path.join(sd, "tessdata"), exist_ok=True)
+open(os.path.join(sd, "tessdata", "deu.traineddata"), "wb").write(b"fake-deu")
+spec = importlib.util.spec_from_file_location("fb_check", "src/file_bridge.py")
+m = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(m)          # module-level init runs the merge
+langs = m._ocr_langs_available()
+print("OK" if ("deu" in langs and "eng" in langs) else "MISSING %s" % langs)
+PYEOF
+)
+check "tessdata drop-in merged" 'OK' "$TD"
 # reveal: consent-gated OFF by default
 RV=$(curl -s "$BRIDGE/reveal?path=notes.txt" $T)
 check "reveal off by default" 'reveal is disabled' "$RV"

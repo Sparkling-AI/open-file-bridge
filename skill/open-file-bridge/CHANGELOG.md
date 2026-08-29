@@ -109,3 +109,17 @@ Operational:
 - Initial skill: file reads/writes via Pyodide pyfetch, office reads
   bridge-side, OCR (tesseract, swe+eng combo), /search, /edit,
   csv/html helpers.
+
+## 2.5 — 2026-08-29 (staged with bridge 2.5)
+
+- `/image_b64?path=&max_bytes=` — image as a data URL, size-capped
+  (default 4 MB), auto-downscaled by the bridge when pymupdf is
+  installed. New "Images" section: fetch the data URL and echo it as
+  markdown in the reply to SHOW the user (OWUI's own matplotlib
+  convention). Honest note added: code output reaches the model as text,
+  so a vision model literally seeing a local image still requires the
+  user attaching it to their message.
+- OCR languages: bridge now merges a user drop-in dir
+  (state-dir/tessdata) over the bundled set — extra languages without
+  rebuilding the app. Picker shows the drop-in path.
+- Picker: token field shows •••• when a token is configured.

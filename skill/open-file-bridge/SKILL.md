@@ -29,6 +29,7 @@ Access files in **the user's own computer** through their local Open File Bridge
 | `/docx_merge` | POST | `{"path":"template.docx","out","values":{"name":"…"},"strict":false}` — fill `{{placeholders}}` (confirm flow; reports missing) |
 | `/pptx_from_template` | POST | `{"path":"deck.potx","out","values":{…},"slides":[{"layout":1,"title":"…","body":"…"}]}` — build deck from corporate template (confirm flow) |
 | `/image_info?path=X` | GET | Image dimensions/format/megapixels + EXIF orientation (effective size) — stdlib, no addon |
+| `/image_b64?path=X&max_bytes=` | GET | Image as a **data URL** (`data:image/png;base64,…`), size-capped (default 4 MB; auto-downscaled when pymupdf is present) — for showing images in chat |
 | `/reveal?path=X` | GET | Open the user's file manager at the file — **consent-gated** (403 unless the user enabled it in settings) |
 | `/ocr/config` | GET | Current OCR language + installed languages |
 | `/convert` | POST | `{"path":"old.doc","out":"new.docx"}` — **LibreOffice headless conversion**: legacy .doc/.xls/.ppt → modern, office → PDF, xlsx → csv, docx → png/html. Format pair comes from the extensions; confirm flow; 501 with install hint if the user has no LibreOffice |
@@ -97,7 +98,7 @@ replacements in one file, one `/edit` call beats several `/write` calls.
 token required. One call answers everything: bridge running, `version`,
 `security` mode, `addons`. If the fetch itself fails, the bridge isn't
 running — tell the user and stop (do not retry more than once). Version
-rule: if `bridge` is OLDER than this skill (v2.4), mention once that some
+rule: if `bridge` is OLDER than this skill (v2.5), mention once that some
 endpoints may be missing; newer bridges are fine. There is no separate
 version-check step.
 
@@ -335,6 +336,33 @@ d = await bridge_get("/pdf_text", {"path": "docs/annual.pdf",
 import base64
 png = base64.b64decode(d["pages"][0]["png_b64"])   # show to the user or inspect
 ```
+
+### Images — showing them in chat
+
+`/image_b64` returns an image as a **data URL** (with `mime`, `width`,
+`height`, `bytes`; size-capped via `max_bytes`, default 4 MB — images over
+the cap are auto-downscaled by the bridge when pymupdf is installed).
+OWUI's convention for images produced by code is a printed data URL (its
+matplotlib integration does exactly this): fetch the data URL, then
+**include it in your reply as markdown** so the chat renders it —
+
+```python
+d = await bridge_get("/image_b64", {"path": "photos/site.jpg"})
+print(d["mime"], d["width"], "x", d["height"], d["bytes"], "bytes")
+# then in your ANSWER (not code):  ![site.jpg](<the data_url value>)
+```
+
+Keep `max_bytes` modest (e.g. 300000–800000) when echoing into chat —
+data URLs are ~1.35× the image size in tokens-of-text. For OCR-ing the
+image instead of showing it, use `/ocr`.
+
+**Truth about vision input:** code output reaches you as TEXT in this
+environment — a data URL in stdout does not let a vision model literally
+SEE local image pixels. If true visual inspection is required, ask the
+user to attach the image file to their chat message (that is the input
+path vision models actually consume). `/image_b64` and
+`/pdf_text?mode=images` are for SHOWING the user, and for answering
+questions about files via OCR/text extraction.
 
 **PDF page surgery** (`/pdf_op`): split extracts selected pages to
 `<out-base>.pN.pdf` files; merge concatenates 2-20 PDFs in order; rotate
