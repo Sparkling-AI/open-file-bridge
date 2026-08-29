@@ -51,8 +51,8 @@ MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
-VERSION = "2.4"
-SKILL_VERSION = "2.4"   # keep in sync with skill/open-file-bridge/SKILL.md
+VERSION = "2.5"
+SKILL_VERSION = "2.5"   # keep in sync with skill/open-file-bridge/SKILL.md
 
 
 # ------------------------------------------- risk classes (P3, openworker risk.py)
@@ -100,6 +100,7 @@ ENDPOINT_RISK = {
     "/ocr": RiskClass.READ,          # spawns tesseract; writes nothing
     "/ocr/config": RiskClass.READ,
     "/image_info": RiskClass.READ,
+    "/image_b64": RiskClass.READ,
     "/search": RiskClass.READ,
     "/html_text": RiskClass.READ,
     "/csv_head": RiskClass.READ,
@@ -669,11 +670,52 @@ def _find_tesseract():
 
 TESSERACT_BIN, TESSERACT_VER = _find_tesseract()
 # tessdata dir override (bundled langs next to the app, or system default).
-# Order: env TESSDATA_PREFIX > <app>/tessdata > <app>/tesseract/tessdata
-# (bundled-engine layout) > tesseract compiled-in default.
+# Order: env TESSDATA_PREFIX > merged(bundled + user drop-in) > <app>/tessdata
+# > <app>/tesseract/tessdata (bundled-engine layout) > tesseract default.
 _ad = _app_dir()
 WHEELS_DIR = _ad / "wheels"
+# user drop-in dir: extra .traineddata files (tessdata_fast) land here and
+# are picked up WITHOUT rebuilding the app — survives app updates too.
+USER_TESSDATA_DIR = STATE_DIR / "tessdata"
+MERGED_TESSDATA_DIR = STATE_DIR / "tessdata-merged"
+
+
+def _tessdata_refresh() -> None:
+    """If the user dropped .traineddata files into USER_TESSDATA_DIR, mirror
+    the bundled tessdata + those files into MERGED_TESSDATA_DIR (tesseract
+    takes exactly one tessdata dir; merge = copy, ~20 MB, once per start)."""
+    if os.environ.get("TESSDATA_PREFIX"):
+        return  # explicit env wins; user drop-in not consulted
+    bundled = _ad / "tessdata"
+    if not bundled.is_dir():
+        return
+    user_files = sorted(USER_TESSDATA_DIR.glob("*.traineddata")) \
+        if USER_TESSDATA_DIR.is_dir() else []
+    if not user_files:
+        return
+    import shutil as _sh
+    MERGED_TESSDATA_DIR.mkdir(parents=True, exist_ok=True)
+    # refresh when the bundled tree or the user file set changed
+    sig = "|".join([str(f.stat().st_mtime) for f in bundled.rglob("*") if f.is_file()]
+                   + [f.name for f in user_files])
+    marker = MERGED_TESSDATA_DIR / ".merged-sig"
+    try:
+        if marker.read_text() == sig:
+            return
+    except OSError:
+        pass
+    try:
+        _sh.copytree(bundled, MERGED_TESSDATA_DIR, dirs_exist_ok=True)
+        for f in user_files:
+            _sh.copy2(f, MERGED_TESSDATA_DIR / f.name)
+        marker.write_text(sig)
+    except OSError:
+        pass  # best-effort; the bundled set still works
+
+
+_tessdata_refresh()
 TESSDATA_DIR = (Path(os.environ["TESSDATA_PREFIX"]) if os.environ.get("TESSDATA_PREFIX")
+                else MERGED_TESSDATA_DIR if (MERGED_TESSDATA_DIR / "eng.traineddata").exists()
                 else _ad / "tessdata" if (_ad / "tessdata" / "eng.traineddata").exists()
                 else _ad / "tesseract" / "tessdata" if (_ad / "tesseract" / "tessdata" / "eng.traineddata").exists()
                 else None)  # None = let tesseract use its compiled-in default
@@ -702,6 +744,45 @@ def _get_ocr_lang():
 
 def _set_ocr_lang(lang: str):
     _state_update(ocr_lang=lang)
+
+
+def _safe_walk(root: Path, *, max_entries: int = 5000,
+               deadline_s: float = 10.0) -> tuple[list, bool]:
+    """Recursive walk over a USER-SHARED folder, hardened:
+    - never follows or lists symlinked dirs/files (pathlib's rglob FOLLOWS
+      directory symlinks when recursing — a symlink cycle in a shared
+      folder would loop a request thread forever);
+    - stops at max_entries or deadline_s and reports truncated=True, so a
+      pathological folder returns a partial answer instead of hanging.
+      (A readdir blocked at the kernel level — stalled iCloud/mount —
+      cannot be preempted in-thread; the deadline bounds the walk once
+      syscalls start returning.)
+    Returns (paths incl. dirs, truncated)."""
+    out: list[Path] = []
+    truncated = False
+    t0 = time.time()
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        keep = []
+        for d in sorted(dirnames):
+            dp = Path(dirpath) / d
+            if dp.is_symlink():
+                continue          # prune: never descend, never list
+            keep.append(d)
+            out.append(dp)
+            if len(out) >= max_entries:
+                return out, True
+        dirnames[:] = keep
+        for name in sorted(filenames):
+            f = Path(dirpath) / name
+            if f.is_symlink():
+                continue
+            out.append(f)
+            if len(out) >= max_entries:
+                return out, True
+        if time.time() - t0 > deadline_s:
+            truncated = True
+            break
+    return out, truncated
 
 
 # ------------------------------------------------------------------- paths
@@ -1154,7 +1235,7 @@ def zip_create(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
                 zf.writestr(p.name, data)
                 nfiles += 1
             else:
-                for f in sorted(p.rglob("*")):
+                for f in _safe_walk(p)[0]:
                     frel = f.relative_to(r).as_posix()
                     if _ignore_match(frel, f.is_dir(),
                                      list(cfg.get("ignore", [])) + _global_ignore()):
@@ -2437,7 +2518,7 @@ def _search(root: Path, cfg: dict, q: dict):
     excl = [x for x in (q.get("exclude") or "").split(",") if x.strip()]
     pats = list(cfg.get("ignore", [])) + _global_ignore() + excl
     matches, scanned = [], 0
-    for f in sorted(root.rglob("*")):
+    for f in _safe_walk(root)[0]:
         if len(matches) >= max_matches:
             break
         if not f.is_file():
@@ -3069,6 +3150,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "lang": _get_ocr_lang(),
                 "available": _ocr_langs_available(),
                 "engine": TESSERACT_VER or "tesseract",
+                "user_dir": str(USER_TESSDATA_DIR),
+                "hint": "drop extra .traineddata files (tessdata_fast) into "
+                        "user_dir and restart the bridge to add languages",
             })
 
         # ---- wheel hosting (token-free by design: static public wheels) ----
@@ -3112,7 +3196,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(404, {"error": f"not a directory: {q.get('path')}"})
                 entries = []
                 pats = list(cfg.get("ignore", [])) + _global_ignore()
-                for f in sorted(p.rglob("*")):
+                walked, truncated = _safe_walk(p)
+                for f in walked:
                     rel = f.relative_to(root).as_posix()
                     if _ignore_match(rel, f.is_dir(), pats):
                         continue
@@ -3124,9 +3209,13 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     except OSError:
                         continue
                     if len(entries) >= MAX_LIST:
+                        truncated = True
                         break
                 return self._json(200, {"root": str(root), "root_id": cfg.get("id"),
-                                        "entries": entries})
+                                        "entries": entries, "truncated": truncated,
+                                        **({"hint": "partial listing — folder exceeded the "
+                                                    "entry/time cap; narrow with path="
+                                            } if truncated else {})})
 
             if u.path == "/read":
                 p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
@@ -3441,6 +3530,59 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
                 code, out = _image_info(p)
                 return self._json(code, out)
+
+            if u.path == "/image_b64":
+                # image → data URL for OWUI's display convention (print it,
+                # echo as markdown) — size-capped, auto-downscaled with
+                # pymupdf when available. Vision INPUT is a different path:
+                # OWUI feeds code output to the model as TEXT; a vision model
+                # truly "sees" a local file only if the user attaches it.
+                p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
+                if not p.is_file():
+                    return self._json(404, {"error": f"no such file: {q.get('path')}"})
+                code, out = _image_info(p)
+                if code != 200:
+                    return self._json(code, out)
+                try:
+                    max_bytes = min(max(int(q.get("max_bytes", 4_000_000)),
+                                        50_000), MAX_BINARY)
+                except ValueError:
+                    max_bytes = 4_000_000
+                data = p.read_bytes()
+                mime = {"png": "image/png", "jpeg": "image/jpeg", "gif": "image/gif",
+                        "webp": "image/webp", "bmp": "image/bmp"}[out["format"]]
+                w, hgt = out.get("width"), out.get("height")
+                shrunk = False
+                if len(data) > max_bytes and HAVE_PYMUPDF \
+                        and out["format"] in ("png", "jpeg", "bmp"):
+                    try:
+                        pix = fitz.Pixmap(str(p))
+                        if pix.colorspace and pix.colorspace.n > 3:
+                            pix = fitz.Pixmap(fitz.csRGB, pix)
+                        tries = 0
+                        while len(data) > max_bytes and min(pix.width, pix.height) > 64 \
+                                and tries < 6:
+                            pix.shrink(1)          # halve dimensions
+                            data = pix.tobytes("png")
+                            shrunk = True
+                            tries += 1
+                        if shrunk:
+                            mime, w, hgt = "image/png", pix.width, pix.height
+                    except Exception:
+                        pass
+                if len(data) > max_bytes:
+                    return self._json(413, {
+                        "error": f"image is {len(data)} bytes, over the "
+                                 f"{max_bytes}-byte cap",
+                        "hint": "pass a larger max_bytes (≤ 8 MB), or convert/"
+                                f"downscale the image first"
+                                + ("" if HAVE_PYMUPDF else
+                                   " (this bridge has no pymupdf, so no auto-downscale)")})
+                b64 = base64.b64encode(data).decode()
+                return self._json(200, {
+                    "path": q.get("path"), "mime": mime, "width": w, "height": hgt,
+                    "bytes": len(data), "shrunk": shrunk,
+                    "data_url": f"data:{mime};base64,{b64}"})
 
             if u.path == "/reveal":
                 # open the OS file manager at the file's location. Consent-
@@ -4420,12 +4562,15 @@ document.getElementById('root').value=s.root||'';
 document.getElementById('origin').value=s.allowed_origin||'';
 document.getElementById('secstatus').textContent='Security mode: '+s.security+
 (String(s.security).indexOf('token')>=0
- ?' · a token IS configured (it is never shown back — paste a new one only to replace it)'
+ ?' · a token IS configured (shown as dots below; paste a new one only to replace it)'
  :' · no token set');
+document.getElementById('token').value=
+ (String(s.security).indexOf('token')>=0?'••••••••••••':'');
 const c=await (await fetch('/ocr/config')).json();
 document.getElementById('ocrlang').value=c.lang||'eng';
 renderLangs(c.available,c.lang);
-document.getElementById('langs').textContent='engine: '+(c.engine||'?');
+document.getElementById('langs').textContent='engine: '+(c.engine||'?')+
+ (c.user_dir?' — add languages: drop .traineddata files (tessdata_fast) into '+c.user_dir+' and restart the app':'');
 renderPreview();}
 function renderLangs(avail,cur){
  const box=document.getElementById('langbox');
@@ -4512,6 +4657,7 @@ async function setOrigin(){
 async function setToken(){
  const v=document.getElementById('token').value.trim();
  if(!v){document.getElementById('secstatus').textContent='✗ paste a token first (or use Generate)';return;}
+ if(v=='••••••••••••'){document.getElementById('secstatus').textContent='Token unchanged — paste a NEW value to replace it';return;}
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:{set:v}})});
  const d=await res.json();
  document.getElementById('secstatus').textContent = d.ok?('Token set — Security mode: '+d.security):('✗ '+(d.error||'failed'));}
@@ -4925,6 +5071,23 @@ def main():
             return
         return orig_do_GET(self)
     Handler.do_GET = do_GET_picker
+
+    # refuse to double-start: with SO_REUSEADDR a second instance can end up
+    # sharing the listen queue, and connections then land on a process that
+    # never serves them (verified: two frozen instances → /version answers,
+    # /list hangs forever)
+    import socket as _sock
+    try:
+        _probe = _sock.create_connection(("127.0.0.1", PORT), timeout=1)
+        _probe.close()
+        _already = True
+    except OSError:
+        _already = False
+    if _already:
+        print(f"error: a File Bridge is already listening on port {PORT} — "
+              f"stop it first (quit the app / pkill FileBridge, or set "
+              f"FILE_BRIDGE_PORT for a second instance)")
+        sys.exit(1)
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
     # daemon request threads: Stop/Dock-Quit must exit immediately instead of

@@ -466,3 +466,40 @@ retry with token. Four executions, one wasted on a version mismatch note
   self-correct in one retry. Enumerated the reachable bodies: public
   endpoints, token-valid responses, token-error messages — no secrets.
   e2e updated (denial-readable + denial-explains checks), 230/230.
+
+## 2.5 — image display, OCR drop-in langs, walk hardening (2026-08-29)
+
+User asks: masked token field, more OCR languages without bigger
+packages, image reading for vision models.
+
+- Picker: token field shows •••• when configured (value never echoed;
+  setToken() treats the mask as "unchanged").
+- OCR: USER_TESSDATA_DIR = state_dir/tessdata — drop .traineddata files
+  (tessdata_fast, ~1-4 MB per language) there; at startup the bridge
+  mirrors bundled + user files into state_dir/tessdata-merged (tesseract
+  takes exactly one tessdata dir; signature-checked refresh). Package
+  size unchanged; drop-ins survive app updates. /ocr/config exposes
+  user_dir; the picker shows the path.
+- /image_b64?path=&max_bytes=: data-URL image endpoint (mime/dims/bytes,
+  cap default 4 MB ≤ 8 MB hard), auto-downscaled via pymupdf
+  Pixmap.shrink loop when over cap (e2e: 5.9 MB noise PNG → 292 KB).
+  Skill 2.5 documents OWUI's display convention (print the data URL /
+  echo as markdown — same as OWUI's own matplotlib patch) AND the honest
+  limitation: code output reaches the model as TEXT; a vision model
+  literally seeing a local file still needs the user to attach it to
+  their message (checked OWUI 0.11.1 Chat.svelte + CodeExecutions +
+  pyodideSandboxHost.ts).
+- WALK HARDENING (found the hard way): /list used p.rglob("*") and
+  pathlib's glob FOLLOWS directory symlinks when recursing — a symlink
+  cycle in a shared folder hangs request threads forever. New
+  _safe_walk() (followlinks=False, symlinks pruned, 5000-entry cap,
+  10 s deadline → truncated flag) now backs /list, /search, /zip.
+  /directory_tree was already safe. Also: refuse to double-start (a
+  second instance + SO_REUSEADDR split the accept queue: /version
+  answered while /list hung).
+- MACHINE ISSUE (not the bridge): the user's ~/Downloads currently
+  BLOCKS readdir at the kernel level (stat works, ls/find/os.listdir
+  hang; likely stalled iCloud/FileProvider sync or a dead mount inside).
+  Every bridge request touching the old test-folder wedged — root
+  repointed to ~/owui-demo-files (also reboot-safe, unlike /tmp which
+  the day's reboot had cleared).
