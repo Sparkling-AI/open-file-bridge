@@ -87,6 +87,7 @@ ENDPOINT_RISK = {
     "/wheels": RiskClass.META,
     "/picker": RiskClass.META,
     "/api/root": RiskClass.META,
+    "/api/preview": RiskClass.META,
     "/api/shutdown": RiskClass.META,   # local-only: stops the process
     # desktop interaction — consent = the local user clicking the button
     "/api/pick_folder": RiskClass.UI,  # local-only: native choose-folder dialog
@@ -3126,6 +3127,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                             "match; re-run scripts/setup_owui.py "
                                             "to sync the skill"})
 
+        if u.path == "/api/preview":
+            # LOCAL picker preview ("What the AI can see") — loopback-only
+            # and token-free: the owner UI never sees the token (it is only
+            # ever stored hashed), so the preview cannot send it. GET + no
+            # CORS headers ⇒ cross-origin pages can trigger it but never
+            # read the response; locals can read the folder from disk
+            # anyway. Same data as /directory_tree for the first root.
+            if not self._is_loopback():
+                return self._json(403, {"error": "picker API is local only"}, cors=False)
+            self._audit("/api/preview")
+            ros = enabled_roots()
+            if not ros:
+                return self._json(200, {"ok": False,
+                                        "hint": "no folder chosen yet"}, cors=False)
+            return self._json(200, directory_tree(Path(ros[0]["path"]), ros[0],
+                                                  {"max_entries": "500",
+                                                   "max_depth": "6"}), cors=False)
+
         if u.path == "/state":
             return self._json(200, {
                 "root": str(root) if root else None,
@@ -4394,6 +4413,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
     # ---- local picker API (/api/root) ----
 
     def _do_api_root(self):
+        # CSRF guard: browsers only skip the CORS preflight for "simple"
+        # requests — application/json is NOT simple, so requiring it means
+        # a cross-site page cannot reach this state-changing API with a
+        # sneaky text/plain body (the request would need preflight, and
+        # foreign origins get no CORS headers).
+        ctype = (self.headers.get("Content-Type") or "").split(";")[0].strip().lower()
+        if ctype != "application/json":
+            return self._json(400, {"ok": False,
+                                    "error": "Content-Type must be application/json"},
+                              cors=False)
         length = int(self.headers.get("Content-Length", 0))
         try:
             body = json.loads(self.rfile.read(length) or b"{}")
@@ -4609,7 +4638,7 @@ async function renderPreview(){
  try{
   const h=await (await fetch('/health')).json();
   if(!h.ok){box.innerHTML='🔒 '+(h.hint||'no folder chosen yet');info.textContent='';return;}
-  const t=await (await fetch('/directory_tree?path=.&max_entries=500&max_depth=6')).json();
+  const t=await (await fetch('/api/preview')).json();
   if(!t.ok&&t.error&&!t.entries){box.innerHTML='🔒 '+esc(t.error);info.textContent='';return;}
   let lines=[],count=0;
   function walk(node,depth){
