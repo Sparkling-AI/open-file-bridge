@@ -51,7 +51,7 @@ UNIFIED_DESC = (
 SKILL_DIR = "skill/open-file-bridge"
 # keep in sync with VERSION/SKILL_VERSION in src/file_bridge.py and the
 # skill folder's CHANGELOG.md
-SKILL_VERSION = "2.5"
+SKILL_VERSION = "2.7"
 REPO = Path(__file__).resolve().parent.parent
 
 

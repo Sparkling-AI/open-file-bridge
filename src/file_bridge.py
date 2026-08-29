@@ -52,8 +52,8 @@ MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
-VERSION = "2.6"
-SKILL_VERSION = "2.6"   # keep in sync with skill/open-file-bridge/SKILL.md
+VERSION = "2.7"
+SKILL_VERSION = "2.7"   # keep in sync with skill/open-file-bridge/SKILL.md
 
 
 # ------------------------------------------- risk classes (P3, openworker risk.py)
@@ -116,6 +116,10 @@ ENDPOINT_RISK = {
     "/trash/list": RiskClass.READ,
     # desktop interaction — consent-gated (allow_reveal)
     "/reveal": RiskClass.UI,
+    # desktop interaction via user click: minting is authed (model), the
+    # click on /click/<nonce> is itself the consent (picker-button stance)
+    "/link": RiskClass.READ,           # resolves a path, mints nonces only
+    "/click": RiskClass.UI,
     # workspace mutation — confirm/snapshot/rate pipeline
     "/write": RiskClass.WRITE_LOCAL,
     "/write_b64": RiskClass.WRITE_LOCAL,
@@ -1145,6 +1149,112 @@ def confirmation_consume(tok: str, params: dict) -> tuple[bool, str]:
             return False, ("request parameters do not match the original request "
                            "for this token (token consumed — request a new one)")
         return True, ""
+
+
+# ---- outcome links (v2.7): user-clickable open/reveal nonces ----
+# POST /link (token-authed, model-initiated) mints an open+reveal nonce PAIR
+# for one path; the model embeds /click/<nonce> URLs in its chat answer.
+# Unlike confirmation tokens these are MULTI-USE within the TTL: a chat link
+# must survive being clicked again minutes later. The nonce (128-bit random)
+# is the whole capability — one path, one desktop action, no file content
+# ever leaves through it — so /click needs no bridge token: a browser
+# top-level navigation cannot send headers anyway.
+
+LINK_TTL_SECONDS = int(os.environ.get("FILE_BRIDGE_LINK_TTL", "3600"))
+_CLICK_FILE = STATE_DIR / "click-links.json"
+_CLICK_LOCK = threading.Lock()
+
+
+def _click_load() -> dict:
+    try:
+        data = json.loads(_CLICK_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+    now = time.time()
+    return {tok: det for tok, det in data.items()
+            if isinstance(det, dict) and float(det.get("expiry", 0)) > now}
+
+
+def _click_save(data: dict):
+    tmp = _CLICK_FILE.with_suffix(".tmp")
+    tmp.write_text(json.dumps(data), encoding="utf-8")
+    _restrict_to_user(tmp, is_dir=False)
+    os.replace(tmp, _CLICK_FILE)
+
+
+def click_link_issue(rel: str) -> dict:
+    """Mint the nonce pair for one path. Returns {"open","reveal","ttl"}."""
+    with _CLICK_LOCK:
+        allc = _click_load()
+        tok_open = _secrets.token_hex(16)   # 32 hex chars = 128 bits
+        tok_reveal = _secrets.token_hex(16)
+        exp = time.time() + LINK_TTL_SECONDS
+        # store the path EXACTLY as minted and re-resolve at click time:
+        # roots/ignore patterns may change between mint and click
+        allc[tok_open] = {"kind": "open", "path": rel, "expiry": exp,
+                          "sibling": tok_reveal}
+        allc[tok_reveal] = {"kind": "reveal", "path": rel, "expiry": exp,
+                            "sibling": tok_open}
+        _click_save(allc)
+    return {"open": tok_open, "reveal": tok_reveal, "ttl": LINK_TTL_SECONDS}
+
+
+def click_link_find(tok: str) -> dict | None:
+    with _CLICK_LOCK:
+        allc = _click_load()          # load sweeps expired entries
+        det = allc.get(tok)
+        if det is None:
+            _click_save(allc)         # persist the sweep
+        return det
+
+
+def _link_addr(path_str: str) -> str | None:
+    """Normalize a path for link MINTING to a form resolve_guarded accepts.
+    Write responses carry the ABSOLUTE written path (and models echo it
+    back into /link), but resolve_any refuses absolute input — so map an
+    absolute path inside any enabled root to '<root-id>/rel' (bare rel for
+    the default root). Relative input passes through unchanged."""
+    s = str(path_str or "").strip()
+    if not (s.startswith("/") or (len(s) > 1 and s[1] == ":")):
+        return s or None
+    try:
+        p = Path(s).resolve()
+        ros = enabled_roots()
+        for r in ros:
+            root = Path(r["path"]).resolve()
+            if os.path.commonpath([str(root), str(p)]) == str(root):
+                rel = p.relative_to(root).as_posix()
+                if rel == ".":
+                    return None
+                return rel if r["id"] == ros[0]["id"] else f"{r['id']}/{rel}"
+    except Exception:
+        return None
+    return None
+
+
+def _attach_links(resp: dict, path_str: str) -> dict:
+    """Enrich a successful write response with user-clickable outcome
+    links. Minting here instead of relying on a model-initiated /link
+    call is deliberate: real-chat testing (2026-08-29, weak model) showed
+    models echo response fields faithfully (the verify rule) but skip
+    optional extra calls — same lesson as ignore-enforcement living in
+    resolve_guarded: guarantees belong in the bridge, not model goodwill.
+    Best-effort: never fails a write."""
+    addr = _link_addr(path_str)
+    if not addr:
+        return resp
+    try:
+        pair = click_link_issue(addr)
+        base = f"http://127.0.0.1:{PORT}/click"
+        resp["links"] = {
+            "open_url": f"{base}/{pair['open']}",
+            "reveal_url": f"{base}/{pair['reveal']}",
+            "ttl": pair["ttl"],
+            "say": "in your ANSWER, beside the file name: "
+                   "[📄 Open](open_url) · [📂 Show in folder](reveal_url)"}
+    except Exception:
+        pass
+    return resp
 
 
 
@@ -3064,6 +3174,112 @@ def resolve_guarded(rel: str, *, for_write: bool = False):
     return p, root, cfg
 
 
+# ---- desktop launching (shared by /reveal and /click) ----
+
+def _file_manager_name() -> str:
+    """Native word for the click-response page. Chat-side labels stay
+    OS-neutral ("Show in folder"); only this server-rendered page, which
+    already knows sys.platform, uses the exact word."""
+    if _IS_WINDOWS:
+        return "Explorer"
+    if sys.platform == "darwin":
+        return "Finder"
+    return "Files"
+
+
+def _launch_external(kind: str, p: Path) -> tuple[bool, str]:
+    """Open `p` on the user's desktop. kind: 'open' = default application,
+    'reveal' = file manager with the entry selected. Returns (ok, what-ran).
+    FILE_BRIDGE_LAUNCHER overrides the built-in dispatch — custom file
+    managers, and the e2e suite (invoked as `LAUNCHER <kind> <path>`)."""
+    custom = os.environ.get("FILE_BRIDGE_LAUNCHER")
+    if custom:
+        r = subprocess.run([custom, kind, str(p)], capture_output=True)
+        return r.returncode == 0, f"{custom} {kind}"
+    if _IS_WINDOWS:
+        if kind == "open":
+            os.startfile(str(p))          # fire-and-forget, no rc available
+            return True, "startfile"
+        r = subprocess.run(["explorer", "/select,", str(p)], capture_output=True)
+        return r.returncode == 0, "explorer /select,"
+    if sys.platform == "darwin":
+        argv = ["open", str(p)] if kind == "open" else ["open", "-R", str(p)]
+        r = subprocess.run(argv, capture_output=True)
+        return r.returncode == 0, " ".join(argv[:2])
+    # Linux/BSD: reveal via the freedesktop FileManager1 interface when
+    # available (selects the entry in Nautilus/Dolphin/Nemo/Thunar); fall
+    # back to opening the parent folder without selection.
+    if kind == "reveal":
+        if shutil.which("dbus-send"):
+            r = subprocess.run(
+                ["dbus-send", "--print-reply",
+                 "--dest=org.freedesktop.FileManager1",
+                 "/org/freedesktop/FileManager1",
+                 "org.freedesktop.FileManager1.ShowItems",
+                 f"array:string:file://{p}", "string:"],
+                capture_output=True)
+            if r.returncode == 0:
+                return True, "FileManager1.ShowItems"
+    r = subprocess.run(["xdg-open", str(p if kind == "open" else p.parent)],
+                       capture_output=True)
+    return r.returncode == 0, "xdg-open"
+
+
+# ---- /click response page (v2.7) ----
+
+_CLICK_CSS = """
+  :root { color-scheme: light dark; }
+  body { margin: 0; min-height: 100vh; display: grid; place-items: center;
+         font: 15px/1.5 -apple-system, "Segoe UI", system-ui, sans-serif;
+         background: #f2f3f5; color: #1c1e21; }
+  @media (prefers-color-scheme: dark) {
+    body { background: #15171a; color: #e6e8ea; }
+    main { background: #1f2226 !important; }
+    .path { color: #9aa0a6 !important; }
+    .btn { background: #2a2e33 !important; color: #e6e8ea !important; }
+  }
+  main { background: #fff; border-radius: 14px; padding: 28px 32px;
+         max-width: 480px; margin: 24px; box-shadow: 0 8px 28px rgba(0,0,0,.12); }
+  .icon { font-size: 34px; }
+  h1 { font-size: 19px; margin: 10px 0 4px; }
+  code { font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px;
+         background: rgba(127,127,127,.14); padding: 2px 6px; border-radius: 6px;
+         word-break: break-all; }
+  .path { color: #66707a; font-size: 12.5px; margin: 10px 0 0;
+          word-break: break-all; }
+  .btn { display: inline-block; margin-top: 18px; padding: 8px 16px;
+         border-radius: 9px; background: #e8eaed; color: #1c1e21;
+         text-decoration: none; font-size: 14px; }
+  .btn:hover { filter: brightness(.95); }
+  .note { color: #66707a; font-size: 13px; margin: 14px 0 0; }
+"""
+
+
+def _click_page(icon: str, headline: str, *, name: str | None = None,
+                path: str | None = None, sibling: tuple[str, str] | None = None,
+                note: str | None = None) -> str:
+    """Tiny standalone card for the click flow. `sibling` is
+    (nonce, label) for the companion action minted with this link."""
+    import html as _h
+    parts = ['<!doctype html><html><head><meta charset="utf-8">',
+             '<meta name="viewport" content="width=device-width,initial-scale=1">',
+             '<title>Open File Bridge</title>'
+             f'<style>{_CLICK_CSS}</style></head>',
+             '<body><main>', f'<div class="icon">{icon}</div>',
+             f'<h1>{_h.escape(headline)}</h1>']
+    if name:
+        parts.append(f'<p><code>{_h.escape(name)}</code></p>')
+    if path:
+        parts.append(f'<p class="path">{_h.escape(path)}</p>')
+    if sibling:
+        parts.append(f'<a class="btn" href="/click/{sibling[0]}">'
+                     f'{_h.escape(sibling[1])}</a>')
+    if note:
+        parts.append(f'<p class="note">{_h.escape(note)}</p>')
+    parts.append('</main></body></html>')
+    return "".join(parts)
+
+
 def _legacy_root() -> Path | None:
     ros = enabled_roots()
     return Path(ros[0]["path"]) if ros else None
@@ -3110,17 +3326,45 @@ class Handler(http.server.BaseHTTPRequestHandler):
         # mismatched/foreign origins get NO CORS headers — the browser
         # refuses to expose the response even before our 403 body.
 
-    def _json(self, code, obj, cors=True):
-        body = json.dumps(obj).encode()
+    def _audit_flush(self, status: int, size: int):
+        """Emit the pending audit row (if any) — shared by _json/_page."""
         if getattr(self, "_audit_ep", None):
             audit_log(self._audit_ep, method=self.command,
                       path=getattr(self, "_audit_path", None),
-                      args=getattr(self, "_audit_args", None), status=code,
-                      size=len(body), risk=self._risk())
+                      args=getattr(self, "_audit_args", None), status=status,
+                      size=size, risk=self._risk())
+
+    def _json(self, code, obj, cors=True):
+        # outcome links ride along on every successful write response that
+        # names the produced/edited file (models echo response fields, so
+        # the links reach chat answers without an extra model call)
+        if (code == 200 and self.command == "POST" and isinstance(obj, dict)
+                and ENDPOINT_RISK.get(urlparse(self.path).path,
+                                      RiskClass.READ) == RiskClass.WRITE_LOCAL):
+            rel = obj.get("written") or \
+                (obj.get("edited") and obj.get("path")) or None
+            if rel:
+                _attach_links(obj, str(rel))
+        body = json.dumps(obj).encode()
+        self._audit_flush(code, len(body))
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         if cors:
             self._add_matching_cors()
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _page(self, code, body_html: str):
+        """Serve a small HTML page (click-flow responses). Browser-facing:
+        never cached, never CORS-echoed — /click is a top-level navigation,
+        not a fetch the page script could read."""
+        body = body_html.encode()
+        self._audit_flush(code, len(body))
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Referrer-Policy", "no-referrer")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -3135,7 +3379,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
         """Declared risk class for this request's endpoint (P3, openworker
         risk.py pattern). Unknown paths report 'read' — the security gate
         has already run by the time this is consulted."""
-        return ENDPOINT_RISK.get(urlparse(self.path).path, RiskClass.READ)
+        path = urlparse(self.path).path
+        if path.startswith("/click/"):
+            path = "/click"            # strip the nonce — class is per-route
+        return ENDPOINT_RISK.get(path, RiskClass.READ)
 
     def do_OPTIONS(self):
         self.send_response(204)
@@ -3246,6 +3493,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
+
+        # ---- outcome links: /click/<nonce> (v2.7) ----
+        # Minted by POST /link (token-authed, model-initiated). The CLICK
+        # is user-initiated consent — same stance as the picker's own
+        # buttons — so no bridge token here: the 128-bit nonce IS the
+        # capability (one path, one desktop action, TTL-bounded). Served
+        # BEFORE check_request on purpose: a browser top-level navigation
+        # cannot carry custom headers, and these pages disclose no file
+        # content.
+        if u.path.startswith("/click/"):
+            return self._do_click(u.path[len("/click/"):])
 
         # ---- security gate: everything below serves files ----
         ok, status, reason = check_request(self.headers)
@@ -3666,17 +3924,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 p, root, cfg = resolve_guarded(unquote(q.get("path", "")))
                 if not p.exists():
                     return self._json(404, {"error": f"no such file: {q.get('path')}"})
-                import subprocess as _sp
-                if _IS_WINDOWS:
-                    r = _sp.run(["explorer", "/select,", str(p)], capture_output=True)
-                elif sys.platform == "darwin":
-                    r = _sp.run(["open", "-R", str(p)], capture_output=True)
-                else:
-                    r = _sp.run(["xdg-open", str(p.parent)], capture_output=True)
-                if r.returncode != 0:
-                    return self._json(500, {"error": "file manager failed to open "
-                                                     f"(rc={r.returncode})"})
+                ok, what = _launch_external("reveal", p)
+                if not ok:
+                    return self._json(500, {"error": f"file manager failed to open "
+                                                     f"({what})"})
                 return self._json(200, {"ok": True, "revealed": str(p),
+                                        "via": what,
                                         "hint": "file manager opened on the user's "
                                                 "screen"})
 
@@ -3743,6 +3996,38 @@ class Handler(http.server.BaseHTTPRequestHandler):
             self._audit(u.path, path=unquote(str(body.get("path", ""))) or None,
                         args={k: body[k] for k in body
                               if k not in ("path", "content", "b64")} or None)
+            if u.path == "/link":
+                # mint the user-clickable open/reveal pair for one path
+                # (v2.7 outcome links). Token-authed like every file
+                # endpoint: minting is model-initiated; the desktop action
+                # happens only when the USER clicks the /click/<nonce> URL
+                # in the chat answer — the click is the consent. Accepts
+                # the ABSOLUTE "written" path echoed from write responses
+                # (normalized to a root-addressed rel) or a plain rel.
+                raw = unquote(str(body.get("path", "")))
+                addr = _link_addr(raw)
+                if not addr:
+                    return self._json(400, {"error": "path is outside every "
+                                                    "shared root (or is a root "
+                                                    "itself)"})
+                p, _root, _cfg = resolve_guarded(addr)
+                if not p.exists():
+                    return self._json(404, {"error": f"no such file: {raw}",
+                                            "hint": "mint outcome links AFTER "
+                                                    "the file exists"})
+                pair = click_link_issue(addr)
+                base = f"http://127.0.0.1:{PORT}/click"
+                return self._json(200, {
+                    "path": addr, "ttl": pair["ttl"],
+                    "open_url": f"{base}/{pair['open']}",
+                    "reveal_url": f"{base}/{pair['reveal']}",
+                    "manager": _file_manager_name(),
+                    "usage": "re-minting an expired outcome link (write "
+                             "responses already carry links). Put both in "
+                             "your answer beside the name: 📄 Open + "
+                             "📂 Show in folder (neutral words — the page "
+                             "names the real file manager). Keep plain code "
+                             "spans for passing mentions."})
             if u.path == "/write":
                 p, root, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
                 content = body.get("content", "")
@@ -4455,6 +4740,72 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(500, {"error": str(e)})
         return self._json(404, {"error": "unknown endpoint"})
 
+    # ---- /click/<nonce>: user-clicked outcome link (v2.7) ----
+
+    def _do_click(self, tok: str):
+        self._audit("/click")
+        tok = tok.strip("/")
+        if not re.fullmatch(r"[0-9a-f]{8,64}", tok):
+            return self._page(404, _click_page(
+                "🤷", "Link not recognized",
+                note="This is not a valid Open File Bridge link. "
+                     "Ask in chat for a fresh one."))
+        # CSRF hardening: a cross-site page that somehow learned a nonce
+        # must not be able to fire it via fetch/img. Top-level navigations
+        # from the chat answer arrive as none/same-site; absent header
+        # (older browsers) stays allowed.
+        site = (self.headers.get("Sec-Fetch-Site") or "").strip()
+        if site == "cross-site":
+            return self._page(403, _click_page(
+                "🛑", "Opened from another website",
+                note="Cross-site requests are refused. This link works when "
+                     "the user clicks it in the chat answer."))
+        rec = click_link_find(tok)
+        if rec is None:
+            return self._page(410, _click_page(
+                "⏳", "Link expired",
+                note="Outcome links live about an hour. Ask in chat and the "
+                     "assistant can issue a fresh one."))
+        if security_mode() == "UNLOCKED":
+            return self._page(503, _click_page(
+                "🔒", "Bridge is unlocked",
+                note="Open the Open File Bridge settings page and set the "
+                     "allowed Open WebUI origin before using chat links."))
+        try:
+            p, _root, _cfg = resolve_guarded(rec["path"])
+        except ExcludedPath as e:
+            return self._page(404, _click_page(
+                "🚫", "No longer shared", name=rec["path"],
+                note=f"{e} — ignore patterns are editable in the settings page."))
+        except (PermissionError, ValueError) as e:
+            return self._page(400, _click_page(
+                "🚫", "Path not accessible", name=rec["path"], note=str(e)))
+        if not p.exists():
+            return self._page(404, _click_page(
+                "❓", "No longer there", name=rec["path"],
+                note="The file disappeared from the shared folder after "
+                     "this link was created."))
+        try:
+            ok, what = _launch_external(rec["kind"], p)
+        except Exception as e:          # missing launcher binary etc. — a
+            ok, what = False, f"{type(e).__name__}: {e}"   # page, not a crash
+        if not ok:
+            return self._page(500, _click_page(
+                "⚠️", "Could not open it", name=rec["path"],
+                note=f"launcher failed ({what}) — try opening the file "
+                     "directly, or ask in chat."))
+        manager = _file_manager_name()
+        if rec["kind"] == "open":
+            sib = (rec.get("sibling") or "", f"📂 Show in {manager}")
+            return self._page(200, _click_page(
+                "📄", "Opened", name=p.name, path=str(p), sibling=sib,
+                note="Opened with the default app. You can close this tab."))
+        sib = (rec.get("sibling") or "", "📄 Open with default app")
+        return self._page(200, _click_page(
+            "📂", f"Shown in {manager}", name=p.name, path=str(p), sibling=sib,
+            note=f"The {manager} window is on your screen. "
+                 "You can close this tab."))
+
     def _is_loopback(self):
         try:
             ip = self.client_address[0]
@@ -4603,13 +4954,17 @@ in <b>one folder you choose</b> on this computer. Nothing else is exposed.</p>
 file endpoints stay disabled):</p>
 <input id="origin" placeholder="http://owui.yourcompany.com:8080" value="__ORIGIN__">
 <button onclick="setOrigin()">Lock to this origin</button>
-<p class="hint">Optional extra: org-wide token (Tier&nbsp;2) — matching requests must also
-send it in an <code>X-Bridge-Token</code> header. Org flow (recommended): your OWUI admin
-embeds a token in the public skill with <code>setup_owui.py --bridge-token</code>; paste
-that token here so your bridge accepts exactly your organisation's requests. Or generate
-a random one and give it to your admin to embed.</p>
+<p class="hint">Optional extra (Tier&nbsp;2): matching requests must also send this token
+in an <code>X-Bridge-Token</code> header. <b>Private token (recommended for
+individuals):</b> click Generate below and keep it to yourself — then tell the model
+your token once in chat (or embed it in your own private copy of the skill); nobody
+else ever sees it. <b>Org token:</b> your OWUI admin embeds one shared token in the
+public skill with <code>setup_owui.py --bridge-token</code>; paste THAT exact token
+here. Note: everyone in the org can read an org token — it is a company-boundary
+credential (guards against local programs &amp; other websites), not a secret from
+colleagues. Prefer per-user private tokens when you can.</p>
 <div class="btnrow">
-<input id="token" placeholder="paste the org token from your OWUI admin" style="flex:1" autocomplete="off">
+<input id="token" placeholder="paste your private token, or the org token from your OWUI admin" style="flex:1" autocomplete="off">
 <button onclick="setToken()" class="small" style="white-space:nowrap">Set token</button>
 </div>
 <button onclick="genToken()">Generate random token</button>

@@ -43,6 +43,24 @@ python3 scripts/setup_owui.py \
 
 Creates: public Skill `open-file-bridge` + model preset `local-files-assistant`.
 
+**Tier-2 token (optional, recommended):** decide before staging —
+`--bridge-token <secret>` embeds one shared token in the public skill:
+
+- **Prefer per-user private tokens** (stage WITHOUT `--bridge-token`): each
+  user clicks *Generate random token* on their own bridge (settings page →
+  🔒 Security) and tells the model the token once in chat — the skill (2.7+)
+  honors a user-provided token for the session — or embeds it in a private
+  copy of the skill. Nothing is shared between users; this is the strongest
+  option and the one to offer by default.
+- **Org-wide token** (stage WITH `--bridge-token`): every user pastes the
+  same token into their bridge. Zero per-user setup, but everyone in the
+  org can read it from the skill body — it is a company-boundary credential
+  (stops local programs and other websites from using the bridge; the
+  origin lock already stops other sites from *reading* responses), not a
+  secret from colleagues. Rotate by staging a new token and having users
+  re-paste. Avoid if your OWUI has guest/external chat accounts — they
+  would see the token too.
+
 **Skill variants (2.3+).** The repo ships two skill bodies; install one
 or both and customize later:
 
@@ -99,25 +117,24 @@ Per-OS notes for your rollout email:
 
 ## Hardening for production
 
-The demo config allows any website to call the bridge (`Access-Control-Allow-Origin: *`).
-Before wide rollout, lock it in `src/file_bridge.py`:
+Security is configured per user on the app's settings page
+(`http://127.0.0.1:8765`) — nothing is hardcoded in `src/file_bridge.py`:
 
-```python
-OWUI_ORIGIN = "https://owui.yourorg.com"   # your instance's origin
-CORS_HEADERS = [
-    ("Access-Control-Allow-Origin", OWUI_ORIGIN),
-    ...
-]
-```
-
-Then any *other* website's JS is refused by the browser, while your OWUI
-instance works unchanged. (The bridge still binds to 127.0.0.1 only, so even a
-misconfigured CORS can only ever be reached from the user's own machine.)
-
-Further options if you need them:
-- Add a shared secret: OWUI skill sends `X-Bridge-Key` header; bridge validates.
-- Read-only mode: remove the `/write` handler.
-- Audit log: append each request to the state dir (`~/Library/Application Support/open-file-bridge/audit.log`).
+- **Origin lock (tier 1, required).** 🔒 Security → paste your OWUI origin
+  (e.g. `https://owui.yourorg.com`). Until it is set, file endpoints stay
+  hard-disabled (503). Any other website's requests are refused, and the
+  bridge binds to `127.0.0.1` only, so even a misconfigured origin can only
+  ever be reached from the user's own machine.
+- **Token (tier 2, recommended).** See the decision in *One-time setup* —
+  per-user private tokens (strongest) or one org-wide token embedded in the
+  skill. In OWUI builds that sandbox the code interpreter (`Origin: null`),
+  the token tier is what lets the bridge grant your sandboxed chats CORS —
+  token-only or token+origin modes both work; origin-only does not
+  (docs/OWUI-COMPAT.md).
+- **Read-only mode.** `POST /api/root {"readonly": true}` per machine (or
+  `FILE_BRIDGE_READONLY=1` env) makes every write endpoint refuse.
+- **Audit log.** Every request is appended to `audit.log` in the state
+  folder with endpoint, path, args (secrets scrubbed) and status.
 
 ## OCR engine & language packs (tesseract)
 
