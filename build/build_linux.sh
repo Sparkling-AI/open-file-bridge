@@ -29,6 +29,18 @@ fi
 echo
 echo "Built: $(ls -lh dist/OpenFileBridge | awk '{print $5, $9}')"
 echo "Smoke test:"
-./dist/OpenFileBridge --smoke-test 2>/dev/null || \
-  (./dist/OpenFileBridge /tmp &
-   sleep 1; curl -s http://127.0.0.1:8765/health && kill %1)
+# The binary takes a folder arg only (no flags): launch it against a temp
+# dir, poll /health, then stop it. tessdata/ + wheels/ must sit next to the
+# exe for the full bundled layout (see BUILDING.md).
+SMOKE_DIR=$(mktemp -d)
+./dist/OpenFileBridge "$SMOKE_DIR" &
+SMOKE_PID=$!
+for _ in $(seq 1 20); do
+  curl -s -m 1 http://127.0.0.1:8765/health >/dev/null 2>&1 && break
+  sleep 0.5
+done
+curl -s http://127.0.0.1:8765/health && echo
+kill "$SMOKE_PID" 2>/dev/null || true
+# graceful shutdown takes a moment — wait it out so the port is free after
+wait "$SMOKE_PID" 2>/dev/null || true
+rm -rf "$SMOKE_DIR"
