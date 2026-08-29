@@ -51,7 +51,7 @@ UNIFIED_DESC = (
 SKILL_DIR = "skill/open-file-bridge"
 # keep in sync with VERSION/SKILL_VERSION in src/file_bridge.py and the
 # skill folder's CHANGELOG.md
-SKILL_VERSION = "2.3"
+SKILL_VERSION = "2.4"
 REPO = Path(__file__).resolve().parent.parent
 
 
@@ -136,8 +136,11 @@ def load_skill_md(fname, bridge_token):
         skill_md = skill_md.split("---", 2)[2].lstrip("\n")
     if bridge_token:
         inject = (
-            '# Org token (Tier 2): every bridge call MUST send this header.\n'
-            'BRIDGE_HEADERS = {"X-Bridge-Token": "%s"}\n' % bridge_token
+            '# Org token (Tier 2): every bridge call — GET included — MUST\n'
+            '# send these headers. Use this BRIDGE_HEADERS verbatim in the\n'
+            '# bootstrap helpers; do NOT redefine it.\n'
+            'BRIDGE_HEADERS = {"Content-Type": "application/json",\n'
+            '                  "X-Bridge-Token": "%s"}\n' % bridge_token
         )
         # SKILL.md and SKILL-STRICT.md use different bootstrap headings —
         # try both anchors before falling back to a prepend

@@ -1,6 +1,28 @@
 # Changelog — Local File Bridge skill
 
 Notable, user-facing changes to the OWUI skill
+
+## 2.4 — 2026-08-29 (staged with bridge 2.4)
+
+Cut from a real trace: "list files" cost 4 code executions (version
+check, health check, a tokenless GET that failed opaquely, and a blind
+retry). Now two calls — `/health` then `/list`.
+
+- `bridge_get` now sends `BRIDGE_HEADERS` (the 2.3 example omitted them
+  on GETs — the direct cause of tokenless calls failing with an opaque
+  CORS AbortError).
+- The separate `/version` preflight step is gone: `/health` already
+  returns `version`; the skill says so and tells models to check it
+  there once per session.
+- Injected org-token block (setup_owui.py --bridge-token) now includes
+  Content-Type and says "use verbatim, do not redefine".
+- New rule: non-200 responses are JSON with `error` (+`hint`) — read
+  and adjust (e.g. 401 → add token header, retry once); never
+  blind-retry.
+- Bridge side of 2.4: null-origin (sandboxed Pyodide) 401s are now
+  CORS-readable so a missing token is a self-explanatory error instead
+  of `AbortError: Failed to fetch`.
+
 (`skill/open-file-bridge/SKILL.md`) that admins should announce when
 they re-run `scripts/setup_owui.py`. Bridge-side changes without a
 skill-visible surface stay in ROADMAP/DEVNOTES.

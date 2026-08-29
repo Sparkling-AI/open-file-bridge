@@ -117,14 +117,13 @@ check "null-origin preflight granted" 'Access-Control-Allow-Origin: null' "$HN"
 check "null-origin preflight hdrs"    'X-Bridge-Token'                    "$HN"
 GN=$(curl -s -D - -o /dev/null "$BRIDGE/read?path=notes.txt" -H "Origin: null" -H "X-Bridge-Token: $TOKEN")
 check "null-origin GET readable"      'Access-Control-Allow-Origin: null' "$GN"
-# ...but a null origin WITHOUT the token is still denied (and unreadable)
-GN2=$(curl -s -D - -o /dev/null "$BRIDGE/read?path=notes.txt" -H "Origin: null")
-check "null-origin no token denied"   '401' "$GN2"
-if echo "$GN2" | grep -q "Access-Control-Allow-Origin"; then
-  echo "  FAIL: null-origin denial leaked CORS headers"; fail=1
-else
-  echo "  PASS: null-origin denial has no CORS headers"
-fi
+# ...but a null origin WITHOUT the token is still denied — readable, so the
+# model can self-correct in one retry (error body carries no secrets)
+GN2=$(curl -s -D /tmp/gn2.h -o /tmp/gn2.b "$BRIDGE/read?path=notes.txt" -H "Origin: null")
+check "null-origin no token denied"   '401' "$(cat /tmp/gn2.h)"
+check "null-origin denial readable"   'Access-Control-Allow-Origin: null' "$(cat /tmp/gn2.h)"
+check "null-origin denial explains"   'missing or invalid bridge token' "$(cat /tmp/gn2.b)"
+rm -f /tmp/gn2.h /tmp/gn2.b
 
 # ---------- normal endpoints (with token) ----------
 T="-H X-Bridge-Token:$TOKEN"
