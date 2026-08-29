@@ -1238,8 +1238,7 @@ def zip_create(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
             else:
                 for f in _safe_walk(p)[0]:
                     frel = f.relative_to(r).as_posix()
-                    if _ignore_match(frel, f.is_dir(),
-                                     list(cfg.get("ignore", [])) + _global_ignore()):
+                    if _ignore_match(frel, f.is_dir(), _all_ignore(cfg)):
                         continue
                     if f.is_file():
                         data = f.read_bytes()
@@ -1309,8 +1308,7 @@ def zip_extract(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
                 target = safe_child(dp, nm)
                 # ignore rules apply to the EXTRACTED path too
                 frel = target.relative_to(droot).as_posix()
-                if _ignore_match(frel, False,
-                                 list(dcfg.get("ignore", [])) + _global_ignore()):
+                if _ignore_match(frel, False, _all_ignore(dcfg)):
                     continue
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as src, open(target, "wb") as dst:
@@ -1335,7 +1333,7 @@ def directory_tree(p: Path, cfg: dict, q: dict) -> dict:
     max_depth = min(int(q.get("max_depth", "6") or 6), 12)
     budget_s = min(max(float(q.get("budget_s", "1.5") or 1.5), 0.5), 10.0)
     t0 = time.time()
-    pats = list(cfg.get("ignore", [])) + _global_ignore()
+    pats = _all_ignore(cfg)
     truncated = False
     count = 0
 
@@ -2528,7 +2526,7 @@ def _search(root: Path, cfg: dict, q: dict):
     ctx = min(int(q.get("context", "1") or 1), 5)
     max_matches = min(int(q.get("max", "50") or 50), 200)
     excl = [x for x in (q.get("exclude") or "").split(",") if x.strip()]
-    pats = list(cfg.get("ignore", [])) + _global_ignore() + excl
+    pats = _all_ignore(cfg) + excl
     matches, scanned = [], 0
     for f in _safe_walk(root)[0]:
         if len(matches) >= max_matches:
@@ -2851,9 +2849,13 @@ class ExcludedPath(Exception):
     (roadmap: 'excluded by settings'), writes are refused outright."""
     def __init__(self, pattern, rel):
         self.pattern, self.rel = pattern, rel
-        super().__init__(
-            f"'{rel}' is excluded by ignore settings (pattern: {pattern}); "
-            f"ask the user to adjust File Bridge settings if this is intended")
+        if pattern in DEFAULT_IGNORE:
+            msg = (f"'{rel}' is OS metadata junk (e.g. .DS_Store) — always "
+                   f"excluded by default, nothing to configure")
+        else:
+            msg = (f"'{rel}' is excluded by ignore settings (pattern: {pattern}); "
+                   f"ask the user to adjust File Bridge settings if this is intended")
+        super().__init__(msg)
 
 
 def roots_config() -> list:
@@ -2975,10 +2977,29 @@ def _global_ignore() -> list:
     return [str(x) for x in (_state_load().get("ignore_global") or [])]
 
 
+# Built-in ignore floor: Finder/Explorer metadata junk that real shared
+# folders accumulate on macOS/Windows (.DS_Store in EVERY folder Finder
+# touches, AppleDouble ._ files on non-HFS volumes, Thumbs.db/desktop.ini
+# from Explorer). Always active for every root, without configuration —
+# never listed, zipped, extracted, read or written. Users who truly need
+# one of these names should pick a different name for their real file.
+DEFAULT_IGNORE = [".DS_Store", "._*", "Thumbs.db", "desktop.ini"]
+
+
+def _all_ignore(cfg: dict) -> list:
+    """Full pattern set enforced by the bridge: per-root ignore +
+    built-in junk floor + user-global ignore. Every consumer of ignore
+    patterns composes through here so the floor cannot be bypassed."""
+    return list(cfg.get("ignore", [])) + DEFAULT_IGNORE + _global_ignore()
+
+
 def _ignore_match(rel: str, is_dir: bool, patterns: list):
     """gitignore-style subset: 'dir/' dir-only, '/x' anchored to root,
     '*' within/across segments, '#' comments. A path is excluded if it OR
-    ANY ancestor directory matches."""
+    ANY ancestor directory matches. A pattern containing '/' is matched
+    against the joined path; a bare name matches that name at ANY depth
+    (gitignore semantics — .DS_Store or .git/ must prune nested copies
+    too, not just top-level ones)."""
     import fnmatch
     parts = [x for x in rel.split("/") if x]
     cands = ["/".join(parts[:i + 1]) for i in range(len(parts))]
@@ -2994,8 +3015,14 @@ def _ignore_match(rel: str, is_dir: bool, patterns: list):
             p = p[1:]
         if not p:
             continue
-        for i, cand in enumerate(cands):
-            if i == len(cands) - 1 and dir_only and not is_dir:
+        if "/" in p:
+            tests = cands          # path-shaped: match joined path prefixes
+        elif anchored:
+            tests = parts[:1]      # '/x': root segment only
+        else:
+            tests = parts          # bare name: any segment, any depth
+        for i, cand in enumerate(tests):
+            if i == len(tests) - 1 and dir_only and not is_dir:
                 continue
             if fnmatch.fnmatch(cand, p):
                 return pat
@@ -3016,7 +3043,7 @@ def resolve_guarded(rel: str, *, for_write: bool = False):
         pass
     rel_in_root = p.relative_to(root).as_posix()
     if rel_in_root != ".":
-        pats = list(cfg.get("ignore", [])) + _global_ignore()
+        pats = _all_ignore(cfg)
         hit = _ignore_match(rel_in_root, p.is_dir(), pats)
         if hit:
             if for_write:
@@ -3225,7 +3252,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if not p.is_dir():
                     return self._json(404, {"error": f"not a directory: {q.get('path')}"})
                 entries = []
-                pats = list(cfg.get("ignore", [])) + _global_ignore()
+                pats = _all_ignore(cfg)
                 walked, truncated = _safe_walk(p)
                 for f in walked:
                     rel = f.relative_to(root).as_posix()

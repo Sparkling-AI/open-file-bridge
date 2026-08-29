@@ -113,6 +113,11 @@ recommended when copying non-trivial blocks.
    + /pdf_text + /ocr + future /search return 404-with-hint ("excluded by
    settings"), /write into ignored paths is refused. Enforced in the BRIDGE,
    surfaced in skill ("if excluded, tell the user to adjust settings").
+   Slash-free patterns match at ANY depth (true gitignore semantics —
+   `sub/.git/` is pruned by `.git/`, not just top-level). On top of both
+   lists sits a built-in, non-configurable junk floor (`DEFAULT_IGNORE`:
+   `.DS_Store`, `._*`, `Thumbs.db`, `desktop.ini`) — Finder/Explorer
+   metadata is never listed, zipped, extracted, read or written.
 ✅ **Bridge self-protection floor** (OpenWorker permissions.py L93-123):
    `~/.file-bridge.json`, token file, audit db, versions dir are NEVER
    writable via any endpoint, in any mode. Prevents "one approved write
