@@ -14,6 +14,7 @@ modes when the compatibility assumptions break.
 | Skills API (`/api/v1/skills/*`) | v1 REST surface | works on 0.11.1 (create, id access/update) |
 | Model preset with code_interpreter | `meta.capabilities` + `meta.defaultFeatureIds` | works on 0.11.1 — THE regression risk |
 | Browser fetch to `http://127.0.0.1:8765` | PNA behavior per browser | PNA itself is fine (bridge sends `Access-Control-Allow-Private-Network: true`); the CORS failure mode is the sandbox origin above, not PNA |
+| Images into MODEL input | does OWUI feed code/tool results back as images? | **NO on 0.11.1** — see "Vision input limitation" below |
 
 **Support policy: current + one minor** — we treat the latest OWUI 0.11.x
 and the 0.10.x line it descends from as supported; anything older or a
@@ -88,6 +89,30 @@ injects it per run.)
 
 Note this changed WITHIN the 0.11.x line (the two-switch preset above
 kept working) — exactly why the upgrade checklist now has an origin check.
+
+## Vision input limitation (images into the model's context)
+
+**Verified on 0.11.1 source (2026-08-29).** Code-interpreter output
+reaches the model as **text only**. In `Chat.svelte`, `image_url`
+content blocks are built exclusively from files the *user* attached to
+their message; `message.code_executions` are display-only (rendered as
+chips + modal via `CodeExecutions`/`CodeExecutionModal`, never copied
+into `message.files` or the request messages). The pyodide sandbox's one
+image convention is `print(f"data:image/png;base64,…")` (its matplotlib
+patch) — for SHOWING the user via markdown echo, not for model input.
+
+Consequences for the bridge:
+- `/image_b64` (data URLs) and `/pdf_text?mode=images` can display
+  images in chat, but a vision model cannot literally "see" local files
+  through them. The skill teaches: ask the user to ATTACH the image to
+  their message — that is the only input path vision models consume.
+- A server-side OWUI function could attach bridge images mid-chat, but
+  that routes file bytes through the server — rejected (violates the
+  zero-server-file-handling architecture).
+
+**Re-test on OWUI upgrade:** if a newer OWUI parses data URLs from code
+output into multimodal input (some agent frameworks do), `/image_b64`
+already emits the right format — one skill-text update would enable it.
 
 ## Skills API surface we rely on
 
