@@ -133,10 +133,15 @@ pyinstaller ... --collect-all pymupdf ...
 - Other platforms: bundle a tesseract build as `tesseract/bin/tesseract`
   next to the exe, or set `TESSERACT_CMD`, or rely on system PATH
   (Linux distro package is fine).
-- Extra languages: drop `.traineddata` files from
-  https://github.com/tesseract-ocr/tessdata_fast into `tessdata/`.
-  Users select them at runtime in the settings page — no rebuild needed.
-  (On Windows: `%LOCALAPPDATA%\Programs\Open File Bridge\tessdata\`)
+- Extra languages WITHOUT touching the app package: drop `.traineddata`
+  files from https://github.com/tesseract-ocr/tessdata_fast into the
+  **user drop-in dir** — `~/Library/Application Support/file-bridge/tessdata/`
+  (macOS), `~/.local/state/file-bridge/tessdata/` (Linux),
+  `%APPDATA%\file-bridge\tessdata\` (Windows, or
+  `%LOCALAPPDATA%\Programs\Open File Bridge\tessdata\` next to the exe).
+  The bridge merges them with the bundled set at startup (restart to
+  pick up new files); the settings page shows the exact path. Package
+  size stays unchanged (~1-4 MB per extra language lives in user space).
 
 **Frozen-build notes (verified on Linux with PyInstaller 6.22):**
 
