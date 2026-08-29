@@ -132,10 +132,12 @@ Scope control made real for users and respected by the model.
   hidden at any depth — never listed, zipped, extracted, read or written —
   with zero configuration. Bare ignore names (`.git/`, `secrets/`) now
   match at any depth, true gitignore semantics.
-- New "Ignore patterns" editor in the File Bridge settings page: global
+- New "Ignore patterns" editor in the Open File Bridge settings page: global
   gitignore-style patterns (`*.zip`, `.secrets`, …) saved without restart;
   the "What the AI can see" preview refreshes seconds later. Ignored means
   invisible AND unwritable.
 - When a read 404s or a write is refused with `excluded by ignore
   settings`, tell the user — patterns are editable in the bridge settings
   page. Never retry or route around it.
+- Settings page is branded "Open File Bridge" (title, header, macOS Dock
+  display name) with the real app icon as favicon + header logo.
