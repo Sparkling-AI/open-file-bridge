@@ -624,3 +624,46 @@ Gotcha that bit once: PICKER_HTML is a NON-raw triple-quoted string —
 every script on the page. Escape as `split('\\n')` (same as the existing
 stop-bridge confirm). Caught by the headless-shell console log, not by
 curl tests — render checks earn their keep.
+
+## 2.6.3 — clicking the app icon opens the settings page (user request)
+
+The 2.4 Dock icon was mute: clicking it did nothing, because a
+windowed PyInstaller binary parked in `[NSApp run]` has NO delegate, and
+the "reopen" Apple event LaunchServices delivers to an already-running
+bundle (`applicationShouldHandleReopen:hasVisibleWindows:`) is simply
+dropped. Three surfaces now open `http://127.0.0.1:8765`:
+
+1. macOS Dock/Finder click on the RUNNING app — CocoaDock builds a
+   delegate from raw ctypes: `objc_allocateClassPair(NSObject, …)` →
+   `class_addMethod(sel, IMP, "B@:@B")` → `objc_registerClassPair` →
+   alloc/init → `[NSApp setDelegate:]`. Pitfalls worth remembering:
+   the CFUNCTYPE trampoline must be kept alive on the instance (GC of
+   the IMP = call into freed memory), NSApplication does NOT retain its
+   delegate (hold the raw pointer; nothing ever releases it), and the
+   IMP executes ON the AppKit main thread — it must neither block nor
+   fork there, so it spawns a daemon Python thread and returns YES
+   immediately. A 2 s monotonic debounce makes a dock double-click open
+   one tab, not two.
+2. Second process (the Windows story — the exe has no tray, so clicking
+   its icon again IS a relaunch; macOS only reaches this from the CLI
+   binary): verify the port holder via token-free `/version` before
+   believing it, open the page, exit 0. The old behavior (error + exit
+   1) survived from the 2.6 double-start fix and had silently replaced
+   2.4's "opens the settings page" promise; a FOREIGN listener still
+   errors with the FILE_BRIDGE_PORT hint.
+3. Cold launch of the packaged app — always opens the page now, not
+   just first-run-with-no-folder. Gated to icon-style launches: a folder
+   ARGUMENT means scripted/CLI (skill, e2e, folder-pinning shortcuts),
+   and `FILE_BRIDGE_NO_UI=1` (now written by install_service.py into
+   the systemd unit, LaunchAgent plist and Startup .bat) keeps
+   login-autostarted services silent — otherwise RunAtLoad would pop a
+   browser tab at every login.
+
+Test-suite gotcha (bit once): stock macOS has no GNU `timeout`, so the
+new e2e second-instance check backgrounds the duplicate, polls
+`kill -0` for ≤20 s, then kills/collects the exit status — `timeout 20`
+ran as "command not found" on the first pass. e2e: 261 pass, 1 env-only
+failure (pymupdf absent from default python3, identical on master).
+Frozen .app rebuilt; smoke on macOS 26/arm64: cold-launch tab,
+`open dist/FileBridge.app` again → reopen tab, debounce holds, Quit
+clean. Windows reviewed-only, no box here (per-round norm).

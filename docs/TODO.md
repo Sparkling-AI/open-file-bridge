@@ -76,7 +76,11 @@ Bridge must be running during chats. Non-technical users will forget.
 - [ ] Linux: note in user guide about systemd --user unit
 - [ ] Tray icon / menu-bar indicator so users can see it's running (needs a
       GUI dep — currently avoided deliberately to stay stdlib-only; acceptable
-      cost when we accept a GUI toolkit, or use native notifications)
+      cost when we accept a GUI toolkit, or use native notifications).
+      2.6.3 partial: clicking the app icon now opens the settings page on
+      both platforms (macOS Dock-click reopen delegate; Windows relaunch
+      defers to the running bridge) — a tray would still help Windows
+      discoverability at a glance.
 
 ## 5. Write-safety guardrails
 

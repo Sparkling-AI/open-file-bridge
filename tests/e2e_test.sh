@@ -59,6 +59,21 @@ check() { # name, expected_substring, actual
   if echo "$3" | grep -q "$2"; then echo "  PASS: $1"; else echo "  FAIL: $1 — got: $3"; fail=1; fi
 }
 
+# clicking the app icon while the bridge runs (Windows exe = second process;
+# macOS reaches the same code from the CLI binary): the second copy must
+# recognize the live bridge via /version, NOT bind, say so, and exit 0.
+# FILE_BRIDGE_NO_UI=1 keeps the verification headless (no browser tab).
+# (No GNU `timeout` on stock macOS: background + bounded poll + kill.)
+DUP_OUT=$(mktemp); DUP_RC=0
+FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_NO_UI=1 \
+  $BRIDGE_CMD >"$DUP_OUT" 2>&1 &
+DUP=$!
+for _ in $(seq 1 40); do kill -0 $DUP 2>/dev/null || break; sleep 0.5; done
+if kill -0 $DUP 2>/dev/null; then kill $DUP 2>/dev/null; DUP_RC=99; else wait $DUP || DUP_RC=$?; fi
+check "second start defers to running bridge (exit 0)" \
+  "already running.*(exit $DUP_RC)" "$(cat "$DUP_OUT") (exit $DUP_RC)"
+rm -f "$DUP_OUT"
+
 # ---------- security: production-mode hard fail (both tiers off) ----------
 check "unlocked /read denied"    'bridge unlocked'   "$(curl -s "$BRIDGE/read?path=notes.txt")"
 check "unlocked /health works"   '"ok": *true'       "$(curl -s $BRIDGE/health)"

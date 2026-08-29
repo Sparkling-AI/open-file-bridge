@@ -62,6 +62,7 @@ ExecStart={' '.join(cmd)}
 Restart=on-failure
 RestartSec=3
 Environment=FILE_BRIDGE_NO_LOGFILE=1
+Environment=FILE_BRIDGE_NO_UI=1
 
 [Install]
 WantedBy=default.target
@@ -121,9 +122,10 @@ def mac_install(cmd: list) -> bool:
   <array>{escaped}</array>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
-  <key>EnvironmentVariables</key>
+    <key>EnvironmentVariables</key>
   <dict>
     <key>FILE_BRIDGE_NO_LOGFILE</key><string>1</string>
+    <key>FILE_BRIDGE_NO_UI</key><string>1</string>
   </dict>
   <key>StandardErrorPath</key>
   <string>{Path.home()}/Library/Logs/file-bridge.log</string>
@@ -177,7 +179,8 @@ def win_install(cmd: list) -> bool:
     bat = startup / "file-bridge.bat"
     bat.parent.mkdir(parents=True, exist_ok=True)
     joined = " ".join(f'"{c}"' for c in cmd)
-    bat.write_text(f"@echo off\r\n{joined}\r\n", encoding="ascii")
+    bat.write_text(f"@echo off\r\nset \"FILE_BRIDGE_NO_UI=1\"\r\n{joined}\r\n",
+                   encoding="ascii")
     print(f"startup script written: {bat} (Windows untested — user's final phase)")
     return True
 
