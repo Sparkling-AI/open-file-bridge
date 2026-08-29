@@ -117,7 +117,11 @@ recommended when copying non-trivial blocks.
    `sub/.git/` is pruned by `.git/`, not just top-level). On top of both
    lists sits a built-in, non-configurable junk floor (`DEFAULT_IGNORE`:
    `.DS_Store`, `._*`, `Thumbs.db`, `desktop.ini`) — Finder/Explorer
-   metadata is never listed, zipped, extracted, read or written.
+   metadata is never listed, zipped, extracted, read or written. Since 2.6
+   the global list is editable in the picker ("Ignore patterns" section,
+   gitignore-style textarea → `/api/root ignore_global`, preview refreshes
+   seconds later); read 404s and write refusals both point the model at
+   that page so blocked writes reach the user instead of being retried.
 ✅ **Bridge self-protection floor** (OpenWorker permissions.py L93-123):
    `~/.file-bridge.json`, token file, audit db, versions dir are NEVER
    writable via any endpoint, in any mode. Prevents "one approved write

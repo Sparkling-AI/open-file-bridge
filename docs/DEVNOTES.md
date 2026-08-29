@@ -599,3 +599,28 @@ as documented at depth. e2e: +10 checks (list/read/write/tree/zip/unzip
 junk exclusion, nested .git pruning) — 252 pass, 1 env-only failure
 (`img big auto-shrunk` needs pymupdf, absent from the current default
 python3; fails identically on unmodified master).
+
+## 2.6.2 — ignore-pattern editor in the picker + write-refusal guidance (user request)
+
+The engine had per-root + global ignore lists since P0b, but the ONLY way
+to set the global list was curl. New "🚫 Ignore patterns" section on the
+settings page (between security and OCR language): gitignore-style
+textarea seeded from state (`__IGNORE__`, `_hesc`-escaped — textarea
+content is user free text), Save → `POST /api/root {ignore_global}`,
+immediate `renderPreview()` for feedback, built-in junk floor listed as
+fixed non-editable text below. e2e covers the API, listing/write
+enforcement, and the page surface (editor present, patterns seeded,
+floor + "writes refused" hint rendered); vision-checked render (glm-4.6V)
+confirmed layout + preview hides pattern-matched files.
+
+Write-blocked-by-ignore now reaches the user: both ExcludedPath handler
+hints (GET 404 + POST) say "tell the user; ignore patterns are editable
+in the File Bridge settings page", and SKILL.md's editing section tells
+the model to relay instead of retrying or writing elsewhere (skill
+bumped to 2.6 with CHANGELOG entry; VERSION/SKILL_VERSION → 2.6).
+
+Gotcha that bit once: PICKER_HTML is a NON-raw triple-quoted string —
+`split('\n')` in page JS ships as a literal newline → SyntaxError kills
+every script on the page. Escape as `split('\\n')` (same as the existing
+stop-bridge confirm). Caught by the headless-shell console log, not by
+curl tests — render checks earn their keep.

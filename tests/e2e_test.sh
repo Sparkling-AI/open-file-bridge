@@ -268,6 +268,23 @@ check "read junk 404s" 'excluded by default' "$(curl -s "$BRIDGE/read?path=sub2/
 check "write junk refused" 'refused\|excluded' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":".DS_Store","content":"x"}')"
 # bare ignore names prune NESTED copies too (gitignore depth semantics)
 check "nested .git pruned" 'excluded' "$(curl -s "$BRIDGE/read?path=sub2/.git/config" $T)"
+# ---------- global ignore patterns: engine + picker editor (2.6) ----------
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"ignore_global":["*.zap"]}' >/dev/null
+echo "zap" > "$TESTDIR/arch.zap"
+check "state shows ignore_global" '"ignore_global": *\["\*.zap"\]' "$(curl -s $BRIDGE/state $T)"
+check "list omits global pattern" 'clean' "$(curl -s "$BRIDGE/list?path=." $T | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+bad=[e['path'] for e in d['entries'] if e['path'].endswith('.zap')]
+print('LEAKED:'+str(bad) if bad else 'clean')")"
+check "write global-ignored refused" 'excluded\|refused' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"new.zap","content":"x"}')"
+check "write refusal names the settings page" 'settings page' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"new.zap","content":"x"}')"
+PP=$(curl -s "$BRIDGE/" $T)
+check "picker has ignore editor" 'id="ignorepats"' "$PP"
+check "picker seeds saved patterns" '\*.zap' "$PP"
+check "picker shows junk floor" 'Thumbs' "$PP"
+check "picker warns writes refused" 'writes to them are refused' "$PP"
+curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"ignore_global":[]}' >/dev/null
 # self-protection: state dir never reachable even if a root were to overlap
 check "state file unreadable" 'escapes shared root\|never accessible' "$(curl -s "$BRIDGE/read?path=../../../.local/state/file-bridge/state.json" $T 2>/dev/null || echo unreachable)"
 # root-in-state rejected by set_roots
