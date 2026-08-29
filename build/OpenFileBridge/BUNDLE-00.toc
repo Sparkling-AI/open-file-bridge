@@ -1,0 +1,3 @@
+([('OpenFileBridge',
+   '/Users/dandanwei/Workspace/open-file-bridge/dist/OpenFileBridge',
+   'EXECUTABLE')],)
