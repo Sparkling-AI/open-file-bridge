@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#f59e0b"/>
+      <stop offset="1" stop-color="#ef4444"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="992" height="992" rx="228" fill="url(#bg)"/>
+
+  <!-- document with folded corner -->
+  <path d="M372 232 H612 L688 308 V660 Q688 696 652 696 H372 Q336 696 336 660 V268 Q336 232 372 232 Z"
+        fill="#ffffff"/>
+  <path d="M612 232 V280 Q612 308 640 308 H688 Z" fill="#d7e0ea"/>
+
+  <!-- text lines -->
+  <rect x="388" y="372" width="248" height="30" rx="15" fill="#94a3b8"/>
+  <rect x="388" y="436" width="248" height="30" rx="15" fill="#94a3b8"/>
+  <rect x="388" y="500" width="160" height="30" rx="15" fill="#94a3b8"/>
+
+  <!-- link badge -->
+  <circle cx="664" cy="660" r="150" fill="#7c3aed" stroke="#ffffff" stroke-width="16"/>
+  <g transform="translate(664,660) rotate(-45)">
+    <rect x="-64" y="-34" width="104" height="68" rx="34"
+          fill="none" stroke="#ffffff" stroke-width="26"/>
+    <rect x="-24" y="-34" width="104" height="68" rx="34"
+          fill="none" stroke="#ffffff" stroke-width="26"/>
+  </g>
+</svg>

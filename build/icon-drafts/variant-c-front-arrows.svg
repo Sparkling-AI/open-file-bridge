@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#1f73e6"/>
+      <stop offset="1" stop-color="#0aa894"/>
+    </linearGradient>
+    <linearGradient id="fd" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffd24a"/>
+      <stop offset="1" stop-color="#f5a01e"/>
+    </linearGradient>
+  </defs>
+
+  <rect x="16" y="16" width="992" height="992" rx="228" fill="url(#bg)"/>
+
+  <!-- max-size folder, softer corners -->
+  <path d="M180 356 Q180 300 236 300 H426 Q456 300 474 324 L498 356 H788 Q844 356 844 412 V774 Q844 830 788 830 H236 Q180 830 180 774 Z"
+        fill="url(#fd)"/>
+
+  <!-- thick separated arrows on the folder body -->
+  <g fill="none" stroke="#ffffff" stroke-width="66" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M512 550 V490"/>
+    <path d="M412 490 L512 400 L612 490"/>
+    <path d="M512 665 V700"/>
+    <path d="M412 700 L512 790 L612 700"/>
+  </g>
+</svg>

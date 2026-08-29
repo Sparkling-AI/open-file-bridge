@@ -1,0 +1,28 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="0.4" y2="1">
+      <stop offset="0" stop-color="#0b1220"/>
+      <stop offset="1" stop-color="#1e293b"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.32" r="0.6">
+      <stop offset="0" stop-color="#22d3ee" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#22d3ee" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+
+  <rect x="16" y="16" width="992" height="992" rx="228" fill="url(#bg)"/>
+  <rect x="16" y="16" width="992" height="992" rx="228" fill="url(#glow)"/>
+
+  <!-- prompt chevron -->
+  <path d="M320 388 L464 512 L320 636" fill="none" stroke="#4ade80"
+        stroke-width="62" stroke-linecap="round" stroke-linejoin="round"/>
+  <!-- cursor -->
+  <rect x="530" y="586" width="214" height="60" rx="30" fill="#22d3ee"/>
+
+  <!-- deck line: the bridge under the prompt -->
+  <path d="M300 788 H724" fill="none" stroke="#475569" stroke-width="24" stroke-linecap="round"/>
+
+  <!-- small sparkle -->
+  <path d="M768 216 Q 776 250 810 258 Q 776 266 768 300 Q 760 266 726 258 Q 760 250 768 216 Z"
+        fill="#38bdf8"/>
+</svg>
