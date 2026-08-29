@@ -20,7 +20,9 @@ State lives in a per-OS state dir (env FILE_BRIDGE_STATE_DIR overrides):
   Linux: ~/.local/state/open-file-bridge   macOS: ~/Library/Application Support/open-file-bridge
   Windows: %APPDATA%\\open-file-bridge     (pattern: OpenWorker coworker/secrets.py)
   state.json    — root, ocr_lang, allowed_origin, token hash (0600)
-  bridge-token  — plaintext token (0600, owner-only; never sent in responses)
+  bridge-token  — plaintext token (0600, owner-only; sent back ONLY to the
+                  loopback picker's explicit reveal action, never to
+                  remote/OWUI-origin requests)
 """
 import base64
 import binascii
@@ -315,7 +317,7 @@ def _hash_token(tok: str) -> str:
 
 def get_configured_token() -> str | None:
     """Plaintext token for internal checks only (env override > token file).
-    NEVER returned in any HTTP response."""
+    Returned over HTTP only by the loopback picker's reveal action."""
     env = os.environ.get("FILE_BRIDGE_TOKEN")
     if env:
         return env
@@ -3426,8 +3428,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         if u.path == "/api/preview":
             # LOCAL picker preview ("What the AI can see") — loopback-only
-            # and token-free: the owner UI never sees the token (it is only
-            # ever stored hashed), so the preview cannot send it. GET + no
+            # and token-free: the picker is the bootstrap UI (it is how you
+            # set the token in the first place), so it does not send the
+            # bridge token with its calls. GET + no
             # CORS headers ⇒ cross-origin pages can trigger it but never
             # read the response; locals can read the folder from disk
             # anyway. Same data as /directory_tree for the first root.
@@ -4871,7 +4874,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         tok_action = body.get("token")
         new_token = None
-        if isinstance(tok_action, dict):  # {"set": "..."} | {"clear": true} | {"generate": true}
+        if isinstance(tok_action, dict):  # {"set": "..."} | {"clear": true} | {"generate": true} | {"reveal": true}
             if tok_action.get("clear"):
                 set_token(None)
             elif tok_action.get("generate"):
@@ -4881,6 +4884,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(400, {"ok": False, "error": "token must be 8-256 chars"},
                                       cors=False)
                 new_token = str(tok_action["set"])  # show back once to the local admin
+            elif tok_action.get("reveal"):
+                # Picker "Show" button: return the STORED token to the local
+                # owner UI (owner decision 2026-08-30 — dots placeholder read
+                # as broken). Exposure analysis: loopback + POST + cors=False
+                # here, so other websites can fire it but never read the
+                # response; same-user processes read the 0600 token file
+                # anyway; the only widening is OTHER local OS users, who can
+                # already reconfigure this whole bridge via the same
+                # token-free loopback API — they gain secret disclosure, not
+                # new control. Audited below so reveals are traceable.
+                t = get_configured_token()
+                if not t:
+                    return self._json(400, {"ok": False, "error": "no token configured"},
+                                      cors=False)
+                new_token = t
+                # note the args key: anything under "token" would be scrubbed
+                # to [redacted] by _audit_scrub — "action" survives
+                self._audit("/api/root", args={"action": "token-reveal"})
         elif tok_action is None and "token" in body:
             set_token(None)
 
@@ -4964,7 +4985,8 @@ here. Note: everyone in the org can read an org token — it is a company-bounda
 credential (guards against local programs &amp; other websites), not a secret from
 colleagues. Prefer per-user private tokens when you can.</p>
 <div class="btnrow">
-<input id="token" placeholder="paste your private token, or the org token from your OWUI admin" style="flex:1" autocomplete="off">
+<input id="token" type="password" placeholder="paste your private token, or the org token from your OWUI admin" style="flex:1" autocomplete="off" oninput="syncTokVis()">
+<button id="tokvis" onclick="toggleTokVis()" class="small" style="white-space:nowrap;display:none" title="Show the token">Show</button>
 <button onclick="setToken()" class="small" style="white-space:nowrap">Set token</button>
 </div>
 <button onclick="genToken()">Generate random token</button>
@@ -5048,10 +5070,11 @@ document.getElementById('root').value=s.root||'';
 document.getElementById('origin').value=s.allowed_origin||'';
 document.getElementById('secstatus').textContent='Security mode: '+s.security+
 (String(s.security).indexOf('token')>=0
- ?' · a token IS configured (shown as dots below; paste a new one only to replace it)'
+ ?' · a token IS configured (click Show to display it; paste a new one only to replace it)'
  :' · no token set');
 document.getElementById('token').value=
  (String(s.security).indexOf('token')>=0?'••••••••••••':'');
+syncTokVis();
 const c=await (await fetch('/ocr/config')).json();
 document.getElementById('ocrlang').value=c.lang||'eng';
 renderLangs(c.available,c.lang);
@@ -5181,6 +5204,23 @@ async function setOrigin(){
  const d=await res.json();
  document.getElementById('secstatus').textContent = d.ok?('Security mode: '+d.security+(d.error?' — '+d.error:'')):('✗ '+(d.error||'failed'));
  if(d.ok&&d.security==='UNLOCKED')document.getElementById('secstatus').textContent+=' ⚠ set an origin to unlock file serving';}
+async function toggleTokVis(){
+ const i=document.getElementById('token'),b=document.getElementById('tokvis');
+ if(i.type==='text'){i.type='password';b.textContent='Show';b.title='Show the token';return;}
+ if(i.value&&i.value!='••••••••••••'){i.type='text';b.textContent='Hide';b.title='Hide the token';return;}
+ // box holds the dots placeholder: fetch the stored token from the bridge
+ b.disabled=true;b.textContent='…';
+ try{
+  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:{reveal:true}})});
+  const d=await res.json();
+  if(d.ok&&d.token){i.value=d.token;i.type='text';b.textContent='Hide';b.title='Hide the token';}
+  else{document.getElementById('secstatus').textContent='✗ '+(d.error||'cannot show the token');}
+ }catch(e){document.getElementById('secstatus').textContent='✗ cannot show the token: '+(e.message||e);}
+ b.disabled=false;}
+function syncTokVis(){
+ const i=document.getElementById('token'),b=document.getElementById('tokvis');
+ if(i.value){b.style.display='';}
+ else{b.style.display='none';i.type='password';b.textContent='Show';b.title='Show the token';}}
 async function setToken(){
  const v=document.getElementById('token').value.trim();
  if(!v){document.getElementById('secstatus').textContent='✗ paste a token first (or use Generate)';return;}
@@ -5191,11 +5231,17 @@ async function setToken(){
 async function genToken(){
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:{generate:true}})});
  const d=await res.json();
- document.getElementById('secstatus').textContent = d.ok?('Token (copy now, shown once): '+d.token+' — mode: '+d.security):('✗ '+(d.error||'failed'));}
+ if(d.ok){
+  // masked in the box too — flip Show to copy it from there instead of
+  // selecting from the status line
+  document.getElementById('token').value=d.token;syncTokVis();
+  document.getElementById('secstatus').textContent='Token (copy now, shown once): '+d.token+' — mode: '+d.security;}
+ else{document.getElementById('secstatus').textContent='✗ '+(d.error||'failed');}}
 async function clearToken(){
  const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({token:{clear:true}})});
  const d=await res.json();
- document.getElementById('secstatus').textContent='Security mode: '+d.security;}
+ document.getElementById('secstatus').textContent='Security mode: '+d.security;
+ refresh();}
 async function stopBridge(){
  if(!confirm('Stop the Open File Bridge service?\\nOpen WebUI will lose file access until you start it again.'))return;
  try{await fetch('/api/shutdown',{method:'POST'});}catch(e){}

@@ -614,6 +614,36 @@ it land?"). Agreed shape: **chips stay for mentions; outcomes get links**.
    the box. Saved langs containing osd still validate (graceful).
    Rebuilt/repackaged/relaunched; DOM + vision verified; e2e 291/291.
 
+## 2.7.2 — token box: password mask + Show/Hide toggle (user request, 2026-08-30)
+
+✅ The picker's token input is now `type="password"` (masked as you type or
+   paste — a just-pasted org token no longer sits on screen in the clear;
+   previously it stayed plaintext in the box until the next page load).
+   A **Show/Hide** button appears next to the box whenever it has content
+   — i.e. once a token is set (the placeholder dots) or while typing —
+   and flips the input between masked and clear.
+✅ **Show reveals the STORED token.** First cut shipped dots-only (the
+   bridge never echoed the token), and Dandan's live test read exactly
+   like a broken button — Show displayed the literal `•••` placeholder.
+   Owner decision: reveal for real. `POST /api/root {"token":{"reveal":
+   true}}` returns the stored plaintext to the picker, which swaps the
+   dots for the real token (Hide masks it again without wiping; further
+   toggles are local). Guardrails + exposure analysis: loopback-only +
+   POST + no CORS ⇒ websites can fire it but never read the response;
+   same-user processes read the 0600 token file anyway; the only widening
+   is OTHER local OS users, who can already reconfigure the entire bridge
+   through the same token-free loopback API — they gain secret disclosure,
+   not new control. Every reveal writes an audit.log line
+   (`args: {"action": "token-reveal"}` — the marker lives under "action"
+   because anything keyed "token" is scrubbed). "no token configured"
+   400s cleanly.
+✅ Two small flow fixes rode along: Generate now drops the fresh token
+   into the box (masked — flip Show to copy from there instead of the
+   status line); Clear token calls refresh() so the stale dots leave the
+   box immediately (previously they lingered until reload). e2e +2:
+   reveal returns the set token, reveal appears in audit.log; +1 picker
+   markup check for the toggle button.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
