@@ -61,7 +61,7 @@ BRIDGE_PID=$!
 # cleanup guard: on macOS bash 3.2 + set -e, a failing kill in the EXIT trap
 # (both PIDs already dead) aborts the trap — temp dirs leak and the exit
 # status becomes 1 even on ALL-PASSED runs. `|| true` keeps cleanup whole.
-trap 'kill $BRIDGE_PID $SQUAT 2>/dev/null || true; rm -rf "$TESTDIR" "$STATEDIR" ${BRKDIR:-} ${BRKSTATE:-} 2>/dev/null || true' EXIT
+trap 'kill ${BRIDGE_PID:-} ${SQUAT:-} 2>/dev/null || true; rm -rf "$TESTDIR" "$STATEDIR" ${BRKDIR:-} ${BRKSTATE:-} 2>/dev/null || true' EXIT
 # readiness poll (not a blind sleep): frozen onefile binaries take ~2 s to
 # self-extract before the listener comes up
 for _ in $(seq 1 60); do curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1 && break; sleep 0.5; done
@@ -96,6 +96,10 @@ check "unlocked /write denied"   'bridge unlocked'   "$(curl -s -X POST $BRIDGE/
 check "origin saved"      '"security": *"origin"'  "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"allowed_origin":"http://owui.test:8080"}')"
 check "token generated"   'test-token-1234'        "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"token":{"set":"test-token-1234"}}')"
 check "state shows mode"  'token+origin'           "$(curl -s $BRIDGE/state)"
+check "token reveal returns it" 'test-token-1234'  "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"token":{"reveal":true}}')"
+grep -q 'token-reveal' "$STATEDIR/audit.log" 2>/dev/null \
+  && echo "  PASS: token reveal audited" \
+  || { echo "  FAIL: reveal not in audit.log"; fail=1; }
 
 # ---------- picker page UX (2.4): placeholders, Browse, OCR validation -----
 PH=$(curl -s $BRIDGE/picker)
@@ -103,6 +107,7 @@ check "picker: browse button"     'id="browsebtn"'   "$PH"
 check "picker: heartbeat marker"  'id="beatinfo"'    "$PH"
 check "picker: OCR checkbox box"  'id="langbox"'     "$PH"
 check "picker: stop button"       'stopBridge'       "$PH"
+check "picker: token show toggle" 'id="tokvis"'      "$PH"
 check "picker: foldable cards"    'details class="sec" id="sec-root" open' "$PH"
 check "picker: fold persistence"  'FOLD_KEY'         "$PH"
 case "$(uname -s)" in
@@ -654,7 +659,10 @@ if echo "$DT" | grep -q 'DS_Store\|Thumbs\.db'; then echo "  FAIL: tree leaked O
 #   uv run --with pymupdf,rapidocr-onnxruntime bash tests/e2e_test.sh
 ADDONS=$(curl -s $BRIDGE/health | python3 -c "import json,sys; print(json.load(sys.stdin)['addons']['pdf'])" 2>/dev/null || echo False)
 if [ "$ADDONS" = "True" ]; then
-  python3 - <<PY
+  # set -e would abort the whole suite here when python3 lacks pymupdf —
+  # fail THIS check with the fix hint instead (canonical run:
+  #   uv run --with pymupdf,rapidocr-onnxruntime bash tests/e2e_test.sh )
+  python3 - <<PY || { echo "  FAIL: python3 lacks pymupdf — run via: uv run --with pymupdf,rapidocr-onnxruntime bash tests/e2e_test.sh"; fail=1; }
 import fitz
 doc = fitz.open(); page = doc.new_page()
 page.insert_text((72,72), "E2E INVOICE 42", fontname="helv", fontsize=12)

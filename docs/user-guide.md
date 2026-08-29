@@ -96,7 +96,10 @@ carry it in an `X-Bridge-Token` header.
 
 **Recommended for individuals — a private token nobody else has:**
 
-1. Click **Generate random token** (🔒 Security section).
+1. Click **Generate random token** (🔒 Security section). The token appears
+   once in the status line and in the token box (masked — click **Show**
+   next to it to reveal and copy). **Show** also works later, after a
+   reload, to display the saved token again.
 2. Tell the model the token once in chat — e.g. *"my bridge token is
    `<the token>`, use it for this session"* — the skill instructs the model
    to add it to every request. (Or, to avoid repeating it: make your own

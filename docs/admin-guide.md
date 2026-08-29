@@ -130,7 +130,12 @@ Security is configured per user on the app's settings page
   skill. In OWUI builds that sandbox the code interpreter (`Origin: null`),
   the token tier is what lets the bridge grant your sandboxed chats CORS —
   token-only or token+origin modes both work; origin-only does not
-  (docs/OWUI-COMPAT.md).
+  (docs/OWUI-COMPAT.md). The picker's **Show** button can display the
+  stored token again (`POST /api/root {"token":{"reveal":true}}`,
+  loopback-only, every reveal audited) — handy for re-copying, also the one
+  endpoint that hands the token to anything already on the user's machine
+  able to reach the local picker API; treat a shared machine's local users
+  accordingly.
 - **Read-only mode.** `POST /api/root {"readonly": true}` per machine (or
   `FILE_BRIDGE_READONLY=1` env) makes every write endpoint refuse.
 - **Audit log.** Every request is appended to `audit.log` in the state

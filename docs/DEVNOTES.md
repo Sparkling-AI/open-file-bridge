@@ -880,3 +880,63 @@ passes through; both _attach_links and /link use it (models echo
 d["written"] into /link, so /link had the same latent bug). Restores
 inherit no links (message-shaped "restored" field, rare — skipped
 deliberately); /write_many results[] too (top-level only for now).
+
+## Token box mask + Show/Hide toggle (2026-08-30, 2.7.2)
+
+User ask: once a token is set, show a hide/show button on the token
+input. Implemented as a standard password-field toggle, NOT a
+reveal-the-stored-token endpoint:
+
+- input is `type="password"`; a Show/Hide button (id=tokvis) appears
+  whenever the box has content (syncTokVis() on input + after refresh()
+  sets the placeholder dots). What Show reveals is only what the box
+  holds — a fresh paste/generate (useful to verify/copy) or the literal
+  `••••` placeholder after reload.
+- Why no server-side reveal: the picker API is loopback-only and
+  token-free (it is the bootstrap UI), so a reveal endpoint hands the
+  plaintext to any local user/process that can reach 127.0.0.1 — wider
+  than the 0600 bridge-token file (owner-only). get_configured_token()'s
+  "NEVER returned in any HTTP response" invariant stays intact.
+- Ride-alongs: genToken() now fills the box with the fresh token
+  (masked; toggle Show to copy); clearToken() calls refresh() so stale
+  dots leave the box immediately; refresh()'s hint reworded to say the
+  dots are a placeholder and the bridge never sends the token back.
+- e2e untouched (suite asserts picker API, not page DOM). Rebuild
+  required: page HTML is baked into the exe.
+
+## Token reveal follow-up (2026-08-30, still 2.7.2)
+
+Dandan live-tested the mask round and clicked Show on a configured
+bridge: the box showed the literal dots placeholder — the button READ as
+broken. The dots-only design (page never receives the stored token) was
+correct on its own terms but failed the user. Owner decision: Show must
+reveal the stored token.
+
+- POST /api/root {"token":{"reveal":true}} → resp.token = stored
+  plaintext ("no token configured" 400s). Loopback-only, cors=False,
+  and audited as a second line: args {"action": "token-reveal"} — the
+  marker MUST live under a non-secret key: _audit_scrub rewrites any
+  value keyed "token" (etc.) to [redacted], which swallowed the first
+  attempt ("token": "[reveal]" logged as [redacted], indistinguishable
+  from the generic line).
+- toggleTokVis: dots in the box = "never revealed yet" → Show fetches
+  the reveal, replaces dots with the real token, type=text. Hide just
+  masks (value kept — standard password-toggle semantics; plaintext in
+  a masked input is how every login form works). Toggling again is
+  local, no refetch. refresh() resets to dots.
+- The get_configured_token "NEVER returned in any HTTP response"
+  invariant is narrowed, not abandoned: loopback picker POST only; the
+  OWUI/file endpoints still never see it. Exposure analysis in the
+  handler comment + ROADMAP: no-CORS POST blocks websites, same-user
+  processes read the 0600 file anyway, other local OS users already
+  control the bridge via the token-free loopback API (they gain secret
+  disclosure, not new control).
+- e2e +3 (reveal returns token, reveal audited, picker has tokvis).
+- Harness fix (found the hard way): the frozen e2e run before this round
+  piped through `tail` (masked the failure — exit 0) and ran with system
+  python3, which lacks pymupdf → set -e aborted at the fitz fixture, the
+  EXIT trap then died on unset $SQUAT (unbound), the trap's kill never
+  ran, and the bridge + its stdout pipe leaked (pipeline hung until the
+  orphans were killed). Fixes: trap now uses ${BRIDGE_PID:-} ${SQUAT:-};
+  the fitz heredoc fails ONE check with the canonical-invocation hint
+  (uv run --with pymupdf,rapidocr-onnxruntime) instead of aborting.
