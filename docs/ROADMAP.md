@@ -488,6 +488,27 @@ on macOS (frozen binary + python3 -m http.server squatter → caution
 dialog with actionable text, waits for OK, exit 1). Windows
 MessageBoxW reviewed only, no box here.
 
+## 2.6.6 — foldable settings sections, state remembered (user request)
+
+Every card on the settings page folds: the five .sec cards became native
+`<details class="sec" id="sec-*">` with a styled `<summary>` — full-row
+click target, right-aligned ▸ chevron that rotates on expand (CSS
+transition), subtle fade-in on open. Defaults unchanged (all expanded);
+fold state persists per section in localStorage (`ofb.folded`), so a
+folded card stays folded on the next visit.
+
+✅ Refresh button lives inside the preview summary — `preventDefault()`
+   keeps it from toggling the section while still refreshing (verified
+   by click).
+✅ Progressive enhancement: no JS → plain always-open cards; ids,
+   handlers, placeholders and every e2e grep untouched.
+Verified: live-clicked in a real browser (fold → localStorage → reload
+→ still folded; refresh no-toggle), renders vision-checked (glm-4.6V,
+no defects); e2e +2 checks (source 266 pass/1 env pymupdf fail
+unchanged). NOTE: suite run on a shifted port while the real bridge
+held 8765 (sed 8765→8892 + FILE_BRIDGE_PORT on all four launches —
+candidate for a PORT variable in the script itself).
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

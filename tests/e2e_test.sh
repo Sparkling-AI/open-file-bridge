@@ -91,6 +91,8 @@ check "picker: browse button"     'id="browsebtn"'   "$PH"
 check "picker: heartbeat marker"  'id="beatinfo"'    "$PH"
 check "picker: OCR checkbox box"  'id="langbox"'     "$PH"
 check "picker: stop button"       'stopBridge'       "$PH"
+check "picker: foldable cards"    'details class="sec" id="sec-root" open' "$PH"
+check "picker: fold persistence"  'FOLD_KEY'         "$PH"
 case "$(uname -s)" in
   Darwin)  check "picker: mac placeholder"     '/Users/you/Documents' "$PH" ;;
   Linux)   check "picker: linux placeholder"   '/home/you/Documents'  "$PH" ;;

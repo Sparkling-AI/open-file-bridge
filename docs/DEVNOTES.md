@@ -768,3 +768,30 @@ the IDENTIFIERS while the user base is exactly one person:
 - e2e: state-path traversal fixture + foreign-port regex updated to
   the new names. 264 source / 265 frozen (ALL PASS), migration
   verified on the live install.
+
+## 2.6.6 — foldable settings sections (user request)
+
+All five picker cards fold and remember their state:
+
+- Markup: `.sec` divs → `<details class="sec" id="sec-{root,security,
+  ocr,ignore,preview}" open>`; each `<h3>` became the `<summary>`
+  (h3 is not phrasing content, so the summary carries h3 styling
+  itself — the old `h3{margin:0 0 8px}` rule was replaced by
+  `details.sec>summary` rules: bold 1.17em, full-row flex, chevron
+  ::after with a transform transition, [open] margin-bottom).
+- Persistence: localStorage `ofb.folded` = {id:1} for FOLDED cards
+  only (absent = expanded), rewritten on every `toggle` event; the
+  loader runs before first paint in practice (inline end-of-body
+  script). try/catch everywhere — a browser with storage blocked just
+  loses memory, never errors.
+- Refresh button: kept in the preview header but now inside <summary>
+  — inline `event.preventDefault();renderPreview()` so activating it
+  doesn't toggle the card (works for mouse and keyboard; the click's
+  canceled flag suppresses the summary activation behavior).
+- Preview auto-refresh ignores fold state (display:none content still
+  updates); nested folder-tree <details> never match `details.sec`.
+- Verification detail: e2e was run from a sed-shifted copy
+  (8765→8892 + FILE_BRIDGE_PORT=8892 injected before every
+  FILE_BRIDGE_STATE_DIR launch) because the real bridge held 8765 —
+  all four launches (main, dup-start, breaker, foreign-port) shift
+  coherently. TODO-ish: promote to a PORT var in the script.
