@@ -667,3 +667,38 @@ failure (pymupdf absent from default python3, identical on master).
 Frozen .app rebuilt; smoke on macOS 26/arm64: cold-launch tab,
 `open dist/FileBridge.app` again → reopen tab, debounce holds, Quit
 clean. Windows reviewed-only, no box here (per-round norm).
+
+## 2.6.4 — foreign port holder: warn VISIBLY, don't abort silently (user request)
+
+2.6.3 already DETECTED the "something else owns 8765" case (TCP probe +
+token-free /version) and exited 1 — but for packaged launches the error
+only reached state_dir/bridge.log: no console exists for a Finder/.app
+launch or the Windows windowed exe, so from the user's seat the icon
+click just did nothing (Dandan: "warn instead of aborting silently").
+New `_user_alert(message)`: native, best-effort, stdlib-only — macOS
+osascript `display dialog` (routed through `_run_dialog` so a shutdown
+can't orphan it on screen), Windows `MessageBoxW` via ctypes
+(MB_ICONWARNING | MB_SETFOREGROUND), Linux notify-send/zenity/kdialog
+first-found. Gated to packaged launches (`sys.frozen`) — CLI runs
+already have stderr — and suppressed under FILE_BRIDGE_NO_UI=1 so a
+login service never throws a modal at the login screen.
+
+Wired into every startup abort: (1) foreign listener at the probe, (2)
+the bind-time race fallback — which now RE-VERIFIES via /version
+instead of assuming "already running" and opens the live page if it IS
+one of ours, alerts + exit 1 otherwise, (3) invalid folder argument
+(stale shortcut). Dialog copy names the port, says what to do, and
+points at FILE_BRIDGE_PORT + scripts/setup_owui.py for the move-port
+path (the skill must follow — SUPPORT.md triage unchanged).
+
+Verification: e2e +1 (foreign squatter = python3 -m http.server on
+8765 → exit 1 + message; source 262 pass/1 env pymupdf fail, frozen
+263/263 under the uv addon env). Live-smoked the dialog itself: frozen
+binary + squatter → caution dialog with the actionable text on screen,
+process waits for OK, exits 1 after dismiss. Two harness gotchas from
+this round: piping a failed PyInstaller launch into `tail` masks the
+failure (pipe status = tail's — the first "rebuild" silently reused the
+old binary; always check the binary mtime/`BUILD OK`), and the correct
+build interpreter is the uv-archive python at
+`~/.cache/uv/archive-v0/J7oC40Dxb_VBEmxhD_i89/bin/python3.12`
+(PyInstaller 6.22.2 + pymupdf 1.28.2 — the default python3 has neither).

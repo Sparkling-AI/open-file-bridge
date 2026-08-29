@@ -468,6 +468,26 @@ failure, identical on master); frozen .app rebuilt + smoked on macOS
 26/arm64 (cold launch tab, `open`-again reopen tab, debounce, Quit).
 Windows paths code-reviewed only — no Windows box here (per-round norm).
 
+## 2.6.4 — foreign port holder warns VISIBLY (user request)
+
+Follow-up from Dandan the same evening: 2.6.3 detected "another program
+owns 8765" but only wrote it to bridge.log — packaged launches have no
+console, so the user saw nothing.
+
+✅ `_user_alert` — native warning for every startup abort: osascript
+   dialog (macOS, orphan-safe via _run_dialog), MessageBoxW via ctypes
+   (Windows), notify-send/zenity/kdialog (Linux). Fires only for frozen
+   launches (CLI already has stderr) and never under FILE_BRIDGE_NO_UI=1
+   (services must stay non-modal).
+✅ All three abort paths covered — foreign listener at the probe;
+   bind-race fallback now re-verifies via /version (ours → open the
+   live page; foreign → alert + exit 1); invalid folder argument.
+Verified: e2e +1 foreign-squatter check (source 262 pass/1 env pymupdf
+fail; frozen 263/263 under uv addon env); live-smoked the real dialog
+on macOS (frozen binary + python3 -m http.server squatter → caution
+dialog with actionable text, waits for OK, exit 1). Windows
+MessageBoxW reviewed only, no box here.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
