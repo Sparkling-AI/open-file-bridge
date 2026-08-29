@@ -1,0 +1,47 @@
+
+This file lists modules PyInstaller was not able to find. This does not
+necessarily mean these modules are required for running your program. Both
+Python's standard library and 3rd-party Python packages often conditionally
+import optional modules, some of which may be available only on certain
+platforms.
+
+Types of import:
+* top-level: imported at the top-level - look at these first
+* conditional: imported within an if-statement
+* delayed: imported within a function
+* optional: imported within a try-except-statement
+
+IMPORTANT: Do NOT post this list to the issue-tracker. Use it as a basis for
+            tracking down the missing module yourself. Thanks!
+
+missing module named pyimod02_importers - imported by /Users/dandanwei/.cache/uv/archive-v0/J7oC40Dxb_VBEmxhD_i89/lib/python3.12/site-packages/PyInstaller/hooks/rthooks/pyi_rth_pkgutil.py (delayed)
+excluded module named _frozen_importlib - imported by importlib (optional), importlib.abc (optional), zipimport (top-level)
+missing module named _frozen_importlib_external - imported by importlib._bootstrap (delayed), importlib (optional), importlib.abc (optional), zipimport (top-level)
+missing module named winreg - imported by importlib._bootstrap_external (conditional), mimetypes (optional), platform (delayed, optional), urllib.request (delayed, conditional, optional)
+missing module named nt - imported by os (delayed, conditional, optional), ntpath (optional), shutil (conditional), importlib._bootstrap_external (conditional), ctypes (delayed, conditional)
+missing module named _winapi - imported by encodings (delayed, conditional, optional), ntpath (optional), shutil (conditional), subprocess (conditional), mimetypes (optional), multiprocessing.connection (optional), multiprocessing.spawn (delayed, conditional), multiprocessing.reduction (conditional), multiprocessing.shared_memory (conditional), multiprocessing.heap (conditional), multiprocessing.popen_spawn_win32 (top-level)
+missing module named msvcrt - imported by subprocess (optional), multiprocessing.spawn (delayed, conditional), multiprocessing.popen_spawn_win32 (top-level), getpass (optional)
+missing module named multiprocessing.BufferTooShort - imported by multiprocessing (top-level), multiprocessing.connection (top-level)
+missing module named multiprocessing.AuthenticationError - imported by multiprocessing (top-level), multiprocessing.connection (top-level)
+missing module named multiprocessing.get_context - imported by multiprocessing (top-level), multiprocessing.pool (top-level), multiprocessing.managers (top-level), multiprocessing.sharedctypes (top-level)
+missing module named multiprocessing.TimeoutError - imported by multiprocessing (top-level), multiprocessing.pool (top-level)
+missing module named multiprocessing.set_start_method - imported by multiprocessing (top-level), multiprocessing.spawn (top-level)
+missing module named multiprocessing.get_start_method - imported by multiprocessing (top-level), multiprocessing.spawn (top-level)
+missing module named pandas - imported by pymupdf.table (delayed, optional)
+missing module named __builtin__ - imported by pymupdf.extra (optional), pymupdf.mupdf (optional)
+missing module named vms_lib - imported by platform (delayed, optional)
+missing module named 'java.lang' - imported by platform (delayed, optional)
+missing module named java - imported by platform (delayed)
+missing module named _winreg - imported by platform (delayed, optional)
+missing module named _wmi - imported by platform (optional)
+missing module named PIL - imported by pymupdf (delayed, optional)
+missing module named cppyy - imported by pymupdf (delayed, conditional)
+missing module named pymupdf_fonts - imported by pymupdf (delayed, conditional, optional)
+missing module named fontTools - imported by pymupdf (delayed, optional)
+missing module named mupdf - imported by pymupdf (conditional, optional)
+missing module named mupdf_cppyy - imported by pymupdf (conditional)
+missing module named fpdf - imported by /Users/dandanwei/Workspace/open-file-bridge/src/file_bridge.py (delayed, optional)
+missing module named pptx - imported by /Users/dandanwei/Workspace/open-file-bridge/src/file_bridge.py (delayed, optional)
+missing module named docx - imported by /Users/dandanwei/Workspace/open-file-bridge/src/file_bridge.py (delayed, optional)
+missing module named openpyxl - imported by /Users/dandanwei/Workspace/open-file-bridge/src/file_bridge.py (delayed, optional)
+missing module named pypdfium2 - imported by /Users/dandanwei/Workspace/open-file-bridge/src/file_bridge.py (optional)

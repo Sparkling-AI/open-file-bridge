@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 # File Bridge — macOS .app packaging + (optional) signing/notarization
-# Run on a Mac AFTER: pyinstaller --onefile --windowed --name FileBridge src/file_bridge.py
+# Run on a Mac AFTER: pyinstaller --onefile --windowed --name OpenFileBridge src/file_bridge.py
 #
-#   ./package_macos.sh              -> FileBridge-macos.zip (unsigned)
+#   ./package_macos.sh              -> OpenFileBridge-macos.zip (unsigned)
 #   ./package_macos.sh --sign       -> signed + notarized (needs Apple Developer ID
 #                                      + notarytool profile "AC" in keychain)
 
@@ -10,10 +10,10 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 SIGN="${1:-}"
 
-APP="dist/FileBridge.app"
+APP="dist/OpenFileBridge.app"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp dist/FileBridge "$APP/Contents/MacOS/FileBridge"
-chmod +x "$APP/Contents/MacOS/FileBridge"
+cp dist/OpenFileBridge "$APP/Contents/MacOS/OpenFileBridge"
+chmod +x "$APP/Contents/MacOS/OpenFileBridge"
 
 # Frozen-build asset layout (docs/BUILDING.md): wheels/ (browser-side office
 # libs served by /wheels) and tessdata/ (OCR langs incl. swe/chi_sim) next to
@@ -38,10 +38,10 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <dict>
   <key>CFBundleName</key>            <string>Open File Bridge</string>
   <key>CFBundleDisplayName</key>     <string>Open File Bridge</string>
-  <key>CFBundleIdentifier</key>      <string>com.yourorg.filebridge</string>
+  <key>CFBundleIdentifier</key>      <string>com.yourorg.openfilebridge</string>
   <key>CFBundleVersion</key>         <string>1.0.0</string>
   <key>CFBundlePackageType</key>     <string>APPL</string>
-  <key>CFBundleExecutable</key>      <string>FileBridge</string>
+  <key>CFBundleExecutable</key>      <string>OpenFileBridge</string>
   <key>CFBundleIconFile</key>        <string>appicon</string>
   <key>LSMinimumSystemVersion</key>  <string>11.0</string>
 </dict>
@@ -54,12 +54,12 @@ PLIST
 
 if [[ "$SIGN" == "--sign" ]]; then
   codesign --deep --force --sign "Developer ID Application: YOUR NAME (TEAMID)" "$APP"
-  ditto -c -k --keepParent "$APP" FileBridge-macos.zip
-  xcrun notarytool submit FileBridge-macos.zip --keychain-profile AC --wait
+  ditto -c -k --keepParent "$APP" OpenFileBridge-macos.zip
+  xcrun notarytool submit OpenFileBridge-macos.zip --keychain-profile AC --wait
   xcrun staple "$APP"
   echo "Signed + notarized."
 else
-  ditto -c -k --keepParent "$APP" FileBridge-macos.zip
-  echo "Unsigned zip: FileBridge-macos.zip"
+  ditto -c -k --keepParent "$APP" OpenFileBridge-macos.zip
+  echo "Unsigned zip: OpenFileBridge-macos.zip"
   echo "Users must right-click -> Open on first launch (Gatekeeper)."
 fi

@@ -161,7 +161,7 @@ def upsert_model(base, tok, model_id, name, base_model, skill_ids):
     model = {
         "id": model_id, "base_model_id": base_model, "name": name,
         "meta": {
-            "description": "Access your own local files through the File Bridge app.",
+            "description": "Access your own local files through the Open File Bridge app.",
             "capabilities": {"code_interpreter": True},
             "defaultFeatureIds": ["code_interpreter"],
             "skillIds": skill_ids,
@@ -259,7 +259,7 @@ def main():
 
     print()
     print("Done. Users should now:")
-    print("  1. Install & run File Bridge on their machine, pick a folder")
+    print("  1. Install & run Open File Bridge on their machine, pick a folder")
     print(f"  2. Select the '{MODEL_ID}' model in a new chat")
     print("  3. Ask for a file; click Allow on the browser's local-network prompt")
 

@@ -303,7 +303,7 @@ check "picker shows junk floor" 'Thumbs' "$PP"
 check "picker warns writes refused" 'writes to them are refused' "$PP"
 curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"ignore_global":[]}' >/dev/null
 # self-protection: state dir never reachable even if a root were to overlap
-check "state file unreadable" 'escapes shared root\|never accessible' "$(curl -s "$BRIDGE/read?path=../../../.local/state/file-bridge/state.json" $T 2>/dev/null || echo unreachable)"
+check "state file unreadable" 'escapes shared root\|never accessible' "$(curl -s "$BRIDGE/read?path=../../../.local/state/open-file-bridge/state.json" $T 2>/dev/null || echo unreachable)"
 # root-in-state rejected by set_roots
 SIR=$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d "{\"roots\":[{\"id\":\"x\",\"path\":\"$STATEDIR\"}]}")
 check "state-inside-root rejected" 'cannot\|error' "$SIR"
@@ -843,7 +843,7 @@ for _ in $(seq 1 20); do port_accepting && break; sleep 0.25; done
 RC=0; OUT=$(FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_NO_UI=1 \
   $BRIDGE_CMD 2>&1) || RC=$?
 check "foreign port holder refused (exit 1)" \
-  "not a File Bridge.*(exit 1)" "$OUT (exit $RC)"
+  "not an Open File Bridge.*(exit 1)" "$OUT (exit $RC)"
 kill $SQUAT 2>/dev/null || true
 wait $SQUAT 2>/dev/null || true
 

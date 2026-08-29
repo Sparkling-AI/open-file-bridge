@@ -15,7 +15,7 @@ everything happens between your browser and your own machine.
 ## Install & first run
 
 ### Windows
-1. Download `FileBridge-Setup.exe` (or `FileBridge.exe`).
+1. Download `OpenFileBridge-Setup.exe` (or `OpenFileBridge.exe`).
 2. Double-click. If Windows shows **"Windows protected your PC"**
    (SmartScreen — normal for new unsigned apps): click **More info → Run anyway**.
 3. Your browser opens the Open File Bridge page. Pick the folder to share with
@@ -28,16 +28,16 @@ everything happens between your browser and your own machine.
    remembered.
 
 ### macOS
-1. Download `FileBridge-macos.zip`, unzip it, drag **FileBridge** into **Applications**.
-2. First launch: **right-click FileBridge → Open → Open**
+1. Download `OpenFileBridge-macos.zip`, unzip it, drag **OpenFileBridge** into **Applications**.
+2. First launch: **right-click OpenFileBridge → Open → Open**
    (bypasses Gatekeeper for unsigned apps — needed only once).
 3. Your browser opens the Open File Bridge page. Pick the folder to share with
    **Browse…** (native folder dialog), or type/paste a path, e.g.
    `/Users/you/Documents/my-project`, then click **Save folder**.
-4. Done. File Bridge runs in the background with an **icon in the Dock** —
+4. Done. Open File Bridge runs in the background with an **icon in the Dock** —
    that is how you can see it is running. **Click the Dock icon any time to
    open the settings page** (status, folder, security, OCR). Stop it with
-   the **Stop File Bridge** button at the bottom of the settings page, or
+   the **Stop Open File Bridge** button at the bottom of the settings page, or
    quit it from the Dock (right-click → Quit). Launching it again while it
    runs also just opens the settings page.
 5. OCR languages: tick one or more checkboxes (e.g. English + Swedish —
@@ -46,8 +46,8 @@ everything happens between your browser and your own machine.
 ### Linux
 Either run the binary:
 ```bash
-chmod +x FileBridge
-./FileBridge ~/my-folder
+chmod +x OpenFileBridge
+./OpenFileBridge ~/my-folder
 ```
 or with Python (no install needed — stdlib only):
 ```bash
@@ -74,7 +74,7 @@ python3 file_bridge.py ~/my-folder
 | SmartScreen / Gatekeeper warning | First launch of unsigned app | Windows: More info → Run anyway · macOS: right-click → Open |
 | Bridge not running | AI says it can't reach your files | Start the Open File Bridge app again |
 | Wrong folder | AI sees old/other files | Open `http://127.0.0.1:8765` in your browser, change folder, Save |
-| Corporate VPN/antivirus | May block localhost traffic | Rare; allow `FileBridge.exe` / port 8765 in your security tool |
+| Corporate VPN/antivirus | May block localhost traffic | Rare; allow `OpenFileBridge.exe` / port 8765 in your security tool |
 
 ## Privacy & security
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-File Bridge — single-file, stdlib-only local file service for Open WebUI.
+Open File Bridge — single-file, stdlib-only local file service for Open WebUI.
 No dependencies. Works with Python 3.8+. Package with PyInstaller for
 double-click binaries on Windows/macOS/Linux.
 
-Usage: python file_bridge.py [folder]      (default: ~/file-bridge-shared)
+Usage: python file_bridge.py [folder]   (state: per-OS "open-file-bridge" dir)
 Then:  pick a folder at http://127.0.0.1:8765 (opens in browser)
 
 Security model (v2, roadmap P0):
@@ -17,8 +17,8 @@ Security model (v2, roadmap P0):
       can be completed. (Stance adopted from Open Terminal v0.11.30.)
 
 State lives in a per-OS state dir (env FILE_BRIDGE_STATE_DIR overrides):
-  Linux: ~/.local/state/file-bridge   macOS: ~/Library/Application Support/file-bridge
-  Windows: %APPDATA%\\file-bridge     (pattern: OpenWorker coworker/secrets.py)
+  Linux: ~/.local/state/open-file-bridge   macOS: ~/Library/Application Support/open-file-bridge
+  Windows: %APPDATA%\\open-file-bridge     (pattern: OpenWorker coworker/secrets.py)
   state.json    — root, ocr_lang, allowed_origin, token hash (0600)
   bridge-token  — plaintext token (0600, owner-only; never sent in responses)
 """
@@ -145,17 +145,27 @@ _IS_WINDOWS = sys.platform == "win32"
 
 def state_dir() -> Path:
     """Per-OS state directory (pattern borrowed from OpenWorker secrets.py:
-    env override > native app-data location)."""
+    env override > native app-data location). One-time migration from the
+    pre-rename 'file-bridge' dir: moved wholesale (state, token, versions,
+    trash, audit) so existing installs keep their config."""
     base = os.environ.get("FILE_BRIDGE_STATE_DIR")
     if base:
         p = Path(base).expanduser()
     elif _IS_WINDOWS:
         appdata = os.environ.get("APPDATA")
-        p = Path(appdata) / "file-bridge" if appdata else Path.home() / ".file-bridge"
+        p = Path(appdata) / "open-file-bridge" if appdata else Path.home() / ".open-file-bridge"
     elif sys.platform == "darwin":
-        p = Path.home() / "Library" / "Application Support" / "file-bridge"
+        p = Path.home() / "Library" / "Application Support" / "open-file-bridge"
     else:
-        p = Path.home() / ".local" / "state" / "file-bridge"
+        p = Path.home() / ".local" / "state" / "open-file-bridge"
+    if not base and p.name != "file-bridge":
+        cand = p.with_name("file-bridge") if not _IS_WINDOWS else p.with_name(
+            ".file-bridge" if p.name.startswith(".") else "file-bridge")
+        if cand.is_dir() and not p.exists():
+            try:
+                os.rename(cand, p)   # same volume: atomic-ish wholesale move
+            except OSError:
+                pass                 # fresh state beats a crash at startup
     # Canonicalize (realpath) so the state-inside-root guards compare like
     # for like: on macOS /var is a symlink to /private/var, and an unresolved
     # state path (e.g. FILE_BRIDGE_STATE_DIR=/var/folders/...) would never
@@ -3715,7 +3725,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if _SHUTDOWN_FN:
                 threading.Timer(0.4, _SHUTDOWN_FN).start()
                 return self._json(200, {"ok": True, "stopping": True,
-                                        "note": "File Bridge is stopping — this "
+                                        "note": "Open File Bridge is stopping — this "
                                                 "page goes offline now"}, cors=False)
             return self._json(500, {"ok": False, "error": "shutdown not available "
                                     "in this mode"}, cors=False)
@@ -4926,7 +4936,7 @@ def kill_active_dialogs() -> None:
                 pass
 
 
-def pick_folder_dialog(prompt: str = "File Bridge — choose the folder to share"
+def pick_folder_dialog(prompt: str = "Open File Bridge — choose the folder to share"
                        ) -> tuple[str | None, str | None]:
     """Returns (path, error). (None, None) → the user canceled the dialog."""
     try:
@@ -4949,7 +4959,7 @@ def pick_folder_dialog(prompt: str = "File Bridge — choose the folder to share
         if _IS_WINDOWS:
             ps = ("& {Add-Type -AssemblyName System.Windows.Forms; "
                   "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                  "$d.Description = 'File Bridge: choose the folder to share'; "
+                  "$d.Description = 'Open File Bridge: choose the folder to share'; "
                   "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
                   "{ [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
                   "[Console]::Out.Write($d.SelectedPath) }")
@@ -5117,7 +5127,7 @@ class CocoaDock:
             self._reopen_imp = imp   # keep the C trampoline alive (GC-proof)
 
             cls = ob.objc_allocateClassPair(ob.objc_getClass(b"NSObject"),
-                                            b"FileBridgeReopenDelegate", 0)
+                                            b"OpenFileBridgeReopenDelegate", 0)
             if not cls:
                 return
             if not ob.class_addMethod(
@@ -5217,7 +5227,7 @@ _SHUTDOWN_FN = None   # set in main(): called from a server thread to stop
 
 
 def _is_file_bridge_url(url: str) -> bool:
-    """True if the listener at url answers /version like a File Bridge
+    """True if the listener at url answers /version like an Open File Bridge
     (token-free endpoint) — tells a live bridge apart from whatever else
     might hold the port, before we open a browser tab at it."""
     try:
@@ -5229,7 +5239,7 @@ def _is_file_bridge_url(url: str) -> bool:
         return False
 
 
-def _user_alert(message: str, title: str = "File Bridge") -> None:
+def _user_alert(message: str, title: str = "Open File Bridge") -> None:
     """Visible warning for startup aborts that would otherwise be silent.
 
     Packaged launches (.app / windowed exe) have no console, so print()
@@ -5295,8 +5305,8 @@ def main():
         p = Path(folder).expanduser().resolve()
         if not p.is_dir():
             print(f"error: {folder} is not a folder")
-            _user_alert(f"The folder given to File Bridge does not exist:\n"
-                        f"{folder}\n\nStart File Bridge again and pick a "
+            _user_alert(f"The folder given to Open File Bridge does not exist:\n"
+                        f"{folder}\n\nStart Open File Bridge again and pick a "
                         f"folder on its settings page.")
             sys.exit(1)
         save_root(p)
@@ -5386,10 +5396,10 @@ def main():
         url = f"http://127.0.0.1:{PORT}"
         if _is_file_bridge_url(url):
             if os.environ.get("FILE_BRIDGE_NO_UI"):
-                print(f"File Bridge already running at {url} — this copy "
+                print(f"Open File Bridge already running at {url} — this copy "
                       f"exits (browser suppressed: FILE_BRIDGE_NO_UI).")
             else:
-                print(f"File Bridge is already running at {url} — opening "
+                print(f"Open File Bridge is already running at {url} — opening "
                       f"its page in your browser; this copy exits (the "
                       f"running one keeps serving).")
                 try:
@@ -5397,11 +5407,11 @@ def main():
                 except Exception:
                     pass
             sys.exit(0)
-        print(f"error: port {PORT} is held by something that is not a File "
-              f"Bridge — set FILE_BRIDGE_PORT to move the bridge elsewhere")
-        _user_alert(f"File Bridge cannot start: port {PORT} is being used "
+        print(f"error: port {PORT} is held by something that is not an Open "
+              f"File Bridge — set FILE_BRIDGE_PORT to move the bridge elsewhere")
+        _user_alert(f"Open File Bridge cannot start: port {PORT} is being used "
                     f"by another program.\n\nClose that program and start "
-                    f"File Bridge again, or move File Bridge to another "
+                    f"Open File Bridge again, or move Open File Bridge to another "
                     f"port (FILE_BRIDGE_PORT) and re-run "
                     f"scripts/setup_owui.py so the skill follows.")
         sys.exit(1)
@@ -5428,11 +5438,11 @@ def main():
                 except Exception:
                     pass
             return
-        print(f"error: port {PORT} was taken by a non-File-Bridge program "
-              f"at bind time — set FILE_BRIDGE_PORT to move the bridge")
-        _user_alert(f"File Bridge cannot start: port {PORT} is being used "
+        print(f"error: port {PORT} was taken by a program that is not Open "
+              f"File Bridge at bind time — set FILE_BRIDGE_PORT to move the bridge")
+        _user_alert(f"Open File Bridge cannot start: port {PORT} is being used "
                     f"by another program.\n\nClose that program and start "
-                    f"File Bridge again, or move File Bridge to another "
+                    f"Open File Bridge again, or move Open File Bridge to another "
                     f"port (FILE_BRIDGE_PORT) and re-run "
                     f"scripts/setup_owui.py so the skill follows.")
         sys.exit(1)

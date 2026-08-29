@@ -737,3 +737,34 @@ renaming would orphan existing users' state), endpoint names. A full
 identifier rename buys nothing user-visible; the display name is what
 users see. e2e +2 checks (title + favlink); 264 pass source-side
 (1 env-only pymupdf fail), frozen build passes all incl. image-shrink.
+
+## 2.6.5 — deep rename: FileBridge → OpenFileBridge (user decision, pre-users)
+
+Display name was already "Open File Bridge" (2.6.4). This round renamed
+the IDENTIFIERS while the user base is exactly one person:
+
+- Binary/bundle/artifacts: dist/OpenFileBridge, OpenFileBridge.app
+  (CFBundleExecutable OpenFileBridge), OpenFileBridge-macos.zip,
+  OpenFileBridge-Setup.exe, PyInstaller --name OpenFileBridge.
+- Bundle id com.yourorg.openfilebridge; service names
+  open-file-bridge.service / com.openfilebridge.bridge.plist /
+  open-file-bridge.bat / ~/Library/Logs/open-file-bridge.log.
+- State dir → open-file-bridge (all OS variants) with a ONE-TIME
+  wholesale os.rename migration in state_dir() (old dir moved if new
+  absent; env override never migrates) — verified live: root config,
+  token, versions moved intact.
+- Specs renamed: open_file_bridge_{windows,macos}.spec; stale root
+  FileBridge.spec deleted.
+- Inno AppId marker FILEBRIDGE01 → OPENFILEBRIDGE01 (a pre-rename
+  Windows install would side-by-side rather than upgrade — acceptable
+  pre-release).
+- KEPT (API stability, not branding): env vars FILE_BRIDGE_*,
+  src/file_bridge.py module name, port, endpoints, skill IDs.
+- New build commands: replace --name FileBridge with --name
+  OpenFileBridge in the 2.6 build line; frozen e2e now
+  FILE_BRIDGE_CMD=$PWD/dist/OpenFileBridge.app/Contents/MacOS/OpenFileBridge
+  (or bare dist/OpenFileBridge — but the .app binary has tessdata/
+  wheels siblings; the bare onefile fails asset checks).
+- e2e: state-path traversal fixture + foreign-port regex updated to
+  the new names. 264 source / 265 frozen (ALL PASS), migration
+  verified on the live install.
