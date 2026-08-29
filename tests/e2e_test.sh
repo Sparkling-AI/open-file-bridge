@@ -49,7 +49,7 @@ if port_accepting; then
 fi
 FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_MAX_WRITES=500 $BRIDGE_CMD "$TESTDIR" &
 BRIDGE_PID=$!
-trap 'kill $BRIDGE_PID 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR" ${BRKDIR:-} ${BRKSTATE:-}' EXIT
+trap 'kill $BRIDGE_PID $SQUAT 2>/dev/null; rm -rf "$TESTDIR" "$STATEDIR" ${BRKDIR:-} ${BRKSTATE:-}' EXIT
 # readiness poll (not a blind sleep): frozen onefile binaries take ~2 s to
 # self-extract before the listener comes up
 for _ in $(seq 1 60); do curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1 && break; sleep 0.5; done
@@ -827,6 +827,23 @@ for i in $(seq 1 6); do
 done
 check "rate breaker trips"    'circuit breaker' "$BRK"
 check "breaker err mentions limit" 'limits 3 /' "$BRK"
+
+# ---------- foreign program squatting on the port: refuse VISIBLY ----------
+# A non-File-Bridge listener must produce a clear error + exit 1 (packaged
+# builds additionally raise a native alert — _user_alert; skipped in this
+# suite: source runs aren't frozen, and the frozen run sets NO_UI).
+kill $BRIDGE_PID 2>/dev/null || true
+wait $BRIDGE_PID 2>/dev/null || true
+for _ in $(seq 1 40); do port_bindable && break; sleep 0.25; done
+python3 -m http.server 8765 --bind 127.0.0.1 >/dev/null 2>&1 &
+SQUAT=$!
+for _ in $(seq 1 20); do port_accepting && break; sleep 0.25; done
+RC=0; OUT=$(FILE_BRIDGE_STATE_DIR="$STATEDIR" FILE_BRIDGE_NO_UI=1 \
+  $BRIDGE_CMD 2>&1) || RC=$?
+check "foreign port holder refused (exit 1)" \
+  "not a File Bridge.*(exit 1)" "$OUT (exit $RC)"
+kill $SQUAT 2>/dev/null || true
+wait $SQUAT 2>/dev/null || true
 
 echo
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ✅"; else echo "SOME TESTS FAILED ❌"; exit 1; fi

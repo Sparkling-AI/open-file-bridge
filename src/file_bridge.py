@@ -5221,6 +5221,55 @@ def _is_file_bridge_url(url: str) -> bool:
         return False
 
 
+def _user_alert(message: str, title: str = "File Bridge") -> None:
+    """Visible warning for startup aborts that would otherwise be silent.
+
+    Packaged launches (.app / windowed exe) have no console, so print()
+    only reaches state_dir/bridge.log — the user clicks the icon and
+    NOTHING happens, with the reason buried in a log they don't know
+    exists (user request 2026-08-29: warn, don't abort silently). Native,
+    best-effort, never fatal:
+      macOS   osascript dialog (always present; registered via
+              _run_dialog so a shutdown can't orphan it on screen)
+      Windows MessageBoxW through ctypes (stdlib — no GUI dep, same
+              discipline as CocoaDock)
+      Linux   notify-send / zenity / kdialog, first one installed
+    Skipped when the message is already visible on a terminal (source
+    runs), and under FILE_BRIDGE_NO_UI=1 (services must not throw modal
+    dialogs at a login screen).
+    """
+    if not getattr(sys, "frozen", False):
+        return
+    if os.environ.get("FILE_BRIDGE_NO_UI"):
+        return
+    try:
+        if _IS_WINDOWS:
+            import ctypes
+            MB_ICONWARNING, MB_SETFOREGROUND = 0x30, 0x10000
+            ctypes.windll.user32.MessageBoxW(
+                0, message, title, MB_ICONWARNING | MB_SETFOREGROUND)
+        elif sys.platform == "darwin":
+            # json.dumps produces a legal AppleScript string literal
+            # (quotes/backslashes escaped), \n included.
+            _run_dialog(["osascript", "-e",
+                         f'display dialog {json.dumps(message)} '
+                         f'with title {json.dumps(title)} '
+                         f'buttons {{"OK"}} default button "OK" '
+                         f'with icon caution'])
+        else:
+            for cmd in (["notify-send", "-a", title, message],
+                        ["zenity", "--error", f"--title={title}",
+                         f"--text={message}"],
+                        ["kdialog", "--title", title, "--error", message]):
+                try:
+                    subprocess.run(cmd, timeout=60)
+                    break
+                except (OSError, subprocess.SubprocessError):
+                    continue
+    except Exception:
+        pass   # the bridge.log line is the fallback record
+
+
 def main():
     # PyInstaller --windowed (shipped Windows exe; console=False) leaves
     # sys.stdout/sys.stderr as None on Windows when there is no console —
@@ -5237,7 +5286,11 @@ def main():
     if folder:
         p = Path(folder).expanduser().resolve()
         if not p.is_dir():
-            print(f"error: {folder} is not a folder"); sys.exit(1)
+            print(f"error: {folder} is not a folder")
+            _user_alert(f"The folder given to File Bridge does not exist:\n"
+                        f"{folder}\n\nStart File Bridge again and pick a "
+                        f"folder on its settings page.")
+            sys.exit(1)
         save_root(p)
         print(f"Sharing: {p}")
 
@@ -5338,6 +5391,11 @@ def main():
             sys.exit(0)
         print(f"error: port {PORT} is held by something that is not a File "
               f"Bridge — set FILE_BRIDGE_PORT to move the bridge elsewhere")
+        _user_alert(f"File Bridge cannot start: port {PORT} is being used "
+                    f"by another program.\n\nClose that program and start "
+                    f"File Bridge again, or move File Bridge to another "
+                    f"port (FILE_BRIDGE_PORT) and re-run "
+                    f"scripts/setup_owui.py so the skill follows.")
         sys.exit(1)
 
     socketserver.ThreadingTCPServer.allow_reuse_address = True
@@ -5348,17 +5406,28 @@ def main():
     try:
         httpd = socketserver.ThreadingTCPServer(("127.0.0.1", PORT), Handler)
     except OSError:
-        # rare race only (the probe above lost the port between checking
-        # and binding) — die politely instead of a windowed traceback
-        # dialog, and send the user to the live settings page.
-        print(f"File Bridge is already running at http://127.0.0.1:{PORT} — "
-              f"this second copy exits.")
-        if not os.environ.get("FILE_BRIDGE_NO_UI"):
-            try:
-                webbrowser.open(f"http://127.0.0.1:{PORT}")
-            except Exception:
-                pass
-        return
+        # rare race only (the port was lost between the probe and the
+        # bind): re-verify who holds it — one of ours → hand the user to
+        # the live settings page; anything else → the foreign-holder
+        # warning above, not a windowed traceback dialog.
+        url0 = f"http://127.0.0.1:{PORT}"
+        if _is_file_bridge_url(url0):
+            print(f"File Bridge is already running at {url0} — "
+                  f"this second copy exits.")
+            if not os.environ.get("FILE_BRIDGE_NO_UI"):
+                try:
+                    webbrowser.open(url0)
+                except Exception:
+                    pass
+            return
+        print(f"error: port {PORT} was taken by a non-File-Bridge program "
+              f"at bind time — set FILE_BRIDGE_PORT to move the bridge")
+        _user_alert(f"File Bridge cannot start: port {PORT} is being used "
+                    f"by another program.\n\nClose that program and start "
+                    f"File Bridge again, or move File Bridge to another "
+                    f"port (FILE_BRIDGE_PORT) and re-run "
+                    f"scripts/setup_owui.py so the skill follows.")
+        sys.exit(1)
 
     # macOS .app: Dock presence via the CocoaDock bootstrap — the server
     # moves to a daemon thread and the main thread parks in the AppKit

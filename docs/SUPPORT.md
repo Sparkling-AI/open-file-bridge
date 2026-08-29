@@ -63,7 +63,10 @@ ss -tlnp | grep 8765        # or: lsof -i :8765
    clicking the app icon again opens the running bridge's page — on
    macOS via the Dock reopen event, on Windows the second exe process
    verifies /version, opens the page, and exits 0.)
-2. **Another app holds 8765.** The bridge supports
+2. **Another app holds 8765.** Since 2.6.4 the bridge TELLS the user
+   itself: a native warning dialog (macOS/Windows; notify-send/zenity on
+   Linux) names the port and the two exits — close the other program, or
+   move ports. The bridge supports
    `FILE_BRIDGE_PORT=xxxx` env override. For the service install,
    `scripts/install_service.py` bakes the env in. Pick e.g. 8799, then
    the SKILL must match — re-run `setup_owui.py` (it patches the
