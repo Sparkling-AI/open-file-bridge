@@ -141,6 +141,28 @@ git tag v1.0.0 && git push --tags
 # → Actions → build → three artifacts ready to download
 ```
 
+**macOS artifact is signed + notarized + stapled in CI** when these repo
+secrets are set (Settings → Secrets and variables → Actions; unset = plain
+unsigned fallback build):
+
+- `MAC_SIGNING_P12` — base64 of the `.p12` export of the Developer ID
+  Application identity:
+  `security export -k login.keychain-db -t identities -f pkcs12 -P '<p12-password>' -o cert.p12`
+  then `base64 -i cert.p12 | pbcopy` (paste). One-time, from the Mac that
+  owns the key.
+- `MAC_SIGNING_PASSWORD` — the `<p12-password>` from that export.
+- `NOTARY_APPLE_ID` — the Apple ID (e.g. you@company.com).
+- `NOTARY_PASSWORD` — the notary app-specific password (same one as the
+  local `ofb-notary` profile; one app-specific password serves both).
+
+CI imports the key into a throwaway keychain, stores a notary profile
+(`ofb-notary`) there, and runs `package_macos.sh --sign`; the uploaded
+`OpenFileBridge-macos.zip` IS the distributable (verify on any Mac:
+`xcrun stapler validate` + `spctl --assess -vv`). Team ID 2N9PCQ7G5Z is
+hardcoded in the workflow (public — it's embedded in every signed binary).
+Note: this puts the company signing key in GitHub secrets — repo owner's
+call (this repo: sole owner, public, Actions free/unlimited).
+
 ## Bundling the PDF/OCR add-ons (recommended for office deployments)
 
 Two independent pieces:

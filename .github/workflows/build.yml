@@ -84,8 +84,41 @@ jobs:
           Stop-Process -Id $p.Id -Force
 
       # ---------------- macOS (onefile binary -> .app + zip) ---------------
-      - name: Build + package (macOS)
-        if: runner.os == 'macOS'
+      # Signing path: set repo secrets MAC_SIGNING_P12 (base64 of the
+      # Developer-ID .p12), MAC_SIGNING_PASSWORD, NOTARY_APPLE_ID,
+      # NOTARY_PASSWORD (the app-specific password) and every tag build is
+      # signed + notarized + stapled. Without the secrets it falls back to
+      # the unsigned flow (docs/BUILDING.md "macOS signing").
+      - name: Import signing identity + notary profile (macOS)
+        if: runner.os == 'macOS' && secrets.MAC_SIGNING_P12 != ''
+        env:
+          MAC_SIGNING_P12: ${{ secrets.MAC_SIGNING_P12 }}
+          MAC_SIGNING_PASSWORD: ${{ secrets.MAC_SIGNING_PASSWORD }}
+          NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
+          NOTARY_PASSWORD: ${{ secrets.NOTARY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          printf '%s' "$MAC_SIGNING_P12" | base64 --decode > /tmp/cert.p12
+          security create-keychain -p "$MAC_SIGNING_PASSWORD" build.keychain-db
+          security unlock-keychain -p "$MAC_SIGNING_PASSWORD" build.keychain-db
+          security import /tmp/cert.p12 -k build.keychain-db \
+            -P "$MAC_SIGNING_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple: -s \
+            -k "$MAC_SIGNING_PASSWORD" build.keychain-db
+          security list-keychains -d user -s build.keychain-db login.keychain-db
+          rm -f /tmp/cert.p12
+          xcrun notarytool store-credentials ofb-notary --keychain build.keychain-db \
+            --apple-id "$NOTARY_APPLE_ID" --team-id 2N9PCQ7G5Z \
+            --password "$NOTARY_PASSWORD"
+
+      - name: Build + package + sign + notarize (macOS)
+        if: runner.os == 'macOS' && secrets.MAC_SIGNING_P12 != ''
+        run: |
+          pyinstaller --onefile --windowed --name OpenFileBridge --noconfirm src/file_bridge.py
+          ./build/package_macos.sh --sign
+
+      - name: Build + package (macOS, unsigned fallback)
+        if: runner.os == 'macOS' && secrets.MAC_SIGNING_P12 == ''
         run: |
           pyinstaller --onefile --windowed --name OpenFileBridge --noconfirm src/file_bridge.py
           ./build/package_macos.sh

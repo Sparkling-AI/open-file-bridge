@@ -1013,3 +1013,17 @@ it for real surfaced two things worth remembering:
   --name OpenFileBridge src/file_bridge.py`; PyInstaller's BUNDLE step
   errors on a non-empty dist/OpenFileBridge.app — harmless, package_macos.sh
   wipes + reassembles it anyway).
+
+## CI signing (2026-08-30, same day)
+
+Dandan opted for full CI signing (repo is PUBLIC → Actions free/unlimited,
+sole owner → secrets risk surface acceptable). build.yml mac job now: if
+secret MAC_SIGNING_P12 set → import .p12 into throwaway build.keychain-db
+(set-key-partition-list makes codesign non-interactive — the local
+one-click-per-login-session nuisance does NOT exist on runners), store
+notary profile ofb-notary into that keychain, run package_macos.sh --sign;
+unset secret = old unsigned fallback. Secrets: MAC_SIGNING_P12 (base64 p12),
+MAC_SIGNING_PASSWORD, NOTARY_APPLE_ID, NOTARY_PASSWORD. Team ID hardcoded
+(public in every signed binary). CI mac builds freeze pymupdf (pdf:true —
+pip env at analysis time; local uv builds don't → pdf:false locally only).
+Verify CI artifacts on any Mac: stapler validate + spctl.
