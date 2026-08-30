@@ -170,6 +170,45 @@ Then:
 Full walkthrough incl. permission prompts and troubleshooting:
 [docs/user-guide.md](docs/user-guide.md).
 
+### Solo setup (no admin staging — private skill + your own app)
+
+If your org hasn't staged a public skill and presets — or you're on a
+server where you're just a regular user — you can run the whole thing
+yourself. Your skill stays **private to you** (colleagues can't even see
+it, let alone read a token embedded in it — verified on current builds:
+a private skill is invisible to other users in the skill list).
+
+**One-time ask to your OWUI admin** (regular users can't create skills
+by default — the *Workspace → Skills* permission is off unless granted):
+"please enable **Skills** (and ideally **Models**) creation for users"
+— Admin Panel → Settings → Users & Permissions → Workspace. It's two
+checkboxes, no staging on their side.
+
+Then:
+
+1. **Get the app** yourself: download a build from the repo's releases
+   (Actions artifacts on any `v*` tag) or run from source
+   (`python3 src/file_bridge.py <folder>`).
+2. **Create a private skill** — your OWUI *Workspace → Skills → Create*:
+   paste `SKILL.md` (keep it private — visibility stays "only me").
+   In the bootstrap block, set **your personal token**:
+   `BRIDGE_HEADERS = {"Content-Type": "application/json", "X-Bridge-Token": "<your-token>"}`
+   — with a private skill this token is visible to you alone, which is
+   strictly better security than the shared org-token pattern.
+3. **Bridge side**: launch the app, pick your folder, paste the same
+   token in settings (🔒 Security → *Generate random token* gives you
+   one; or use its value in the skill).
+4. **Chat with any code-capable model**: enable the **Code Interpreter**
+   toggle in the chat feature bar and `$`-mention your private skill
+   (e.g. `$my-open-file-bridge`) — or if user model creation is enabled,
+   build your own preset with the interpreter + skill attached and skip
+   the per-chat toggling.
+
+Why this works: the bridge runs on *your* machine and only ever checks
+the token — it doesn't care who published the skill. Solo mode trades
+the org preset's convenience for zero admin staging and a token nobody
+else can read.
+
 ## Verified results
 
 Real-browser chat runs, asserting the file **actually lands on disk**
