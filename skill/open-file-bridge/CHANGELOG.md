@@ -2,6 +2,16 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.8.1 — 2026-08-30
+
+Versioning policy change (no functional skill changes): skill and app
+versions are now DECOUPLED. The skill states a one-way minimum bridge
+version ("Requires bridge ≥ 2.5" at the top; bootstrap warns only when
+the bridge is OLDER — newer bridges never warn). `/version` on the app
+now reports `skill_min` instead of the old self-comparing
+`skill`/`skill_expected` pair. App patches (2.8.1, 2.8.2…) no longer
+touch the skill.
+
 ## 2.8 — 2026-08-30
 
 Data analysis on local tabular files (pandas / matplotlib).

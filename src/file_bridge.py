@@ -54,8 +54,17 @@ MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
-VERSION = "2.8"
-SKILL_VERSION = "2.8"   # keep in sync with skill/open-file-bridge/SKILL.md
+# Versioning policy (see docs/DEVNOTES.md "Versioning"):
+#   VERSION      — the APP, free semver: bump patch for fixes, minor for
+#                  endpoints/features. Moves independently of the skill.
+#   SKILL_MIN    — the OLDEST bridge the current skill/open-file-bridge
+#                  text works against. One-way floor (never equality):
+#                  the skill declares its minimum; newer bridges are
+#                  always fine (API is backward-compatible). Bump only
+#                  when the skill starts referencing an endpoint that
+#                  didn't exist in older bridges.
+VERSION = "2.8.1"
+SKILL_MIN = "2.5"
 
 
 # ------------------------------------------- risk classes (P3, openworker risk.py)
@@ -3425,14 +3434,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self._json(200, info)
 
         if u.path == "/version":
-            # token-free like /health: just versions, no fs info. Skill 2.4+
-            # reads the version from /health instead (one fewer round trip);
-            # /version stays for older skills and manual debugging.
-            return self._json(200, {"bridge": VERSION, "skill": SKILL_VERSION,
-                                    "skill_expected": SKILL_VERSION,
-                                    "note": "bridge and skill versions should "
-                                            "match; re-run scripts/setup_owui.py "
-                                            "to sync the skill"})
+            # token-free like /health: just versions, no fs info. Skills
+            # read the version from /health; /version stays for manual
+            # debugging. One-way floor only (see versioning policy at the
+            # top of this file): the bridge reports the oldest skill it
+            # supports — it CANNOT see which skill an org installed (the
+            # skill lives in Open WebUI on the server), so there is no
+            # equality check here by design. Compatibility is checked by
+            # the skill side at bootstrap: skill states its minimum
+            # bridge; newer bridges are always fine.
+            return self._json(200, {"bridge": VERSION, "skill_min": SKILL_MIN,
+                                    "note": "skills older than skill_min may "
+                                            "miss endpoints; update the skill "
+                                            "via scripts/setup_owui.py"})
 
         if u.path == "/api/preview":
             # LOCAL picker preview ("What the AI can see") — loopback-only

@@ -1040,3 +1040,33 @@ Verify CI artifacts on any Mac: stapler validate + spctl.
   spctl+entitlements) and booted on port 8999: v2.8, pdf:true (CI freezes
   pymupdf), 22 langs. CI zip = 73MB (vs 51 local) — the CI artifact is the
   better release build.
+
+## Versioning (policy, 2026-08-30 — read before bumping anything)
+
+App and skill versions are DECOUPLED (one-way floor, never lockstep):
+
+- `VERSION` (src/file_bridge.py) — the APP. Free semver: patch for fixes
+  (picker tweaks, CI), minor for new endpoints/features. Bumps freely
+  with NO skill change. Historical note: 2.7→2.7.1→2.7.2 already did
+  this before the policy was written down.
+- Skill version (`skill/open-file-bridge/SKILL.md` title +
+  CHANGELOG.md) — moves ONLY when the skill TEXT changes. Independent
+  of app releases.
+- `SKILL_MIN` (src/file_bridge.py) — the OLDEST bridge the current
+  skill text works against. Bump ONLY when the skill starts using an
+  endpoint that didn't exist before. Currently 2.5.
+- The bridge CANNOT see which skill an org installed (the skill lives
+  in Open WebUI server-side) — therefore /version has NO equality
+  check BY DESIGN. It reports `skill_min` informationally. The REAL
+  compatibility check is model-side at bootstrap: skill states its
+  minimum, compares /health.version, warns only when the BRIDGE is
+  older. Newer bridges never warn (API backward-compat is an invariant
+  guarded by the e2e suite).
+- setup_owui.py is the sync tool (always installs the repo's current
+  skill text); drift is handled by the model-side floor check above.
+
+Why: equality semantics produced nagging on every harmless app patch
+bump while being structurally unable to detect actual drift (it
+compared the bridge's own embedded constant with itself). This is the
+standard pattern (VS Code engines.vscode, WordPress "requires at
+least").

@@ -49,9 +49,10 @@ UNIFIED_DESC = (
     "in this sandbox are LOST and INVISIBLE to the user; claiming "
     "success without a bridge response is a failure.")
 SKILL_DIR = "skill/open-file-bridge"
-# keep in sync with VERSION/SKILL_VERSION in src/file_bridge.py and the
-# skill folder's CHANGELOG.md
-SKILL_VERSION = "2.8"
+# Skill version (own line: moves only when skill TEXT changes, independent
+# of the app VERSION — see docs/DEVNOTES.md "Versioning"). Keep in sync
+# with the skill folder's CHANGELOG.md.
+SKILL_VERSION = "2.8.1"
 REPO = Path(__file__).resolve().parent.parent
 
 
