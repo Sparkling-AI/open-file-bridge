@@ -1027,3 +1027,16 @@ MAC_SIGNING_PASSWORD, NOTARY_APPLE_ID, NOTARY_PASSWORD. Team ID hardcoded
 (public in every signed binary). CI mac builds freeze pymupdf (pdf:true —
 pip env at analysis time; local uv builds don't → pdf:false locally only).
 Verify CI artifacts on any Mac: stapler validate + spctl.
+- CI-signing ACTIVATION (same evening, green on v-ci-sign-test-4 = b7e8cb7):
+  three fixes en route — (1) `secrets` context is NOT allowed in step `if:`
+  (GitHub rejects the whole workflow at validation, runs die in 0s with no
+  job logs) → map secrets to job-level env, test `env.X != ''`; (2) notarytool
+  `--keychain` takes a FILE PATH (\$HOME/Library/Keychains/build.keychain-db),
+  unlike `security` cmds which accept names; (3) the p12 password is ONLY the
+  `-P` value from export (not Mac login, not Apple ID) — regen with a simple
+  one + local `security import` probe before touching secrets. Verified:
+  run 33324836317 all-3-OS green, mac log shows Accepted → stapled → spctl
+  Notarized Developer ID; downloaded artifact re-verified locally (stapler+
+  spctl+entitlements) and booted on port 8999: v2.8, pdf:true (CI freezes
+  pymupdf), 22 langs. CI zip = 73MB (vs 51 local) — the CI artifact is the
+  better release build.
