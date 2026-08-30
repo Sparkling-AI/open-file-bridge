@@ -1,5 +1,6 @@
 <p align="center">
-  <img src="docs/brand/icon-512.png" width="160" alt="Open File Bridge logo" />
+  <img src="docs/brand/readme-banner.png" width="800"
+       alt="Open File Bridge — turn Open WebUI into a coworker: share team knowledge, access private files, create files locally" />
 </p>
 
 # Open File Bridge
