@@ -11,11 +11,11 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: FileBridge-windows-x64
+            artifact: OpenFileBridge-windows-x64
           - os: macos-latest
-            artifact: FileBridge-macos
+            artifact: OpenFileBridge-macos
           - os: ubuntu-latest
-            artifact: FileBridge-linux
+            artifact: OpenFileBridge-linux
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -35,14 +35,14 @@ jobs:
         working-directory: build
         # spec paths are CWD-relative (../src), so run from build/ but emit
         # to the repo-root dist/ the smoke test and installer expect
-        run: pyinstaller --noconfirm --distpath ../dist file_bridge_windows.spec
+        run: pyinstaller --noconfirm --distpath ../dist open_file_bridge_windows.spec
 
       - name: Bundle frozen assets (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          Copy-Item -Recurse src\wheels dist\FileBridge\wheels
-          Copy-Item -Recurse src\tessdata dist\FileBridge\tessdata
+          Copy-Item -Recurse src\wheels dist\OpenFileBridge\wheels
+          Copy-Item -Recurse src\tessdata dist\OpenFileBridge\tessdata
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
@@ -52,7 +52,7 @@ jobs:
           $share = "$env:RUNNER_TEMP\fbshare"
           New-Item -ItemType Directory -Force $share | Out-Null
           "hello from ci" | Out-File "$share\notes.txt"
-          $p = Start-Process -PassThru -FilePath "dist\FileBridge\FileBridge.exe" -ArgumentList $share `
+          $p = Start-Process -PassThru -FilePath "dist\OpenFileBridge\OpenFileBridge.exe" -ArgumentList $share `
             -RedirectStandardError "$env:RUNNER_TEMP\fb-stderr.txt" `
             -RedirectStandardOutput "$env:RUNNER_TEMP\fb-stdout.txt"
           $health = $null
@@ -87,7 +87,7 @@ jobs:
       - name: Build + package (macOS)
         if: runner.os == 'macOS'
         run: |
-          pyinstaller --onefile --windowed --name FileBridge --noconfirm src/file_bridge.py
+          pyinstaller --onefile --windowed --name OpenFileBridge --noconfirm src/file_bridge.py
           ./build/package_macos.sh
 
       - name: Smoke test (macOS)
@@ -95,7 +95,7 @@ jobs:
         run: |
           SHARE="$RUNNER_TEMP/fbshare"; mkdir -p "$SHARE"; echo "hello from ci" > "$SHARE/notes.txt"
           FILE_BRIDGE_STATE_DIR="$RUNNER_TEMP/fbstate" \
-            dist/FileBridge.app/Contents/MacOS/FileBridge "$SHARE" &
+            dist/OpenFileBridge.app/Contents/MacOS/OpenFileBridge "$SHARE" &
           BP=$!
           for _ in $(seq 1 40); do curl -sf -m 2 http://127.0.0.1:8765/health >/dev/null && break; sleep 1; done
           H=$(curl -sf -m 2 http://127.0.0.1:8765/health) || { echo "bridge did not come up"; kill $BP; exit 1; }
@@ -109,13 +109,13 @@ jobs:
       # ---------------- Linux (onefile console binary) ----------------------
       - name: Build (Linux)
         if: runner.os == 'Linux'
-        run: pyinstaller --onefile --name FileBridge --noconfirm src/file_bridge.py
+        run: pyinstaller --onefile --name OpenFileBridge --noconfirm src/file_bridge.py
 
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
         run: |
-          FILE_BRIDGE_STATE_DIR="$RUNNER_TEMP/fbstate" ./dist/FileBridge /tmp &
-          sleep 2
+          FILE_BRIDGE_STATE_DIR="$RUNNER_TEMP/fbstate" ./dist/OpenFileBridge /tmp &
+          for _ in $(seq 1 20); do curl -sf -m 2 http://127.0.0.1:8765/health >/dev/null && break; sleep 1; done
           curl -sf http://127.0.0.1:8765/health
           kill %1
 
@@ -124,7 +124,7 @@ jobs:
         with:
           name: ${{ matrix.artifact }}
           path: |
-            dist/FileBridge/
-            dist/FileBridge
-            FileBridge-macos.zip
+            dist/OpenFileBridge/
+            dist/OpenFileBridge
+            OpenFileBridge-macos.zip
           if-no-files-found: error
