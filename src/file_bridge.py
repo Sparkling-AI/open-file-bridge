@@ -54,7 +54,7 @@ MAX_LIST = 500
 MAX_READ = 200_000      # chars (text)
 MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 
-VERSION = "2.7"
+VERSION = "2.8"
 SKILL_VERSION = "2.8"   # keep in sync with skill/open-file-bridge/SKILL.md
 
 
