@@ -3,7 +3,10 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v2.8
+# Local File Bridge — skill v2.8.1
+
+> Requires bridge ≥ **2.5** (checked at bootstrap below; newer bridges are
+> always fine — the API is backward-compatible).
 
 Access files in **the user's own computer** through their local Open File Bridge service (running at `http://127.0.0.1:8765`). The user has explicitly installed and authorized this — files NEVER pass through the Open WebUI server; all access happens from the user's browser via the Code Interpreter (Pyodide), which runs on the user's machine.
 
@@ -104,9 +107,14 @@ or writing somewhere else.
 token required. One call answers everything: bridge running, `version`,
 `security` mode, `addons`. If the fetch itself fails, the bridge isn't
 running — tell the user and stop (do not retry more than once). Version
-rule: if `bridge` is OLDER than this skill (v2.5), mention once that some
-endpoints may be missing; newer bridges are fine. There is no separate
-version-check step.
+rule (one-way floor, no lockstep): if the bridge `version` is OLDER than
+**2.5** (this skill's minimum), say once: "your Open File Bridge app is
+older than this skill — some endpoints may be missing; updating the app
+is recommended" — then continue with what works. Newer bridge versions
+are always fine; never warn about them. If the bridge is MUCH newer than
+this skill (e.g. a whole minor version), optionally suggest the admin
+re-run `scripts/setup_owui.py` to refresh the skill — a hint, not a
+warning.
 
 **Headers:** send `BRIDGE_HEADERS` on EVERY call — GETs included, not just
 POSTs. If an org-token block was injected at the top of this skill, it has
