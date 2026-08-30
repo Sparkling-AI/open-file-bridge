@@ -1040,6 +1040,16 @@ Verify CI artifacts on any Mac: stapler validate + spctl.
   spctl+entitlements) and booted on port 8999: v2.8, pdf:true (CI freezes
   pymupdf), 22 langs. CI zip = 73MB (vs 51 local) — the CI artifact is the
   better release build.
+- CI actions Node-24 bump (2026-08-30, same day): run 33326737436 (v2.8.1)
+  warned "Node.js 20 is deprecated … forced to run on Node 24" for
+  checkout@v4, setup-python@v5, upload-artifact@v4. Fixed: checkout v4→v5,
+  setup-python v5→v6, upload-artifact v4→v6 (v6 is the first upload-artifact
+  major that DEFAULTS to node24 — v5 still ran node20 by default per its own
+  v6 release notes; verified runs.using: node24 in each tag's action.yml).
+  None of the majors' breaking changes touch this workflow (tag/dispatch
+  triggers only — no PR checkout; python-version input unchanged; artifact
+  upload uses name/path/if-no-files-found only). Proven green via
+  workflow_dispatch run on master after push.
 
 ## Versioning (policy, 2026-08-30 — read before bumping anything)
 
