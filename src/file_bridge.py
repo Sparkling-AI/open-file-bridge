@@ -652,9 +652,18 @@ def pdf_op(op: str, srcs: list, out: Path, out_root: Path, spec: str,
 def _app_dir() -> Path:
     """Directory where the app's bundled assets live (wheels/, tessdata/,
     tesseract/). Under PyInstaller --onefile, __file__ points into a throwaway
-    extraction dir, so frozen apps must use the executable's directory."""
+    extraction dir, so frozen apps must use the executable's directory.
+    Exception: inside a macOS .app bundle the assets live in
+    Contents/Resources/ — codesign treats every file in Contents/MacOS/ as
+    code, so data files next to the executable make Developer-ID signing
+    (and thus notarization) fail."""
     if getattr(sys, "frozen", False):
-        return Path(sys.executable).resolve().parent
+        exe_dir = Path(sys.executable).resolve().parent
+        if exe_dir.name == "MacOS" and exe_dir.parent.name == "Contents":
+            res = exe_dir.parent / "Resources"
+            if any((res / n).exists() for n in ("wheels", "tessdata", "tesseract")):
+                return res
+        return exe_dir
     return Path(__file__).resolve().parent
 
 
@@ -2574,8 +2583,7 @@ def _soffice_bin() -> str | None:
     cands = []
     if os.environ.get("SOFFICE_CMD"):
         cands.append(os.environ["SOFFICE_CMD"])
-    here = Path(sys.executable).parent if getattr(sys, "frozen", False) \
-        else Path(__file__).resolve().parent
+    here = _app_dir()
     cands += [here / "soffice",
               here / "libreoffice" / "program" / "soffice",
               Path("/usr/bin/soffice"), Path("/usr/local/bin/soffice"),

@@ -940,3 +940,76 @@ reveal the stored token.
   orphans were killed). Fixes: trap now uses ${BRIDGE_PID:-} ${SQUAT:-};
   the fitz heredoc fails ONE check with the canonical-invocation hint
   (uv run --with pymupdf,rapidocr-onnxruntime) instead of aborting.
+
+## 2.8 macOS code signing + notarization (2026-08-30)
+
+First real Developer-ID signing (Sparkling AI AB org account; Dandan did
+the portal setup). `package_macos.sh --sign` was an untested stub — running
+it for real surfaced two things worth remembering:
+
+- **Data files CANNOT live in Contents/MacOS/.** codesign treats every file
+  in MacOS/ as code (bundle layout rule: that dir holds executables), so
+  tessdata/kor.traineddata made it fail with "code object is not signed at
+  all / In subcomponent". Old layout shipped wheels/+tessdata next to the
+  binary; they now go to Contents/Resources/ and `_app_dir()` (src) prefers
+  Resources when frozen inside a bundle that has assets there (exe-dir
+  fallback kept: bare onefile, Windows, CI artifacts). `_soffice_bin()`
+  reuses `_app_dir()` now instead of its own inline exe-dir logic. Binary
+  must be REBUILT after touching that function — the frozen app embeds it.
+  Build env on this Mac: `uv run --with pyinstaller pyinstaller --onefile
+  --windowed --name OpenFileBridge src/file_bridge.py` (no system
+  pyinstaller installed).
+- **Old script's sign block was wrong in three ways**: no `--options
+  runtime --timestamp` (both REQUIRED for notarization — hardened runtime +
+  secure secure timestamp), `xcrun staple` (the tool is `xcrun stapler
+  staple`), and it zipped BEFORE stapling so the shipped zip lacked the
+  ticket. Fixed flow: sign → verify → ditto zip → notarytool submit --wait
+  → stapler staple+validate → spctl → RE-zip the stapled app; that final
+  zip is the distributable. `--deep` dropped: onefile bundle has exactly
+  one Mach-O (tessdata/wheels are data, sealed via CodeResources).
+- Credentials on this Mac: keychain cert `Developer ID Application:
+  Sparkling AI AB (2N9PCQ7G5Z)`; notary profile `ofb-notary` (Apple-side
+  app-specific-password label `notarytool-open-file-bridge` — the label is
+  never used in commands). This CLT's notarytool has NO
+  `store-credentials --list`; probe with `xcrun notarytool history
+  --keychain-profile NAME` ("No submission history" = profile works).
+  Identity check: `security find-identity -v -p codesigning`.
+- PyInstaller deprecation warning (v7 will error): onefile + windowed .app
+  "clashes with macOS security" — onedir migration is the eventual answer;
+  fine for now (the stdlib-only binary is a single Mach-O, signs+notarizes
+  cleanly).
+- CFBundleVersion now stamped from src VERSION (was hardcoded 1.0.0);
+  Finder Get Info shows it.
+- **Notarization does NOT run the app.** The first notarized zip was
+  runtime-broken and still Accepted — Apple scans signatures/structure only.
+  Our launch check (below) is the functional gate; never skip it after a
+  signing change. What was broken: hardened runtime enables library
+  validation; the onefile bootloader extracts ad-hoc-signed
+  libpython3.12.dylib to /var/folders at startup; on arm64 dyld rejects it
+  ("mapping process and mapped file (non-platform) have different Team
+  IDs") and the app dies BEFORE any Python log line (only a bare `open`
+  that never comes up + no crash report — run the bundle binary directly
+  to see the PYI error). Fix: `build/entitlements.mac.plist` with
+  com.apple.security.cs.disable-library-validation, passed to codesign via
+  `--entitlements`. GOTCHA: AMFI's entitlements parser rejects XML comments
+  ("AMFIUnserializeXML: syntax error") — keep the file comment-free.
+  Long-term alternative: onedir mode + sign everything with our identity.
+- **Keychain prompts recur.** "Always Allow" on the codesign key-use dialog
+  is per... not always persistent: signing hung again on a later run
+  (SecKeyCreateSignature stuck in mach_msg — `sample <pid>` shows it).
+  Expect up to one click/prompt per login session before `--sign` works;
+  if a run hangs at "replacing existing signature" >2 min, look for the
+  dialog. Unsandboxed Terminal runs surface the dialog more reliably.
+- End-to-end verified (2.8, submission 77ec8254): notary Accepted,
+  stapler validate + spctl (source=Notarized Developer ID) pass on the
+  app EXTRACTED FROM the shipped zip; launched app serves v2.8 with
+  wheels:8 + 22 OCR langs from Resources. `addons.pdf:false` is CORRECT
+  for frozen builds (pymupdf = optional pip add-on, source runs only).
+  Cosmetic: "timestamp mismatch (N seconds apart)" from codesign -d when
+  the keychain wait delayed signing (CD built at start, timestamp at
+  click) — Gatekeeper verdict (spctl) is the authoritative check.
+- Rebuilt binary is REQUIRED after touching `_app_dir()` — the frozen app
+  embeds it (`uv run --with pyinstaller pyinstaller --onefile --windowed
+  --name OpenFileBridge src/file_bridge.py`; PyInstaller's BUNDLE step
+  errors on a non-empty dist/OpenFileBridge.app — harmless, package_macos.sh
+  wipes + reassembles it anyway).

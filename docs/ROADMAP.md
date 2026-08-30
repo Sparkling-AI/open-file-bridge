@@ -333,14 +333,12 @@ final validation pass (not after every change). Do not block on either.
 
 ## P3 — Optional / bigger bets
 
-☐ Signing decisions per feedback matrix — SKIPPED (user decision
-   2026-08-28, business call; revisit when external distribution
-   demands it):
-   - internal AD: internal CA or GPO whitelist (free)
-   - external: Windows OV ~$100-200/yr (EV ~$400 for zero friction);
-     macOS Apple Dev ID $99/yr + notarize (`package_macos.sh --sign` ready)
-   - Unsigned IS installable on both (SmartScreen "more info→run anyway";
-     macOS right-click→open) — docs/SUPPORT.md now covers the flows.
+☐ Signing decisions per feedback matrix — macOS half DONE (2026-08-30,
+   Sparkling AI AB org account): Developer ID signing + notarization +
+   stapling live-verified via `package_macos.sh --sign` (details in
+   DEVNOTES/BUILDING); users double-click, no Gatekeeper dance. Remaining:
+   - Windows EV cert + `signtool` (SmartScreen "more info→run anyway" flow
+     still documented in docs/SUPPORT.md until then)
 ✅ LibreOffice headless conversion — `/convert` (fe2535a): _CONV_MATRIX
    whitelist (legacy .doc/.xls/.ppt → OOXML, office → pdf, xlsx → csv,
    docx → png/html); model picks a FORMAT PAIR, never a command;
