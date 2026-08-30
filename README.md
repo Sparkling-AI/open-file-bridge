@@ -10,11 +10,11 @@ the document work done on your own machine.**
 
 What that means:
 
-- **Shared knowledge** — your org's workspace knowledge stays in Open
+- **Share team knowledge** — your org's workspace knowledge stays in Open
   WebUI, server-side, exactly as it is today
-- **Private files** — each user opens one folder of their own machine to
-  the chat; files never touch the server
-- **Local heavy lifting** — Word/Excel/PowerPoint/PDF creation, format
+- **Access private files** — each user opens one folder of their own
+  machine to the chat; files never touch the server
+- **Create files locally** — Word/Excel/PowerPoint/PDF creation, format
   conversion and OCR all run on the user's machine, so file work scales
   with users, not your server
 
