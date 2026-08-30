@@ -6,7 +6,8 @@
 #   bash scripts/rebuild_testenv.sh --no-owui # bridge fixtures only
 #
 # Brings up:
-#   1. Open WebUI v0.11.x container on 127.0.0.1:8788 (admin/REMOVED)
+#   1. Open WebUI v0.11.x container on 127.0.0.1:8788
+#      (admin@test.local; password auto-generated per machine — see below)
 #      + model connection (Z.AI via ~/.hermes/.env GLM_API_KEY)
 #      + public skill + Local Files Assistant preset (via setup_owui.py)
 #   2. Test fixture folder /tmp/owui-demo-files with txt/pdf/scans/office files
@@ -21,6 +22,19 @@ OWUI_PORT=8788
 OWUI_CONTAINER=owui-test
 FIXDIR=/tmp/owui-demo-files
 TESS=~/tools/tesseract-5.3.4
+
+# Admin password: generated ONCE per machine and persisted OUTSIDE the repo
+# (never committed). Override location with OWUI_PASS_FILE.
+PASS_FILE="${OWUI_PASS_FILE:-$HOME/.config/open-file-bridge/testenv-pass}"
+if [[ -s "$PASS_FILE" ]]; then
+  OWUI_PASS=$(<"$PASS_FILE")
+else
+  OWUI_PASS=$(python3 -c 'import secrets; print(secrets.token_urlsafe(12))')
+  mkdir -p "$(dirname "$PASS_FILE")"
+  chmod 700 "$(dirname "$PASS_FILE")" 2>/dev/null || true
+  printf '%s' "$OWUI_PASS" > "$PASS_FILE"
+  chmod 600 "$PASS_FILE"
+fi
 
 say() { echo -e "\e[1;36m[rebuild]\e[0m $*"; }
 
@@ -110,14 +124,14 @@ else
   # admin account (first-run creates; later runs just sign in)
   curl -s -X POST "http://127.0.0.1:$OWUI_PORT/api/v1/auths/signup" \
     -H 'Content-Type: application/json' \
-    -d '{"name":"Admin","email":"admin@test.local","password":"REMOVED"}' >/dev/null || true
+    -d "{\"name\":\"Admin\",\"email\":\"admin@test.local\",\"password\":\"$OWUI_PASS\"}" >/dev/null || true
 
   # model connection: needs GLM_API_KEY (Z.AI coding endpoint)
   GLM_KEY=$(grep '^GLM_API_KEY=' ~/.hermes/.env 2>/dev/null | head -1 | cut -d= -f2 || true)
   if [ -n "$GLM_KEY" ]; then
     TOK=$(curl -s -X POST "http://127.0.0.1:$OWUI_PORT/api/v1/auths/signin" \
       -H 'Content-Type: application/json' \
-      -d '{"email":"admin@test.local","password":"REMOVED"}' | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
+      -d "{\"email\":\"admin@test.local\",\"password\":\"$OWUI_PASS\"}" | python3 -c 'import json,sys;print(json.load(sys.stdin)["token"])')
     curl -s -X POST "http://127.0.0.1:$OWUI_PORT/openai/config/update" \
       -H "Authorization: Bearer $TOK" -H 'Content-Type: application/json' \
       -d "{\"ENABLE_OPENAI_API\":true,\"OPENAI_API_BASE_URLS\":[\"https://api.z.ai/api/coding/paas/v4\"],\"OPENAI_API_KEYS\":[\"$GLM_KEY\"],\"OPENAI_API_CONFIGS\":{}}" >/dev/null
@@ -127,12 +141,12 @@ else
   fi
 
   python3 scripts/setup_owui.py --url "http://127.0.0.1:$OWUI_PORT" \
-    --email admin@test.local --password REMOVED \
+    --email admin@test.local --password "$OWUI_PASS" \
     --base-model glm-5.3-flash
 fi
 
 say "environment ready:"
-echo "  OWUI:        http://127.0.0.1:8788  (admin@test.local / REMOVED)"
+echo "  OWUI:        http://127.0.0.1:8788  (admin@test.local / password: $PASS_FILE)"
 echo "  fixtures:    $FIXDIR"
 echo "  tesseract:   ~/tools/tesseract-5.3.4"
 echo ""

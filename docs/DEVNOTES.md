@@ -9,7 +9,10 @@ Add every new gotcha here, not to memory.
   fixtures + model connection + skill/preset). `--no-owui` skips the docker
   part. Idempotent.
 - OWUI test instance: docker `owui-test` on `127.0.0.1:8788`,
-  admin@test.local / REMOVED. Image `ghcr.io/open-webui/open-webui:main`
+  admin@test.local. Password NOT hardcoded anymore: rebuild_testenv.sh
+  generates a per-machine random one, kept at
+  `~/.config/open-file-bridge/testenv-pass` (600, outside the repo).
+  Image `ghcr.io/open-webui/open-webui:main`
   (v0.11.x). Volume `owui-test-data` persists accounts/skill/preset across
   container restarts, NOT across `docker rm` + fresh volume.
 - Model backend: Z.AI coding endpoint `https://api.z.ai/api/coding/paas/v4`
@@ -65,8 +68,10 @@ Add every new gotcha here, not to memory.
   `~/.cache/ms-playwright/chromium_headless_shell-1234/chrome-headless-shell-linux64/chrome-headless-shell`
   (pip playwright lives in the ComfyUI venv — just `python3` works).
 - Cross-origin test page server: `python3 -m http.server 8899 --bind
-  LAN_IP_REMOVED` from a dir containing `test_page.html` (page loads Pyodide
+  <LAN-IP>` from a dir containing `test_page.html` (page loads Pyodide
   0.26.4 from jsdelivr; `--allow-local-network-access` flag needed).
+  (LAN IP deliberately not written down — it's in the machine's network
+  config, not in this public repo.)
 - micropip in bare Pyodide needs explicit `await py.loadPackage("micropip")`
   (OWUI's worker preloads it; standalone test pages don't).
 - fpdf2 in Pyodide needs the HTTPSHandler/HTTPSConnection stub shim (in skill).
