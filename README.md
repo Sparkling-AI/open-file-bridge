@@ -1,12 +1,27 @@
+<p align="center">
+  <img src="docs/brand/icon-512.png" width="160" alt="Open File Bridge logo" />
+</p>
+
 # Open File Bridge
 
-**Let AI chat assistants read & write files on the user's own computer —
-without any file ever touching your server.**
+**Turn [Open WebUI](https://github.com/open-webui/open-webui) into a
+coworker — with your team's shared knowledge, your private files, and all
+the document work done on your own machine.**
 
-Built and verified against [Open WebUI](https://github.com/open-webui/open-webui),
-but the bridge itself is a generic, localhost file API: any agent system whose
-generated code executes **in the user's browser** (or on the user's machine)
-can use it.
+What that means:
+
+- **Shared knowledge** — your org's workspace knowledge stays in Open
+  WebUI, server-side, exactly as it is today
+- **Private files** — each user opens one folder of their own machine to
+  the chat; files never touch the server
+- **Local heavy lifting** — Word/Excel/PowerPoint/PDF creation, format
+  conversion and OCR all run on the user's machine, so file work scales
+  with users, not your server
+
+Built for and verified against Open WebUI (0.10.x and 0.11.x). Under the
+hood it's a generic, localhost file API: any AI system whose generated
+code runs **in the user's browser** (or on the user's machine) can use
+it too.
 
 ```
 User: "read notes.txt in my folder"
