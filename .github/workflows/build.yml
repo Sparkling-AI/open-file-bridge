@@ -109,7 +109,9 @@ jobs:
             -k "$MAC_SIGNING_PASSWORD" build.keychain-db
           security list-keychains -d user -s build.keychain-db login.keychain-db
           rm -f /tmp/cert.p12
-          xcrun notarytool store-credentials ofb-notary --keychain build.keychain-db \
+          # notarytool's --keychain wants a PATH (security cmds take names)
+          xcrun notarytool store-credentials ofb-notary \
+            --keychain "$HOME/Library/Keychains/build.keychain-db" \
             --apple-id "$NOTARY_APPLE_ID" --team-id 2N9PCQ7G5Z \
             --password "$NOTARY_PASSWORD"
 
