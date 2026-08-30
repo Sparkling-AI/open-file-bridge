@@ -101,18 +101,34 @@ by hand in the Open WebUI UI:
    packages for all three OSes (grab them from the release's Actions
    artifacts): Windows zip/installer, macOS `.app` zip, Linux binary — or
    users run from source with `python3 src/file_bridge.py <folder>`
-   (zero pip dependencies). Decide the **auth tier** up front (current
-   Open WebUI builds need token mode — see
-   [admin-guide](docs/admin-guide.md)) and hand users their org token if
-   you use one.
-4. Sanity-check the result as a user (checklist below).
+   (zero pip dependencies).
+4. **Set up the access token (required on current Open WebUI builds)** —
+   the sandboxed interpreter sends `Origin: null`, so tier-1 origin lock
+   alone can't work; users need a token. Recommended org pattern:
+   - Generate one org token (any strong random string), then **edit the
+     skill you published in step 1** and set it in the bootstrap block:
+     `BRIDGE_HEADERS = {"Content-Type": "application/json", "X-Bridge-Token": "<org-token>"}`
+     (the setup script does this for you with `--bridge-token <secret>`)
+   - **Distribute the token to users** over a channel appropriate for an
+     org-wide credential (not a public wiki) — each user pastes it once
+     into their bridge's settings page (🔒 Security → token)
+   - Everyone in the org can read the token from the public skill body —
+     that's by design: it's a company-boundary credential (stops local
+     malware and other websites from using the bridge), not a secret
+     from colleagues. Avoid this pattern if your OWUI has guest/external
+     accounts; prefer per-user tokens then (each user generates their
+     own — see [admin-guide](docs/admin-guide.md#one-time-setup)).
+   - **Rotating**: paste a new token into the skill (or re-run the script
+     with a new `--bridge-token`) and tell users to re-paste.
+5. Sanity-check the result as a user (checklist below).
 
-Scripted shortcut for steps 1–2 (idempotent, same REST calls, no code
-changes to Open WebUI):
+Scripted shortcut for steps 1–2 and the token embedding in 4 (idempotent,
+same REST calls, no code changes to Open WebUI):
 
 ```bash
 python3 scripts/setup_owui.py --url http://your-owui:8080 \
-    --email admin@… --password '…' --base-model glm-5.3-flash
+    --email admin@… --password '…' --base-model glm-5.3-flash \
+    --bridge-token '<org-token>'
 # weaker models (they wander into the sandbox instead of the bridge)?
 # add a strict-variant preset with fixed recipes + verify-after-write:
 python3 scripts/setup_owui.py … --variant-strict-model glm-4.5-air
@@ -127,6 +143,8 @@ Preconditions — confirm these before anything else:
 - [ ] **Allowed by your admin**: a local-files assistant model appears in
       your model list (usually "Local Files Assistant") — that means the
       skill is published and Code Interpreter pre-enabled for you
+- [ ] **The org token from your admin** (if your org uses one): you'll
+      paste it into the app once — request it if you weren't given it
 - [ ] **The app**: download Open File Bridge for your OS from the
       releases your admin points you to (or run from source — no install)
 - [ ] **Browser**: Chrome, Edge or Firefox — *not* Safari (it blocks the
@@ -136,9 +154,11 @@ Then:
 
 1. **Install & launch the app**, pick the folder you want to share — the
    settings page opens in your browser.
-2. **Configure access** the way your admin instructed (paste the org
-   token, or allow your Open WebUI origin). Until then the bridge stays
-   locked and every file request fails — that's by design.
+2. **Paste the org token** your admin gave you into the settings page
+   (🔒 Security → token) — the chat then uses it automatically (it's
+   embedded in the org skill). Until this is done the bridge stays
+   locked and every file request fails — that's by design. (No org
+   token? Generate your own with *Generate random token* instead.)
 3. **New chat → select the assistant model** → ask something like
    *"list the files in my folder"*. If the browser asks about
    **local network access**, click **Allow**.
