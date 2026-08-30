@@ -113,11 +113,11 @@ by hand in the Open WebUI UI:
    can never run code. Under **Skills**, attach `open-file-bridge`.
    (Weak models that wander into the sandbox? Publish the stricter
    `SKILL-STRICT.md` as a second skill + second model.)
-3. **Distribute the app** — every `v*` tag makes CI build signed-off
-   packages for all three OSes (grab them from the release's Actions
-   artifacts): Windows zip/installer, macOS `.app` zip, Linux binary — or
-   users run from source with `python3 src/file_bridge.py <folder>`
-   (zero pip dependencies).
+3. **Distribute the app** — point users at the
+   [GitHub Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)
+   (per-OS zips + `SHA256SUMS`; macOS build is signed & notarized since
+   2.8.1) or mirror the zips internally — or users run from source with
+   `python3 src/file_bridge.py <folder>` (zero pip dependencies).
 4. **Set up the access token (required on current Open WebUI builds)** —
    the sandboxed interpreter sends `Origin: null`, so tier-1 origin lock
    alone can't work; users need a token. Recommended org pattern:
@@ -161,8 +161,10 @@ Preconditions — confirm these before anything else:
       skill is published and Code Interpreter pre-enabled for you
 - [ ] **The org token from your admin** (if your org uses one): you'll
       paste it into the app once — request it if you weren't given it
-- [ ] **The app**: download Open File Bridge for your OS from the
-      releases your admin points you to (or run from source — no install)
+- [ ] **The app**: download Open File Bridge for your OS from
+      [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)
+      (or whatever internal mirror your admin points you to — run from
+      source works too: `python3 src/file_bridge.py <folder>`)
 - [ ] **Browser**: Chrome, Edge or Firefox — *not* Safari (it blocks the
       localhost fetches this needs)
 
@@ -202,9 +204,10 @@ checkboxes, no staging on their side.
 
 Then:
 
-1. **Get the app** yourself: download a build from the repo's releases
-   (Actions artifacts on any `v*` tag) or run from source
-   (`python3 src/file_bridge.py <folder>`).
+1. **Get the app** yourself: download your OS bundle from
+   [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)
+   (per-OS install steps: [user guide](docs/user-guide.md#install--first-run))
+   or run from source (`python3 src/file_bridge.py <folder>`).
 2. **Create a private skill** — your OWUI *Workspace → Skills → Create*:
    paste `SKILL.md` (keep it private — visibility stays "only me").
    In the bootstrap block, set **your personal token**:

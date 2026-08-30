@@ -10,27 +10,44 @@ everything happens between your browser and your own machine.
   blocks web pages from calling `http://127.0.0.1` services, so Open File Bridge
   cannot work there. This is a hard Safari limitation, not a bug.
 - One of: Windows 10/11, macOS 11+, or Linux.
-- The Open File Bridge app (get it from your admin, or Downloads below).
+- The Open File Bridge app — **download it from the
+  [GitHub Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)**
+  (or get it from your admin if they mirror it internally):
+
+  | Your OS | Download | First run |
+  |---|---|---|
+  | Windows 10/11 | `OpenFileBridge-windows-x64.zip` | unzip → run `OpenFileBridge.exe` |
+  | macOS 11+ | `OpenFileBridge-macos.zip` | unzip → run the app (signed & notarized — opens normally) |
+  | Linux | `OpenFileBridge-linux.zip` | unzip → run the binary (or use Python, below) |
+
+  Verify the download if you like: hashes are in `SHA256SUMS` on the same
+  page (`sha256sum your-file.zip`).
 
 ## Install & first run
 
 ### Windows
-1. Download `OpenFileBridge-Setup.exe` (or `OpenFileBridge.exe`).
-2. Double-click. If Windows shows **"Windows protected your PC"**
-   (SmartScreen — normal for new unsigned apps): click **More info → Run anyway**.
+1. Download `OpenFileBridge-windows-x64.zip` from
+   [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)
+   and unzip it (right-click → *Extract All…*).
+2. Double-click `OpenFileBridge\OpenFileBridge.exe`. If Windows shows
+   **"Windows protected your PC"** (SmartScreen — normal for a new app
+   without reputation yet): click **More info → Run anyway**.
 3. Your browser opens the Open File Bridge page. Pick the folder to share with
    **Browse…** (native folder dialog), or paste a path, e.g.
    `C:\Users\you\Documents\my-project`, then click **Save folder**.
 4. Done. A small Open File Bridge process now runs in the background
    (a green ● on its settings page confirms it is live). To see or change
-   anything later, double-click its icon again (Start menu / desktop) —
-   the settings page opens in your browser; your folder choice is
-   remembered.
+   anything later, double-click its icon again — the settings page opens
+   in your browser; your folder choice is remembered.
 
 ### macOS
-1. Download `OpenFileBridge-macos.zip`, unzip it, drag **OpenFileBridge** into **Applications**.
-2. First launch: **right-click OpenFileBridge → Open → Open**
-   (bypasses Gatekeeper for unsigned apps — needed only once).
+1. Download `OpenFileBridge-macos.zip` from
+   [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest),
+   unzip it, drag **OpenFileBridge** into **Applications**.
+2. Double-click to launch. Since 2.8.1 the app is **signed and notarized**
+   (Developer ID) — it opens normally, no Gatekeeper bypass needed. Only a
+   genuinely ancient download (pre-2.8.1) would need the old
+   right-click → Open dance.
 3. Your browser opens the Open File Bridge page. Pick the folder to share with
    **Browse…** (native folder dialog), or type/paste a path, e.g.
    `/Users/you/Documents/my-project`, then click **Save folder**.
@@ -44,10 +61,13 @@ everything happens between your browser and your own machine.
    combining fixes å/ä/ö *and* digits). Codes can also be typed manually.
 
 ### Linux
-Either run the binary:
+Download `OpenFileBridge-linux.zip` from
+[Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest),
+unzip, and run the binary:
 ```bash
-chmod +x OpenFileBridge
-./OpenFileBridge ~/my-folder
+unzip OpenFileBridge-linux.zip
+chmod +x dist/OpenFileBridge
+./dist/OpenFileBridge ~/my-folder
 ```
 or with Python (no install needed — stdlib only):
 ```bash
