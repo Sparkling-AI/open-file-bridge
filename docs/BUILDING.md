@@ -68,12 +68,14 @@ pyinstaller --onefile --windowed --name OpenFileBridge src/file_bridge.py
 ```
 
 `package_macos.sh` wraps the binary into a proper `.app` and zips it. It also
-copies `src/wheels/` + `src/tessdata/` into the `.app` next to the executable,
-so the frozen bridge serves all 8 office wheels and offers 22 bundled OCR
-languages out of the box — verified on macOS: `/health` reports
-`wheels: 8`, `addons: {pdf: true, ocr: true}`, `ocr_langs_available` with all
-22 codes (ara chi_sim chi_tra dan deu eng est fin fra hun ita jpn kor lav
-lit nor osd pol por rus spa swe).
+copies `src/wheels/` + `src/tessdata/` into the `.app`'s `Contents/Resources/`
+(NOT next to the executable — codesign treats every file in `Contents/MacOS/`
+as code and refuses to sign data there; `_app_dir()` in src resolves Resources
+inside a bundle, exe dir otherwise). Verified on the signed 2.8 build:
+`/health` reports `wheels: 8`, `ocr: true` with all 22 language codes
+(ara chi_sim chi_tra dan deu eng est fin fra hun ita jpn kor lav lit
+nor osd pol por rus spa swe). `pdf: false` is expected for the frozen app —
+pymupdf is an optional pip add-on (source runs: `pip install pymupdf`).
 
 The .app shows a **Dock icon while running** (2.4, user feedback): the binary
 bootstraps NSApplication via ctypes (`CocoaDock` in src/file_bridge.py), so
@@ -102,11 +104,29 @@ iconutil -c icns -o build/appicon.icns /tmp/appicon.iconset
 ```
 
 - Unsigned ⇒ Gatekeeper blocks first launch: **right-click → Open → Open** (once).
-- With an Apple Developer ID ($99/yr):
+- With the Sparkling AI Apple Developer ID (org account, configured 2026-08-30):
   ```bash
-  ./build/package_macos.sh --sign     # codesign + notarytool + staple
+  ./build/package_macos.sh --sign   # codesign (runtime+timestamp) -> notarize -> staple -> re-zip
   ```
-  (Edit the Developer ID string and keychain profile inside the script first.)
+  Identity `Developer ID Application: Sparkling AI AB (2N9PCQ7G5Z)` and notary
+  keychain profile `ofb-notary` are baked into the script (env overrides:
+  `SIGN_IDENTITY` / `NOTARY_PROFILE`). One-time prerequisites, already in place
+  on Dandan's Mac: the Developer ID Application cert in the login keychain, and
+  `xcrun notarytool store-credentials ofb-notary --apple-id <apple-id>
+  --team-id 2N9PCQ7G5Z --password <app-specific-password>` (label on the Apple
+  side: `notarytool-open-file-bridge`). Signing applies
+  `build/entitlements.mac.plist` (`disable-library-validation` — required: the
+  onefile bootloader extracts ad-hoc-signed `libpython3.x.dylib` at runtime,
+  which hardened-runtime library validation rejects on arm64; entitlements
+  files must be comment-free, AMFI's parser chokes on `<!-- -->`). The script
+  signs, submits the zip to Apple's automated notary scan (no human review;
+  usually 1–5 min), staples the ticket onto the `.app`, verifies
+  (`stapler validate` + `spctl`), and re-zips the STAPLED app — ship that zip.
+  Notarization NEVER executes the app: the first notarized zip here was
+  runtime-broken (library validation) yet Accepted — the launch check below is
+  the functional gate. Expect a keychain prompt on the first `--sign` of a
+  login session (click Always Allow). On a new machine: export the cert +
+  private key as `.p12` from Keychain Access and re-store the notary profile.
 - Build on the **oldest macOS you support** — PyInstaller binaries run on newer
   macOS but not older ones.
 

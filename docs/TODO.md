@@ -64,8 +64,12 @@ Keep the 200 KB cap or make it size-aware per mime type.
 - [ ] **Windows:** EV cert + `signtool` on `OpenFileBridge.exe` kills the
       SmartScreen "More info → Run anyway" step. Without it, expect a couple
       of support questions per hundred users.
-- [ ] **macOS:** Apple Developer ID + `build/package_macos.sh --sign`
-      (notarization). Otherwise users must right-click → Open once.
+- [x] **macOS:** DONE 2026-08-30 — Sparkling AI AB Developer ID + notary
+      profile `ofb-notary`; `package_macos.sh --sign` fixed (hardened runtime,
+      timestamp, stapler, post-staple re-zip, entitlements) and live-verified:
+      notarized Accepted, staple survives the shipped zip, `spctl` =
+      Notarized Developer ID, signed app runs and serves v2.8 with
+      wheels/OCR from Contents/Resources. Users now just double-click.
 
 ## 4. Auto-start / keep-running UX
 
