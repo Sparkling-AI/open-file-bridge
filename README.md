@@ -119,7 +119,7 @@ user"), not list features. Both shipped skill variants carry this wording.
 
 | | Status |
 |---|---|
-| Open WebUI | v0.11+ (Skills feature); verified on 0.11.1 — per-upgrade checklist in [OWUI-COMPAT](docs/OWUI-COMPAT.md) |
+| Open WebUI | v0.11+ (Skills feature); verified on 0.11.1 and 0.10.2 — per-upgrade checklist in [OWUI-COMPAT](docs/OWUI-COMPAT.md) |
 | Browsers | ✅ Chrome, Edge, Firefox · ❌ **Safari** (blocks localhost fetches) |
 | OS | Windows 10/11 · macOS 11+ · Linux |
 | Python (running from source) | 3.8+, **zero pip dependencies** for the core; optional add-ons (pymupdf, tesseract) enable OCR/PDF endpoints (clear 501 without) |

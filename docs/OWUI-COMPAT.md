@@ -1,19 +1,20 @@
 # Open WebUI version compatibility
 
-**Verified against: Open WebUI v0.11.1** (docker image
-`ghcr.io/open-webui/open-webui:main`, 2026-08). This document defines
-what we support, what to re-test on upgrade, and the known failure
-modes when the compatibility assumptions break.
+**Verified against: Open WebUI v0.11.1** (`:main`, 2026-08) **and v0.10.2**
+(pinned image, 2026-08-30: full setup + data-analysis chat smoke PASS).
+This document defines what we support, what to re-test on upgrade, and the
+known failure modes when the compatibility assumptions break.
 
 ## Compatibility window
 
 | Component | Depends on OWUI version via | Status |
 |---|---|---|
-| Pyodide Code Interpreter | default feature, still shipping | works on 0.11.1; officially "legacy" per OWUI docs — watch release notes |
-| Pyodide sandbox host | WHERE the interpreter runs → request `Origin` | DRIFTED WITHIN 0.11.x: `:main` now uses a `sandbox="allow-scripts"` srcdoc iframe → `Origin: null` → tier-1 CORS-blocked (see next section) |
-| Skills API (`/api/v1/skills/*`) | v1 REST surface | works on 0.11.1 (create, id access/update) |
-| Model preset with code_interpreter | `meta.capabilities` + `meta.defaultFeatureIds` | works on 0.11.1 — THE regression risk |
+| Pyodide Code Interpreter | default feature, still shipping | works on 0.10.2 and 0.11.1; officially "legacy" per OWUI docs — watch release notes |
+| Pyodide sandbox host | WHERE the interpreter runs → request `Origin` | `sandbox="allow-scripts"` srcdoc iframe on BOTH 0.10.2 and `:main` → `Origin: null` → tier-1 CORS-blocked; tier-2 token mode required (see next section) |
+| Skills API (`/api/v1/skills/*`) | v1 REST surface | works on 0.10.2 and 0.11.1 (create, id access/update) |
+| Model preset with code_interpreter | `meta.capabilities` + `meta.defaultFeatureIds` | works on 0.10.2 and 0.11.1 — THE regression risk |
 | Browser fetch to `http://127.0.0.1:8765` | PNA behavior per browser | PNA itself is fine (bridge sends `Access-Control-Allow-Private-Network: true`); the CORS failure mode is the sandbox origin above, not PNA |
+| Pyodide data stack (pandas/matplotlib) | OWUI's bundled pyodide-lock.json | BOTH lines ship it: 0.10.2 = Pyodide 0.28.3 (Python 3.13.2, pandas 2.3.1, matplotlib 3.8.4); `:main` = Python 3.14/abi 2026_0 (pandas 3.0.2, matplotlib 3.10.8) — micropip resolves per-line, nothing to configure |
 | Images into MODEL input | does OWUI feed code/tool results back as images? | **NO on 0.11.1** — see "Vision input limitation" below |
 
 **Support policy: current + one minor** — we treat the latest OWUI 0.11.x

@@ -1,7 +1,8 @@
 # Open File Bridge — Admin Guide
 
 How to roll out local-file access for your Open WebUI users. Verified against
-**Open WebUI v0.11.1** (Skills workspace feature requires ≥ v0.11).
+**Open WebUI v0.11.1 and v0.10.2** (both lines carry the Skills feature;
+0.10.x deploys work identically — see [OWUI-COMPAT](OWUI-COMPAT.md)).
 
 ## Architecture (why this design)
 
