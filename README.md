@@ -77,9 +77,38 @@ Current Open WebUI `:main` builds run Pyodide in a sandboxed iframe
 (`Origin: null`) — use tier-2 token mode there. Details, upgrade
 checklist and the full analysis: [docs/OWUI-COMPAT.md](docs/OWUI-COMPAT.md).
 
-## Quick start
+## Setup
 
-**Admin (once):** see [docs/admin-guide.md](docs/admin-guide.md) — scripted:
+### Admin (once) — manual setup
+
+What the setup script automates, spelled out so you can do it (and audit it)
+by hand in the Open WebUI UI:
+
+1. **Publish the skill** — *Workspace → Skills → Create*: set id
+   `open-file-bridge`, paste the contents of
+   [`skill/open-file-bridge/SKILL.md`](skill/open-file-bridge/SKILL.md),
+   save — then set the skill's visibility to **public** (users need read
+   access or their models can't load it).
+2. **Create the assistant model (custom model)** — *Workspace → Models →
+   Create*: base it on a strong chat model, then under
+   **Capabilities** enable **Code Interpreter** *and* mark it as a
+   **default** feature — **both switches matter**: with only the capability
+   checked, new chats start with the interpreter toggle OFF and the model
+   can never run code. Under **Skills**, attach `open-file-bridge`.
+   (Weak models that wander into the sandbox? Publish the stricter
+   `SKILL-STRICT.md` as a second skill + second model.)
+3. **Distribute the app** — every `v*` tag makes CI build signed-off
+   packages for all three OSes (grab them from the release's Actions
+   artifacts): Windows zip/installer, macOS `.app` zip, Linux binary — or
+   users run from source with `python3 src/file_bridge.py <folder>`
+   (zero pip dependencies). Decide the **auth tier** up front (current
+   Open WebUI builds need token mode — see
+   [admin-guide](docs/admin-guide.md)) and hand users their org token if
+   you use one.
+4. Sanity-check the result as a user (checklist below).
+
+Scripted shortcut for steps 1–2 (idempotent, same REST calls, no code
+changes to Open WebUI):
 
 ```bash
 python3 scripts/setup_owui.py --url http://your-owui:8080 \
@@ -91,10 +120,35 @@ python3 scripts/setup_owui.py … --variant-strict-model glm-4.5-air
 python3 scripts/setup_owui.py … --variant strict
 ```
 
-**User:** download the app for your OS (or `python3 src/file_bridge.py
-~/my-folder`), pick a folder, then in Open WebUI select the prepared model
-("Local Files Assistant") and just ask.
-Full walkthrough incl. permission prompts: [docs/user-guide.md](docs/user-guide.md).
+### User checklist
+
+Preconditions — confirm these before anything else:
+
+- [ ] **Allowed by your admin**: a local-files assistant model appears in
+      your model list (usually "Local Files Assistant") — that means the
+      skill is published and Code Interpreter pre-enabled for you
+- [ ] **The app**: download Open File Bridge for your OS from the
+      releases your admin points you to (or run from source — no install)
+- [ ] **Browser**: Chrome, Edge or Firefox — *not* Safari (it blocks the
+      localhost fetches this needs)
+
+Then:
+
+1. **Install & launch the app**, pick the folder you want to share — the
+   settings page opens in your browser.
+2. **Configure access** the way your admin instructed (paste the org
+   token, or allow your Open WebUI origin). Until then the bridge stays
+   locked and every file request fails — that's by design.
+3. **New chat → select the assistant model** → ask something like
+   *"list the files in my folder"*. If the browser asks about
+   **local network access**, click **Allow**.
+4. **Using your own model instead of the preset?** Two extra switches:
+   enable the **Code Interpreter** toggle in the chat's feature bar, and
+   enable/[$-mention](docs/user-guide.md) the `open-file-bridge` skill.
+   Everything else is identical.
+
+Full walkthrough incl. permission prompts and troubleshooting:
+[docs/user-guide.md](docs/user-guide.md).
 
 ## Verified results
 
