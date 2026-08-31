@@ -63,7 +63,7 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 #                  always fine (API is backward-compatible). Bump only
 #                  when the skill starts referencing an endpoint that
 #                  didn't exist in older bridges.
-VERSION = "2.8.2"
+VERSION = "2.8.3"
 SKILL_MIN = "2.5"
 
 
@@ -5094,7 +5094,8 @@ try{
    try{localStorage.setItem(FOLD_KEY,JSON.stringify(f));}catch(e){}});
  });
 }catch(e){}
-async function refresh(){const s=await (await fetch('/state')).json();
+async function refresh(){try{
+ const s=await (await fetch('/state')).json();
 document.getElementById('root').value=s.root||'';
 document.getElementById('origin').value=s.allowed_origin||'';
 document.getElementById('secstatus').textContent='Security mode: '+s.security+
@@ -5102,14 +5103,16 @@ document.getElementById('secstatus').textContent='Security mode: '+s.security+
  ?' · a token IS configured (click Show to display it; paste a new one only to replace it)'
  :' · no token set');
 document.getElementById('token').value=
- (String(s.security).indexOf('token')>=0?'••••••••••••':'');
+(String(s.security).indexOf('token')>=0?'••••••••••••':'');
 syncTokVis();
 const c=await (await fetch('/ocr/config')).json();
 document.getElementById('ocrlang').value=c.lang||'eng';
 renderLangs(c.available,c.lang);
 document.getElementById('langs').textContent='engine: '+(c.engine||'?')+
  (c.user_dir?' — add languages: drop .traineddata files (tessdata_fast) into '+c.user_dir+' and restart the app':'');
-renderPreview();}
+renderPreview();
+}catch(e){document.getElementById('secstatus').textContent=
+ '✗ could not load settings ('+(e.message||e)+') — retrying every few seconds';}}
 function renderLangs(avail,cur){
  const box=document.getElementById('langbox');
  const sel=new Set(String(cur||'').split('+').filter(Boolean));
@@ -5135,17 +5138,26 @@ function syncBoxes(fromBoxes){
  }}
 async function beat(){
  const dot=document.getElementById('beat'),info=document.getElementById('beatinfo');
+ let j=null;
  try{
   const h=await fetch('/health',{cache:'no-store'});
   if(!h.ok)throw new Error('http '+h.status);
-  const j=await h.json();
+  j=await h.json();
   dot.style.color='#0a7d32';
   info.textContent='Running · v'+(j.version||'?')+' · security: '+(j.security||'?')+
    (j.ok?'':' · no folder chosen yet');
  }catch(e){
   dot.style.color='#b00';
   info.textContent='no response — the bridge has stopped';
- }}
+ }
+ // self-heal: if the /state fetch at page load failed, the token box
+ // never got its dots placeholder (looks like "no token" while the
+ // token tier is actually active). /health just told us the mode —
+ // when it says a token is configured but the box sits empty and
+ // unfocused, re-run refresh(). Runs at most once per 5 s beat.
+ const ti=document.getElementById('token');
+ if(j&&String(j.security||'').indexOf('token')>=0&&ti&&!ti.value&&document.activeElement!==ti)refresh();
+}
 setInterval(beat,5000);beat();
 async function renderPreview(){
  if(window._pvBusy)return;window._pvBusy=true;
