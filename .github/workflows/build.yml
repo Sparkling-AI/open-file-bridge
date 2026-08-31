@@ -156,12 +156,30 @@ jobs:
           curl -sf http://127.0.0.1:8765/health
           kill %1
 
-      - name: Upload artifact
+      # Upload exactly this OS's outputs. NEVER use a multi-OS glob list
+      # here: the repo root carries a tracked OpenFileBridge-macos.zip
+      # (mac signing phase) and a shared `path:` list would sweep that
+      # stale 51MB zip into the Windows/Linux artifacts too.
+      - name: Upload artifact (macOS)
+        if: runner.os == 'macOS'
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
-          path: |
-            dist/OpenFileBridge/
-            dist/OpenFileBridge
-            OpenFileBridge-macos.zip
+          path: OpenFileBridge-macos.zip
+          if-no-files-found: error
+
+      - name: Upload artifact (Windows)
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/OpenFileBridge/
+          if-no-files-found: error
+
+      - name: Upload artifact (Linux)
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.artifact }}
+          path: dist/OpenFileBridge
           if-no-files-found: error
