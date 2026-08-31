@@ -645,6 +645,37 @@ it land?"). Agreed shape: **chips stay for mentions; outcomes get links**.
    reveal returns the set token, reveal appears in audit.log; +1 picker
    markup check for the toggle button.
 
+## Auto-closing the /click tab — DECIDED: not now (discussion 2026-08-31)
+
+User question: after 📄 Open / 📂 Show in folder, a browser tab is left
+behind — can it close itself once the file/Finder opens, while error
+pages stay visible?
+
+Landscape (analysis, nothing implemented):
+- `window.close()` only works on script-opened tabs. A tab opened by
+  clicking a markdown link in the chat is user-opened — Chrome/Firefox/
+  Safari all refuse ("Scripts may close only the windows that were
+  opened by them"). No modern workaround.
+- A success-only `window.close()` attempt (never on error pages —
+  errors can never be hidden by it) would be a one-liner: no-op in
+  normal browsers (worst case = today's behavior), genuinely closes
+  the tab in embedded/scripted clients (Electron wrappers, in-app
+  browsers). DECISION (Dandan): benefit reaches only embedded clients
+  — likely a tiny/zero slice of users — so NOT implemented. Revisit if
+  real users complain about the leftover tab.
+- Fetch-instead-of-navigate (no tab at all) is refused BY DESIGN: the
+  /click CSRF gate exists to block scripted non-navigation triggers —
+  the tab IS the consent signal. Do not weaken it for this.
+- The real fix if tabs ever annoy users: custom URL scheme
+  (`openfilebridge://click/<nonce>`, the zoom:// / vscode:// pattern).
+  Zero tabs on success; native `_user_alert` dialog on failure. Costs:
+  per-OS registration (mac CFBundleURLTypes → rebuild+re-notarize;
+  Windows HKCU self-registration at first run, no admin; Linux
+  .desktop), first-use browser prompt, two risks to check first —
+  corporate managed browsers can block custom protocols, and OWUI's
+  markdown sanitizer may strip non-http links. Would live BESIDE the
+  http /click as fallback.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
