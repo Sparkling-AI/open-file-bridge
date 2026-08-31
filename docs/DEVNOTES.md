@@ -819,13 +819,18 @@ All five picker cards fold and remember their state:
   never burned. Store = click-links.json (0600, swept on load) — cloned
   from pending-confirmations.json.
 - CSRF hardening: a page that learns a nonce (leaked/shared chat) could
-  still fetch() it cross-site. `Sec-Fetch-Site: cross-site` requests are
-  refused with an explanatory page (user-click navigations from OWUI arrive
-  as same-site: host is the site, ports don't split it). Absent header
-  (old browsers) stays allowed. Pyodide-origin scripted probes would read
-  as cross-site and get the refusal page — by design; the refusal text
-  says the link is for the user's click so the model doesn't misread it
-  as broken.
+  still fetch()/img() it. The gate is on request SHAPE, not site (fixed
+  2.8.2 — the original pure-Site check broke real deployments): a
+  top-level user navigation carries `Sec-Fetch-Dest: document` +
+  `Sec-Fetch-Mode: navigate` and is ALWAYS allowed (even cross-site);
+  any scripted/embedded request (fetch, XHR, img, script, iframe) lacks
+  that pair and gets the refusal page. Why pure-Site was wrong: with
+  OWUI on a company domain every real user click is legitimately
+  cross-site (localhost is its own site), so the site check refused the
+  NORMAL deployment (found live on corporate-hosted OWUI, 2026-08-31);
+  and tier-2 deployments have no origin configured to allowlist anyway.
+  Absent headers (old browsers) stay allowed. The refusal text says the
+  link is for the user's click so the model doesn't misread it as broken.
 - Path is stored AS MINTED and re-resolved at click time (roots, ignore
   patterns, lock state can all change within the TTL) — resolve_guarded
   at click, then exists() check, so moved/deleted/unshared all degrade to

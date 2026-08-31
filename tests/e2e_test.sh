@@ -785,9 +785,25 @@ grep -q '^reveal ' "$TESTDIR/launched.log" \
 # multi-use within TTL: chat links must survive a second click
 curl -s "$OPEN_URL" | grep -q 'Opened' \
   && echo "  PASS: link reusable within TTL" || { echo "  FAIL: link burned after first click"; fail=1; }
-# cross-site trigger refused (Sec-Fetch-Site hardening)
-check "click cross-site refused" 'refused' \
+# CSRF gate is on request SHAPE, not site: a real user click is a top-level
+# navigation (Dest: document + Mode: navigate) and MUST pass even when
+# cross-site — with OWUI on a company domain, 127.0.0.1 IS cross-site (the
+# bug this guards against regressing). Scripted/embedded triggers are
+# refused whatever the site. ('close this tab' = success page only; the
+# refusal page's title also starts with 'Opened', so don't grep for that.)
+# 1. genuine user click from a company-domain OWUI = cross-site NAVIGATION
+check "click cross-site navigation allowed" 'close this tab' \
+  "$(curl -s -H 'Sec-Fetch-Site: cross-site' -H 'Sec-Fetch-Dest: document' \
+     -H 'Sec-Fetch-Mode: navigate' "$OPEN_URL")"
+# 2. scripted fetch() from that same page = cross-site, no navigation headers
+check "click cross-site fetch refused" 'refused' \
   "$(curl -s -H 'Sec-Fetch-Site: cross-site' "$OPEN_URL")"
+# 3. nonce in an <img> tag on the OWUI page itself = same-site, Dest: image
+check "click same-site img refused" 'refused' \
+  "$(curl -s -H 'Sec-Fetch-Site: same-site' -H 'Sec-Fetch-Dest: image' \
+     -H 'Sec-Fetch-Mode: no-cors' "$OPEN_URL")"
+# 4. plain top-level navigation (no Sec-Fetch headers / older browsers)
+check "click plain navigation allowed" 'close this tab' "$(curl -s "$OPEN_URL")"
 # malformed / unknown nonce → friendly page, not a stack trace
 check "click malformed nonce"   'not recognized' \
   "$(curl -s "$BRIDGE/click/zz-not-a-nonce")"

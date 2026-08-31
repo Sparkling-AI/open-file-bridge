@@ -63,7 +63,7 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 #                  always fine (API is backward-compatible). Bump only
 #                  when the skill starts referencing an endpoint that
 #                  didn't exist in older bridges.
-VERSION = "2.8.1"
+VERSION = "2.8.2"
 SKILL_MIN = "2.5"
 
 
@@ -4775,16 +4775,23 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "🤷", "Link not recognized",
                 note="This is not a valid Open File Bridge link. "
                      "Ask in chat for a fresh one."))
-        # CSRF hardening: a cross-site page that somehow learned a nonce
-        # must not be able to fire it via fetch/img. Top-level navigations
-        # from the chat answer arrive as none/same-site; absent header
-        # (older browsers) stays allowed.
-        site = (self.headers.get("Sec-Fetch-Site") or "").strip()
-        if site == "cross-site":
+        # CSRF hardening: a page that somehow learned a nonce must not be
+        # able to fire it via fetch/img. What distinguishes a real user
+        # click is the request SHAPE, not the site: top-level navigations
+        # carry Sec-Fetch-Dest: document + Sec-Fetch-Mode: navigate;
+        # scripted/embedded loads (fetch, XHR, img, script, iframe) do not.
+        # A pure Sec-Fetch-Site check is wrong here: with OWUI on a company
+        # domain the user's own click is legitimately cross-site (localhost
+        # is its own site), and tier-2 deployments have no origin to
+        # allowlist. Absent headers (older browsers) stays allowed.
+        dest = (self.headers.get("Sec-Fetch-Dest") or "").strip().lower()
+        mode = (self.headers.get("Sec-Fetch-Mode") or "").strip().lower()
+        scripted = (self.headers.get("Sec-Fetch-Site") or "").strip().lower()
+        if scripted and not (dest == "document" and mode == "navigate"):
             return self._page(403, _click_page(
                 "🛑", "Opened from another website",
-                note="Cross-site requests are refused. This link works when "
-                     "the user clicks it in the chat answer."))
+                note="Scripted or embedded requests are refused. This link "
+                     "works when the user clicks it in the chat answer."))
         rec = click_link_find(tok)
         if rec is None:
             return self._page(410, _click_page(

@@ -528,8 +528,9 @@ it land?"). Agreed shape: **chips stay for mentions; outcomes get links**.
    exists for model-initiated popups only. Re-resolves the stored path
    at click time (roots/ignore may have changed); friendly pages for
    expired/malformed/unknown nonce, deleted file, unlocked bridge;
-   `Sec-Fetch-Site: cross-site` refused (CSRF hardening for a leaked
-   nonce); `Cache-Control: no-store`; sibling-action button on the
+   scripted/embedded requests refused via the Sec-Fetch Dest/Mode shape
+   check (CSRF hardening for a leaked nonce; top-level user navigations
+   pass even cross-site — company-domain OWUI, fixed 2.8.2); `Cache-Control: no-store`; sibling-action button on the
    success page links the pair's other nonce. State:
    `click-links.json` (0600, swept on load) — pattern copied from
    pending-confirmations.
