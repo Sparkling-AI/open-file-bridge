@@ -122,9 +122,11 @@ carry it in an `X-Bridge-Token` header.
    reload, to display the saved token again.
 2. Tell the model the token once in chat — e.g. *"my bridge token is
    `<the token>`, use it for this session"* — the skill instructs the model
-   to add it to every request. (Or, to avoid repeating it: make your own
-   private copy of the skill in Open WebUI and paste the token into its
-   bootstrap block.)
+   to add it to every request (on current skill versions the model even
+   asks for it by itself when it gets a 401). (Or, to avoid repeating it:
+   make your own private copy of the token-variant skill —
+   `SKILL-TOKEN.md` — and paste the token into its `"X-Bridge-Token"`
+   line.)
 3. Don't share it. It never leaves your machine except to your own bridge.
 
 **If your company gave you a token:** paste that exact token into the same

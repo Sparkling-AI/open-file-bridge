@@ -117,17 +117,18 @@ re-run `scripts/setup_owui.py` to refresh the skill — a hint, not a
 warning.
 
 **Headers:** send `BRIDGE_HEADERS` on EVERY call — GETs included, not just
-POSTs. **This is the NO-TOKEN variant of the skill**: `BRIDGE_HEADERS`
-in the block below is intentionally token-free — correct for bridges in
-Tier-1 origin-lock mode. (If the USER tells you their bridge token in
-chat at any time, honor it: add `"X-Bridge-Token": "<it>"` to
-`BRIDGE_HEADERS` for the session — and NEVER echo the token back.)
+POSTs. **This is the TOKEN variant of the skill**: your bridge runs in
+Tier-2 token mode and the org token is already embedded in the code block
+below — `BRIDGE_HEADERS` is pre-defined WITH the token. Copy it exactly;
+do not remove the `X-Bridge-Token` line, do not redefine the variable,
+and NEVER echo the token back in your answer.
 
 ```python
 from pyodide.http import pyfetch
 import json, base64, io
 
-BRIDGE_HEADERS = {"Content-Type": "application/json"}   # NO-TOKEN variant — Tier-1 origin-lock bridges
+BRIDGE_HEADERS = {"Content-Type": "application/json",
+                  "X-Bridge-Token": "__ORG_TOKEN__"}   # org token EMBEDDED — required on every call
 
 async def bridge_get(path, params=None):
     url = f"http://127.0.0.1:8765{path}"
@@ -161,24 +162,12 @@ async def write_text(path, text: str):
 
 **Errors are JSON — read them, don't blind-retry.** Every non-200 response
 carries an `error` field (often a `hint` telling you the next step). HTTP
-401 `"missing or invalid bridge token"` → this bridge is in token mode
-(this is the NO-TOKEN skill, so the header is not set yet): run the
-recovery block below — ask the user for the token ONCE, set it, retry
-ONCE. HTTP 409 → confirmation flow (see write rules). Never repeat a
-failed request unchanged.
-
-**401 recovery — run this, then wait for the user's reply:**
-
-```python
-h = await bridge_get("/health")          # /health needs no token
-print("Bridge security mode:", h.get("security"))
-if str(h.get("security", "")).startswith("token"):
-    print("This bridge uses an access token. Please paste your bridge token"
-          " (Open File Bridge settings page, 🔒 Security → Show) here in chat,"
-          " and I will use it for this session.")
-    # AFTER the user replies with the token, define it ONCE and retry:
-    # BRIDGE_HEADERS.update({"X-Bridge-Token": "<token-from-user>"})
-```
+401 `"missing or invalid bridge token"` → the token in `BRIDGE_HEADERS`
+doesn't match this user's bridge: tell the user *"your bridge token
+doesn't match the one embedded in this skill — ask your admin, or paste
+the current org token into the bridge settings page"*, and do NOT retry.
+HTTP 409 → confirmation flow (see write rules). Never repeat a failed
+request unchanged.
 
 ## Office files (Word / Excel / PowerPoint / PDF)
 

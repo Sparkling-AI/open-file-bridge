@@ -102,9 +102,14 @@ by hand in the Open WebUI UI:
 
 1. **Publish the skill** — *Workspace → Skills → Create*: set id
    `open-file-bridge`, paste the contents of
-   [`skill/open-file-bridge/SKILL.md`](skill/open-file-bridge/SKILL.md),
-   save — then set the skill's visibility to **public** (users need read
-   access or their models can't load it).
+   [`skill/open-file-bridge/SKILL.md`](skill/open-file-bridge/SKILL.md)
+   (the **no-token variant** — right when users' bridges run tier-1
+   origin-lock, or with per-user tokens told in chat), save — then set
+   the skill's visibility to **public** (users need read
+   access or their models can't load it). Going with an org-wide token
+   instead? Publish the **token variant**
+   [`SKILL-TOKEN.md`](skill/open-file-bridge/SKILL-TOKEN.md) with your
+   org token in its `X-Bridge-Token` line — see step 4.
 2. **Create the assistant model (custom model)** — *Workspace → Models →
    Create*: base it on a strong chat model, then under
    **Capabilities** enable **Code Interpreter** *and* mark it as a
@@ -120,22 +125,33 @@ by hand in the Open WebUI UI:
    `python3 src/file_bridge.py <folder>` (zero pip dependencies).
 4. **Set up the access token (required on current Open WebUI builds)** —
    the sandboxed interpreter sends `Origin: null`, so tier-1 origin lock
-   alone can't work; users need a token. Recommended org pattern:
-   - Generate one org token (any strong random string), then **edit the
-     skill you published in step 1** and set it in the bootstrap block:
-     `BRIDGE_HEADERS = {"Content-Type": "application/json", "X-Bridge-Token": "<org-token>"}`
-     (the setup script does this for you with `--bridge-token <secret>`)
-   - **Distribute the token to users** over a channel appropriate for an
-     org-wide credential (not a public wiki) — each user pastes it once
-     into their bridge's settings page (🔒 Security → token)
-   - Everyone in the org can read the token from the public skill body —
-     that's by design: it's a company-boundary credential (stops local
-     malware and other websites from using the bridge), not a secret
-     from colleagues. Avoid this pattern if your OWUI has guest/external
-     accounts; prefer per-user tokens then (each user generates their
-     own — see [admin-guide](docs/admin-guide.md#one-time-setup)).
-   - **Rotating**: paste a new token into the skill (or re-run the script
-     with a new `--bridge-token`) and tell users to re-paste.
+   alone can't work; users need a token. Two clear options, each with its
+   own skill variant so the model is never left guessing:
+   - **Org token (zero per-user chat friction):** generate one org token
+     (any strong random string), publish the **token variant**
+     `SKILL-TOKEN.md` as the skill with the token filled into its
+     `"X-Bridge-Token": "__ORG_TOKEN__"` line (the setup script does this
+     with `--bridge-token <secret>` — it also refuses to publish a token
+     variant without one). The skill then carries exactly ONE
+     `BRIDGE_HEADERS` definition, token included — weak models can't get
+     it wrong.
+   - **Per-user private tokens (strongest):** publish the no-token
+     `SKILL.md`. Each user generates their own token in the app; when the
+     model hits HTTP 401 the skill's recovery block asks the user for it
+     once in chat and applies it for the session (or the user embeds it
+     in their own private copy of `SKILL-TOKEN.md` — see
+     [solo setup](#solo-setup-no-admin-staging--private-skill--your-own-app)).
+   - Either way: **users paste the same token into their bridge** (app
+     settings page → 🔒 Security → token field) — org token, or their
+     private one.
+   - Org-token caveat: everyone in the org can read the token from the
+     public skill body — by design: it's a company-boundary credential
+     (stops local malware and other websites from using the bridge), not
+     a secret from colleagues. Avoid with guest/external accounts; use
+     per-user tokens then.
+   - **Rotating**: re-run the script with a new `--bridge-token` (or
+     re-publish the skill with the new token in the `X-Bridge-Token`
+     line) and tell users to re-paste into the app.
 5. Sanity-check the result as a user (checklist below).
 
 Scripted shortcut for steps 1–2 and the token embedding in 4 (idempotent,
@@ -209,11 +225,15 @@ Then:
    (per-OS install steps: [user guide](docs/user-guide.md#install--first-run))
    or run from source (`python3 src/file_bridge.py <folder>`).
 2. **Create a private skill** — your OWUI *Workspace → Skills → Create*:
-   paste `SKILL.md` (keep it private — visibility stays "only me").
-   In the bootstrap block, set **your personal token**:
-   `BRIDGE_HEADERS = {"Content-Type": "application/json", "X-Bridge-Token": "<your-token>"}`
-   — with a private skill this token is visible to you alone, which is
-   strictly better security than the shared org-token pattern.
+   paste **`SKILL-TOKEN.md`** (the **token variant** — keep it private,
+   visibility stays "only me") and fill **your personal token** into its
+   `"X-Bridge-Token": "__ORG_TOKEN__"` line (replace `__ORG_TOKEN__`
+   with your token). The skill then has exactly one `BRIDGE_HEADERS`
+   with your token baked in — no chat handoff needed. With a private
+   skill this token is visible to you alone, which is strictly better
+   security than the shared org-token pattern. (Prefer telling the model
+   the token in chat each session instead? Use the no-token `SKILL.md`
+   — its 401-recovery block asks for the token when needed.)
 3. **Bridge side**: launch the app, pick your folder, paste the same
    token in settings (🔒 Security → *Generate random token* gives you
    one; or use its value in the skill).

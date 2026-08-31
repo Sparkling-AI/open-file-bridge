@@ -12,6 +12,18 @@ re-minting section, and the outcome-links checklist. No new endpoints —
 bridge's actual configured lifetime and points the user to the settings
 page.
 
+**Token clarity — the skill is now FOUR variants** (standard/strict ×
+no-token/token): each variant states up front whether it talks to the
+bridge with or without a token and carries exactly ONE
+`BRIDGE_HEADERS` definition. The no-token variants gained a code-first
+**401-recovery block** (on 401: ask the user for their token once in
+chat, apply, retry once) — weak models no longer stall on token-mode
+bridges. The token variants (`SKILL-TOKEN.md` / `SKILL-STRICT-TOKEN.md`)
+embed the org token at publish time (`__ORG_TOKEN__` replaced by
+`setup_owui.py --bridge-token`; publishing a token variant without a
+token is refused). README/admin-guide/user-guide realigned to the
+variant names.
+
 ## 2.8.1 — 2026-08-30
 
 Versioning policy change (no functional skill changes): skill and app

@@ -20,7 +20,11 @@ Usage:
       [--variant-strict-model ID]    # ALSO create a strict preset on
                                      # this (weak) model; implies both
                                      # skills being installed
-      [--bridge-token SECRET]        # opt-in Tier 2: org-wide token
+      [--bridge-token SECRET]        # Tier 2 org token — publishes the
+                                     # TOKEN skill variants (SKILL-TOKEN /
+                                     # SKILL-STRICT-TOKEN) with the secret
+                                     # embedded; omit it to publish the
+                                     # no-token variants
 """
 import argparse
 import difflib
@@ -132,26 +136,28 @@ def upsert_skill(base, tok, skill_id, name, description, skill_md, yes):
 
 
 def load_skill_md(fname, bridge_token):
+    """Load a skill variant file. The four variants:
+      SKILL.md / SKILL-STRICT.md           — NO-TOKEN (tier-1 origin lock;
+                                             includes the 401→ask-once
+                                             recovery block)
+      SKILL-TOKEN.md / SKILL-STRICT-TOKEN.md — TOKEN (tier-2; org token
+                                             replaces __ORG_TOKEN__ at
+                                             publish time)
+    With --bridge-token the caller must pass a TOKEN variant here; without
+    it a no-token variant. The returned body has exactly ONE
+    BRIDGE_HEADERS definition — no injected second block (the old
+    injection produced two conflicting definitions that confused weaker
+    models)."""
     skill_md = (REPO / SKILL_DIR / fname).read_text()
     if skill_md.startswith("---"):
         skill_md = skill_md.split("---", 2)[2].lstrip("\n")
-    if bridge_token:
-        inject = (
-            '# Org token (Tier 2): every bridge call — GET included — MUST\n'
-            '# send these headers. Use this BRIDGE_HEADERS verbatim in the\n'
-            '# bootstrap helpers; do NOT redefine it.\n'
-            'BRIDGE_HEADERS = {"Content-Type": "application/json",\n'
-            '                  "X-Bridge-Token": "%s"}\n' % bridge_token
-        )
-        # SKILL.md and SKILL-STRICT.md use different bootstrap headings —
-        # try both anchors before falling back to a prepend
-        for anchor in (r"## Bootstrap helpers \(run once per session\)\n",
-                       r"## Bootstrap — run this first, copy it exactly\n"):
-            skill_md, n = re.subn(r"(" + anchor + r")",
-                                  r"\1\n" + inject, skill_md, count=1)
-            if n == 1:
-                return skill_md
-        skill_md = inject + "\n" + skill_md  # fallback: prepend
+    if "__ORG_TOKEN__" in skill_md:
+        if not bridge_token:
+            raise SystemExit(
+                f"{fname} is the TOKEN variant — publish it with "
+                f"--bridge-token <secret> (or publish the no-token "
+                f"SKILL.md / SKILL-STRICT.md instead)")
+        skill_md = skill_md.replace("__ORG_TOKEN__", bridge_token)
     return skill_md
 
 
@@ -211,10 +217,18 @@ def main():
               None, {"email": args.email, "password": args.password})["token"]
     print("✓ signed in")
 
-    # 2. skills — variant selection (both files ship in the repo; users
-    #    keep whichever they don't install for later customization)
-    std_md = load_skill_md("SKILL.md", args.bridge_token)
-    strict_md = load_skill_md("SKILL-STRICT.md", args.bridge_token)
+    # 2. skills — FOUR variants ship in the repo, two axes:
+    #      standard | strict   (strict = fixed recipes for weak models)
+    #      no-token | token    (token files carry __ORG_TOKEN__, replaced
+    #                           at publish time — see load_skill_md)
+    #    --bridge-token picks the TOKEN files; otherwise the no-token files.
+    #    Both standard+strict of the chosen token-mode are installed.
+    if args.bridge_token:
+        std_md = load_skill_md("SKILL-TOKEN.md", args.bridge_token)
+        strict_md = load_skill_md("SKILL-STRICT-TOKEN.md", args.bridge_token)
+    else:
+        std_md = load_skill_md("SKILL.md", None)
+        strict_md = load_skill_md("SKILL-STRICT.md", None)
     installed = []
     if args.variant == "strict":
         if upsert_skill(base, tok, STRICT_SKILL_ID,
@@ -227,6 +241,14 @@ def main():
                         UNIFIED_DESC,
                         std_md, args.yes):
             installed.append(SKILL_ID)
+        # also publish the strict skill of the SAME token mode so the
+        # --variant-strict-model path works without a second run (and so
+        # orgs can attach it to a weak model later)
+        if upsert_skill(base, tok, STRICT_SKILL_ID,
+                        "Open File Bridge (strict)",
+                        UNIFIED_DESC,
+                        strict_md, args.yes):
+            installed.append(STRICT_SKILL_ID)
     if args.variant_strict_model:
         # the strict preset needs the strict skill installed
         if STRICT_SKILL_ID not in installed:

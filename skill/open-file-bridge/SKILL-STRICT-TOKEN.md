@@ -3,7 +3,7 @@ name: open-file-bridge-strict
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — STRICT variant — skill v2.9
+# Local File Bridge — STRICT variant (org token) — skill v2.9
 
 Built for models that need guardrails: fixed recipes, bridge-only writes,
 verify-after-write. (Stronger models: use the standard "Local File
@@ -52,12 +52,12 @@ Bridge" skill instead — more endpoints, more freedom.)
 from pyodide.http import pyfetch
 import json
 
-# NO-TOKEN variant — bridges in Tier-1 origin-lock mode. On HTTP 401
-# (token mode): ask the user ONCE for their bridge token (settings
-# page, 🔒 Security → Show), add the header "X-Bridge-Token": "<it>"
-# to BRIDGE_HEADERS for the rest of the session, retry once. Never
-# echo the token back.
-BRIDGE_HEADERS = {"Content-Type": "application/json"}
+# TOKEN variant — this bridge runs in Tier-2 token mode and the ORG
+# TOKEN IS EMBEDDED below. Use this BRIDGE_HEADERS verbatim on EVERY
+# call; do not remove the X-Bridge-Token line, do not redefine the
+# variable, never echo the token back.
+BRIDGE_HEADERS = {"Content-Type": "application/json",
+                  "X-Bridge-Token": "__ORG_TOKEN__"}
 
 async def bridge_get(path, params=None):
     url = f"http://127.0.0.1:8765{path}"
@@ -87,7 +87,10 @@ root folder and the `version` (older than v2.5 → tell the user "the bridge
 app and the skill are out of sync — re-run the installer"). Send
 `BRIDGE_HEADERS` on EVERY call, GETs included. Non-200 bodies are JSON with
 an `error` (+ often `hint`) — read and adjust; e.g. 401 "missing or invalid
-bridge token" → add the token header, retry once.
+bridge token" → the embedded org token doesn't match this user's bridge:
+tell the user *"your bridge token doesn't match the one embedded in this
+skill — ask your admin, or paste the current org token into the bridge
+settings page"* — do NOT retry unchanged.
 
 ## Recipe A — find and read a file (in this order)
 
@@ -157,7 +160,7 @@ d = await bridge_post("/convert", {"path": "old.doc", "out": "new.docx"})
 | Response | Tell the user |
 |---|---|
 | fetch/`/health` failure | "Your Open File Bridge app isn't running. Please start the Open File Bridge app, then ask me again." |
-| 401 | "This bridge needs an access token. Please paste your bridge token (Open File Bridge settings → 🔒 Security → Show) here in chat." |
+| 401 | "This bridge requires an access token — ask your admin for the current org token, or paste it into the Open File Bridge settings page." |
 | 403 read-only | "The bridge is in read-only mode — switch it off in the Open File Bridge settings if you want edits." |
 | 429 | "The write-rate safety brake tripped (many writes in a minute). Please confirm you want me to continue." |
 | 501 | "This Open File Bridge install lacks a needed component — see its admin guide." |

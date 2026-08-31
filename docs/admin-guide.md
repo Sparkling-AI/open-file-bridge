@@ -44,31 +44,45 @@ python3 scripts/setup_owui.py \
 
 Creates: public Skill `open-file-bridge` + model preset `local-files-assistant`.
 
-**Tier-2 token (optional, recommended):** decide before staging —
-`--bridge-token <secret>` embeds one shared token in the public skill:
+**Tier-2 token (optional, recommended):** decide before staging — the
+repo ships a dedicated **token-variant** skill for each flavor, and
+`--bridge-token <secret>` publishes those with the token embedded:
 
 - **Prefer per-user private tokens** (stage WITHOUT `--bridge-token`): each
   user clicks *Generate random token* on their own bridge (settings page →
-  🔒 Security) and tells the model the token once in chat — the skill (2.7+)
-  honors a user-provided token for the session — or embeds it in a private
-  copy of the skill. Nothing is shared between users; this is the strongest
-  option and the one to offer by default.
-- **Org-wide token** (stage WITH `--bridge-token`): every user pastes the
-  same token into their bridge. Zero per-user setup, but everyone in the
-  org can read it from the skill body — it is a company-boundary credential
+  🔒 Security) and tells the model the token once in chat — the skill's
+  401-recovery block actively asks for it when needed — or the user
+  embeds it in a private copy of `SKILL-TOKEN.md`. Nothing is shared
+  between users; this is the strongest option and the one to offer by
+  default.
+- **Org-wide token** (stage WITH `--bridge-token`): publishes the token
+  variants (`SKILL-TOKEN.md` / `SKILL-STRICT-TOKEN.md`) with the org
+  token baked into the single `BRIDGE_HEADERS` definition — weak models
+  can't get the header wrong. Every user pastes the same token into
+  their bridge. Zero per-user setup, but everyone in the org can read
+  the token from the skill body — it is a company-boundary credential
   (stops local programs and other websites from using the bridge; the
   origin lock already stops other sites from *reading* responses), not a
   secret from colleagues. Rotate by staging a new token and having users
   re-paste. Avoid if your OWUI has guest/external chat accounts — they
   would see the token too.
 
-**Skill variants (2.3+).** The repo ships two skill bodies; install one
-or both and customize later:
+**Skill variants (2.9+).** The repo ships FOUR skill bodies — two axes,
+standard/strict × no-token/token; install the pair matching your token
+decision:
 
 | Variant | File | For |
 |---|---|---|
-| standard | `skill/open-file-bridge/SKILL.md` | capable models — full API table, Pyodide office creation, discretion |
-| strict | `skill/open-file-bridge/SKILL-STRICT.md` | weaker models — 10 hard rules, fixed A/B/C recipes, bridge-only writes, verify-after-write, scripted error phrases |
+| standard, no-token | `skill/open-file-bridge/SKILL.md` | capable models, per-user tokens in chat (401-recovery block) |
+| standard, token | `skill/open-file-bridge/SKILL-TOKEN.md` | capable models, org token embedded (`__ORG_TOKEN__` filled at publish) |
+| strict, no-token | `skill/open-file-bridge/SKILL-STRICT.md` | weaker models, per-user tokens (10 hard rules, fixed recipes) |
+| strict, token | `skill/open-file-bridge/SKILL-STRICT-TOKEN.md` | weaker models, org token embedded |
+
+Why the token axis exists: with one mixed skill, weak models copied the
+token-free example block verbatim, hit 401, and stalled (user-reported
+2026-08-31). Each variant now has exactly ONE `BRIDGE_HEADERS`
+definition and says explicitly whether it talks to the bridge with or
+without a token.
 
 Multi-model orgs: `--variant-strict-model <weak-model-id>` installs
 BOTH skills and a second preset `local-files-assistant-strict` riding
@@ -83,7 +97,10 @@ off-recipe; the strict body forecloses both (found 2026-08-28, GLM
 
 1. **Workspace → Skills → Create**
    - Name: `Open File Bridge`, ID: `open-file-bridge`
-   - Content: paste `skill/open-file-bridge/SKILL.md` (without the `---` frontmatter)
+   - Content: paste `skill/open-file-bridge/SKILL.md` (without the `---`
+     frontmatter). Org-wide token instead? Paste `SKILL-TOKEN.md` and
+     fill your token into its `"X-Bridge-Token": "__ORG_TOKEN__"` line
+     first — the script's `--bridge-token` does this for you.
    - Access → make it **public** (read for everyone)
 2. **Workspace → Models → edit/create** a preset based on your model:
    - Attach the skill
