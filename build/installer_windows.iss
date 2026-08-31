@@ -31,7 +31,7 @@
 [Setup]
 AppId={{8E1B6C4A-9D2F-4E7B-A3C1-OPENFILEBRIDGE01}
 AppName=Open File Bridge
-AppVersion=2.8.3
+AppVersion=2.9.0
 AppPublisher=Your Org
 DefaultDirName={autopf}\OpenFile Bridge
 DefaultGroupName=Open File Bridge

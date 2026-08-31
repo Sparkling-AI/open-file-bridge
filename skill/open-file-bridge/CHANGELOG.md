@@ -2,6 +2,16 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.9 — 2026-08-31
+
+Outcome-link lifetime is now configurable per bridge (settings page →
+"Link lifetime"; default raised from 1 hour to 7 days). Skill wording
+updated everywhere it claimed "~1 h": `/link` API-table row, the
+re-minting section, and the outcome-links checklist. No new endpoints —
+`SKILL_MIN` stays 2.5. The expired-link page on the app now shows the
+bridge's actual configured lifetime and points the user to the settings
+page.
+
 ## 2.8.1 — 2026-08-30
 
 Versioning policy change (no functional skill changes): skill and app

@@ -63,7 +63,7 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 #                  always fine (API is backward-compatible). Bump only
 #                  when the skill starts referencing an endpoint that
 #                  didn't exist in older bridges.
-VERSION = "2.8.3"
+VERSION = "2.9.0"
 SKILL_MIN = "2.5"
 
 
@@ -1180,7 +1180,51 @@ def confirmation_consume(tok: str, params: dict) -> tuple[bool, str]:
 # ever leaves through it — so /click needs no bridge token: a browser
 # top-level navigation cannot send headers anyway.
 
-LINK_TTL_SECONDS = int(os.environ.get("FILE_BRIDGE_LINK_TTL", "3600"))
+# Outcome-link lifetime. Precedence: FILE_BRIDGE_LINK_TTL env (deployment
+# pin / tests) → "link_ttl" state setting (Link-lifetime section of the
+# settings page) → 7-day default. Was a fixed 1 h before the setting
+# existed; user decision 2026-08-31: default 7 days, UI-controlled.
+LINK_TTL_DEFAULT = 7 * 24 * 3600
+try:
+    LINK_TTL_ENV = int(os.environ.get("FILE_BRIDGE_LINK_TTL", "0")) or None
+except ValueError:
+    LINK_TTL_ENV = None
+LINK_TTL_MIN, LINK_TTL_MAX = 60, 365 * 24 * 3600
+
+
+def link_ttl_seconds() -> tuple[int, str]:
+    """(seconds, source) — source: 'env' | 'setting' | 'default'."""
+    if LINK_TTL_ENV:
+        return LINK_TTL_ENV, "env"
+    try:
+        v = int(_state_load().get("link_ttl") or 0)
+    except Exception:
+        v = 0
+    if LINK_TTL_MIN <= v <= LINK_TTL_MAX:
+        return v, "setting"
+    return LINK_TTL_DEFAULT, "default"
+
+
+def _fmt_ttl(sec: float) -> str:
+    """Human label for link lifetimes (shared by the expired page and the
+    settings page). Capped-year phrasing matches the UI select's 1-year
+    option."""
+    sec = int(sec)
+    if sec >= 2 * 365 * 24 * 3600:
+        return "several years"
+    if sec >= 365 * 24 * 3600:
+        return "1 year"
+    if sec >= 30 * 24 * 3600:
+        return f"{sec // (30 * 24 * 3600)} month{'s' if sec >= 60 * 24 * 3600 else ''}"
+    if sec >= 24 * 3600:
+        return f"{sec // (24 * 3600)} day{'s' if sec >= 48 * 3600 else ''}"
+    if sec >= 2 * 3600:
+        return f"{sec // 3600} hours"
+    if sec >= 3600:
+        return "1 hour"
+    return f"{max(sec, 1)} seconds"
+
+
 _CLICK_FILE = STATE_DIR / "click-links.json"
 _CLICK_LOCK = threading.Lock()
 
@@ -1204,11 +1248,12 @@ def _click_save(data: dict):
 
 def click_link_issue(rel: str) -> dict:
     """Mint the nonce pair for one path. Returns {"open","reveal","ttl"}."""
+    ttl, _src = link_ttl_seconds()
     with _CLICK_LOCK:
         allc = _click_load()
         tok_open = _secrets.token_hex(16)   # 32 hex chars = 128 bits
         tok_reveal = _secrets.token_hex(16)
-        exp = time.time() + LINK_TTL_SECONDS
+        exp = time.time() + ttl
         # store the path EXACTLY as minted and re-resolve at click time:
         # roots/ignore patterns may change between mint and click
         allc[tok_open] = {"kind": "open", "path": rel, "expiry": exp,
@@ -1216,7 +1261,7 @@ def click_link_issue(rel: str) -> dict:
         allc[tok_reveal] = {"kind": "reveal", "path": rel, "expiry": exp,
                             "sibling": tok_open}
         _click_save(allc)
-    return {"open": tok_open, "reveal": tok_reveal, "ttl": LINK_TTL_SECONDS}
+    return {"open": tok_open, "reveal": tok_reveal, "ttl": ttl}
 
 
 def click_link_find(tok: str) -> dict | None:
@@ -3468,6 +3513,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                    "max_depth": "6"}), cors=False)
 
         if u.path == "/state":
+            _ttl, _ttl_src = link_ttl_seconds()
             return self._json(200, {
                 "root": str(root) if root else None,
                 "roots": roots_config(), "port": PORT,
@@ -3478,6 +3524,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "allow_reveal": bool(_state_load().get("allow_reveal")),
                 "ignore_global": _global_ignore(),
                 "rate_limits": _rate_limits(),
+                "link_ttl": _ttl, "link_ttl_source": _ttl_src,
                 "endpoint_risk": {k: ENDPOINT_RISK[k] for k in
                                   sorted(ENDPOINT_RISK)}})
 
@@ -4794,10 +4841,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                      "works when the user clicks it in the chat answer."))
         rec = click_link_find(tok)
         if rec is None:
+            _ttl, _ = link_ttl_seconds()
             return self._page(410, _click_page(
                 "⏳", "Link expired",
-                note="Outcome links live about an hour. Ask in chat and the "
-                     "assistant can issue a fresh one."))
+                note=f"Outcome links live {_fmt_ttl(_ttl)}. Ask in chat and "
+                     "the assistant can issue a fresh one — or set a longer "
+                     "lifetime in the Open File Bridge settings page."))
         if security_mode() == "UNLOCKED":
             return self._page(503, _click_page(
                 "🔒", "Bridge is unlocked",
@@ -4942,6 +4991,29 @@ class Handler(http.server.BaseHTTPRequestHandler):
             _state_update(readonly=bool(body["readonly"]))
         if "allow_reveal" in body:
             _state_update(allow_reveal=bool(body["allow_reveal"]))
+        if "link_ttl" in body:
+            # Outcome-link lifetime (Link-lifetime section of the settings
+            # page). Env var FILE_BRIDGE_LINK_TTL still wins over this
+            # setting (deployment pin) — refuse the save loudly then, so
+            # the UI never claims a value that isn't in effect.
+            try:
+                v = int(body["link_ttl"])
+            except (TypeError, ValueError):
+                return self._json(400, {"ok": False,
+                                        "error": "link_ttl must be a number "
+                                                 "of seconds"}, cors=False)
+            _e = os.environ.get("FILE_BRIDGE_LINK_TTL", "").strip()
+            if _e:
+                return self._json(400, {"ok": False,
+                                        "error": f"link lifetime is pinned "
+                                                 f"to {_e}s by "
+                                                 f"FILE_BRIDGE_LINK_TTL"}, cors=False)
+            if not (LINK_TTL_MIN <= v <= LINK_TTL_MAX):
+                return self._json(400, {"ok": False,
+                                        "error": f"link_ttl must be "
+                                                 f"{LINK_TTL_MIN}-{LINK_TTL_MAX} "
+                                                 f"seconds"}, cors=False)
+            _state_update(link_ttl=v)
         if isinstance(body.get("ignore_global"), list):
             _state_update(ignore_global=[str(x)[:200] for x in body["ignore_global"]][:200])
         if body.get("root") and not isinstance(body.get("roots"), list):
@@ -5051,6 +5123,25 @@ depth. The preview below updates within seconds of saving.</p>
 <p class="hint">Always ignored (built in, not editable):
 <b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b></p>
 </details>
+<details class="sec" id="sec-links" open>
+<summary>⏳ Link lifetime</summary>
+<p class="hint">How long the chat-answer file links (📄 Open / 📂 Show in
+folder) keep working after the assistant posts them. The clock starts when
+the link is created; a longer lifetime means old chat answers stay clickable
+for longer.</p>
+<div class="btnrow" style="align-items:center">
+<select id="linkttl" style="flex:1;padding:10px;font-size:16px">
+<option value="3600">1 hour</option>
+<option value="86400">1 day</option>
+<option value="604800">7 days</option>
+<option value="2592000">30 days</option>
+<option value="7776000">90 days</option>
+<option value="31536000">1 year</option>
+</select>
+<button onclick="setLinkTTL()" class="small">Save</button>
+</div>
+<p class="hint" id="ttlinfo"></p>
+</details>
 <details class="sec" id="sec-preview" open>
 <summary><span style="flex:1">👁 What the AI can see</span>
 <button onclick="event.preventDefault();renderPreview()" class="small">↻ Refresh</button></summary>
@@ -5105,6 +5196,12 @@ document.getElementById('secstatus').textContent='Security mode: '+s.security+
 document.getElementById('token').value=
 (String(s.security).indexOf('token')>=0?'••••••••••••':'');
 syncTokVis();
+{const sel=document.getElementById('linkttl');
+ if(sel){let hit=[...sel.options].some(o=>+o.value===s.link_ttl);
+  sel.value=hit?String(s.link_ttl):(s.link_ttl>=31536000?'31536000':'604800');
+  const src=s.link_ttl_source==='env'?' (pinned by FILE_BRIDGE_LINK_TTL — save is disabled)':(s.link_ttl_source==='setting'?' (custom)':' (default)');
+  document.getElementById('ttlinfo').textContent='Links live '+fmtTTL(+sel.value)+src+'.';
+  sel.disabled=(s.link_ttl_source==='env');}}
 const c=await (await fetch('/ocr/config')).json();
 document.getElementById('ocrlang').value=c.lang||'eng';
 renderLangs(c.available,c.lang);
@@ -5262,6 +5359,7 @@ function syncTokVis(){
  const i=document.getElementById('token'),b=document.getElementById('tokvis');
  if(i.value){b.style.display='';}
  else{b.style.display='none';i.type='password';b.textContent='Show';b.title='Show the token';}}
+function fmtTTL(v){return v>=31536000?'1 year':(v>=2592000?(v/2592000)+' month'+(v>=5184000?'s':''):(v>=86400?(v/86400)+' day'+(v>=172800?'s':''):(v/3600)+' hour'+(v>=7200?'s':'')));}
 async function setToken(){
  const v=document.getElementById('token').value.trim();
  if(!v){document.getElementById('secstatus').textContent='✗ paste a token first (or use Generate)';return;}
@@ -5283,6 +5381,13 @@ async function clearToken(){
  const d=await res.json();
  document.getElementById('secstatus').textContent='Security mode: '+d.security;
  refresh();}
+async function setLinkTTL(){
+ const v=parseInt(document.getElementById('linkttl').value,10);
+ const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({link_ttl:v})});
+ const d=await res.json();
+ const el=document.getElementById('ttlinfo');
+ if(d.ok){el.textContent='Saved — new links live '+fmtTTL(v)+'. Existing links keep their original expiry.';el.className='hint ok';}
+ else{el.textContent='✗ '+(d.error||'failed');el.className='hint';}}
 async function stopBridge(){
  if(!confirm('Stop the Open File Bridge service?\\nOpen WebUI will lose file access until you start it again.'))return;
  try{await fetch('/api/shutdown',{method:'POST'});}catch(e){}

@@ -515,7 +515,9 @@ mentions, wrong for outcomes where the user's real question is "where did
 it land?"). Agreed shape: **chips stay for mentions; outcomes get links**.
 
 ✅ `POST /link {"path"}` (token-authed like every file endpoint) mints a
-   short-lived nonce PAIR (128-bit hex, ~1 h TTL, multi-use — chat links
+   short-lived nonce PAIR (128-bit hex, multi-use — TTL configurable in
+   the settings page "Link lifetime" since 2.9: default 7 days,
+   1 h–1 y, FILE_BRIDGE_LINK_TTL env pins it; chat links
    get clicked again) and returns absolute `open_url` + `reveal_url` +
    the OS file-manager word. The model embeds both in the answer:
    `**name** · [📄 Open](url) · [📂 Show in folder](url)`; folders get

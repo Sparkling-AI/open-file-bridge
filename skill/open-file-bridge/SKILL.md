@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v2.8.1
+# Local File Bridge — skill v2.9
 
 > Requires bridge ≥ **2.5** (checked at bootstrap below; newer bridges are
 > always fine — the API is backward-compatible).
@@ -34,7 +34,7 @@ Access files in **the user's own computer** through their local Open File Bridge
 | `/image_info?path=X` | GET | Image dimensions/format/megapixels + EXIF orientation (effective size) — stdlib, no addon |
 | `/image_b64?path=X&max_bytes=` | GET | Image as a **data URL** (`data:image/png;base64,…`), size-capped (default 4 MB; auto-downscaled when pymupdf is present) — for showing images in chat |
 | `/reveal?path=X` | GET | Open the user's file manager at the file — **consent-gated** (403 unless the user enabled it in settings) |
-| `/link` | POST | `{"path":"x.pdf"}` → user-clickable links for your ANSWER: `open_url` (default app) + `reveal_url` (file manager), ~1 h TTL — **outcome links** (v2.7+) |
+| `/link` | POST | `{"path":"x.pdf"}` → user-clickable links for your ANSWER: `open_url` (default app) + `reveal_url` (file manager), multi-use; TTL is configured on the user's bridge (default 7 days; older bridges 1 h) — **outcome links** (v2.7+) |
 | `/ocr/config` | GET | Current OCR language + installed languages |
 | `/convert` | POST | `{"path":"old.doc","out":"new.docx"}` — **LibreOffice headless conversion**: legacy .doc/.xls/.ppt → modern, office → PDF, xlsx → csv, docx → png/html. Format pair comes from the extensions; confirm flow; 501 with install hint if the user has no LibreOffice |
 | `/pdf_from_text` | POST | `{"out":"x.pdf","blocks":[{"style":"title\|h1\|h2\|body\|pagebreak","text":"…"}]}` — create PDF natively (fpdf2 addon, no Pyodide shim); confirm flow |
@@ -460,7 +460,8 @@ d = await bridge_post("/write", {"path": "notes v2.md", "content": ...})
 ```
 
 `POST /link {"path":…}` exists for one case only: RE-MINTING after a user
-reports an expired link (links live ~1 h).
+reports an expired link (link lifetime is set on the user's bridge —
+default 7 days; the user can change it in the bridge settings page).
 
 Then in your ANSWER (not code), for a file:
 
@@ -477,8 +478,10 @@ For a folder: name + [📂 Show in folder](reveal_url) only.
   citations — stay plain code spans (click copies the name). Never wrap a
   whole listing in links. One link pair per outcome file; with many outcome
   files, link the headline ones and list the rest as code spans.
-- Links are multi-use and expire after ~1 hour. If the user reports an
-  expired page, call `POST /link` with the path and give the fresh URLs.
+- Links are multi-use and expire after the bridge's configured lifetime
+  (default 7 days; the user can change it in the bridge settings page).
+  If the user reports an expired page, call `POST /link` with the path
+  and give the fresh URLs.
 - `/link` 404s on bridges older than 2.7 → skip the links silently and keep
   the plain code span (at most one attempt).
 

@@ -122,6 +122,21 @@ check "ocr_lang: unknown code rejected"   'language not installed' \
 check "ocr_lang: junk format rejected"    'must be tesseract codes' \
   "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"ocr_lang":"!!!"}')"
 
+# ---------- link lifetime: setting + defaults (2.9) ----------
+check "link ttl default 7d"     '"link_ttl": *604800'            "$(curl -s $BRIDGE/state)"
+check "link ttl source default" '"link_ttl_source": *"default"'  "$(curl -s $BRIDGE/state)"
+check "link ttl picker select"  'id="linkttl"'                   "$(curl -s $BRIDGE/picker)"
+# custom value: set 1 h via the picker API, verify state + minted ttl
+check "link ttl set 1h ok"      '"ok": *true' \
+  "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"link_ttl":3600}')"
+check "link ttl state 1h"       '"link_ttl": *3600'              "$(curl -s $BRIDGE/state)"
+check "link ttl source setting" '"link_ttl_source": *"setting"'  "$(curl -s $BRIDGE/state)"
+# invalid values refused (outside 60s..365d)
+check "link ttl junk refused"   'must be a number' \
+  "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"link_ttl":"banana"}')"
+check "link ttl out-of-range"   'link_ttl must be' \
+  "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"link_ttl":5}')"
+
 # ---------- token tier ----------
 check "no token denied"         'missing or invalid bridge token' "$(curl -s "$BRIDGE/read?path=notes.txt" -H "Origin: http://owui.test:8080")"
 check "wrong token denied"      'missing or invalid bridge token' "$(curl -s "$BRIDGE/read?path=notes.txt" -H "Origin: http://owui.test:8080" -H "X-Bridge-Token: nope")"
@@ -809,7 +824,10 @@ check "click malformed nonce"   'not recognized' \
   "$(curl -s "$BRIDGE/click/zz-not-a-nonce")"
 check "click unknown nonce"     'expired' \
   "$(curl -s "$BRIDGE/click/00000000dead")"
-# expiry: backdate the minted pair in the state store → expired page
+# expiry: backdate the minted pair in the state store → expired page.
+# NOTE: the suite set link_ttl=3600 above, so the page must say "1 hour"
+# (page reads the CONFIGURED ttl, not the dead link's own) AND point the
+# user at the settings page for a longer lifetime.
 python3 - "$STATEDIR" "$OPEN_URL" "$REV_URL" <<'PYX'
 import json, re, sys, pathlib
 sd, *urls = sys.argv[1:]
@@ -820,6 +838,8 @@ for u in urls:
 f.write_text(json.dumps(d))
 PYX
 check "click expired nonce"    'expired' "$(curl -s "$OPEN_URL")"
+check "expired page shows ttl" '1 hour' "$(curl -s "$OPEN_URL")"
+check "expired page hints ui"  'settings page' "$(curl -s "$OPEN_URL")"
 # deleted file: mint-then-delete → friendly "no longer there" page
 curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T \
   -d '{"path":"link-gone.txt","content":"x"}' >/dev/null
@@ -953,6 +973,24 @@ check "foreign port holder refused (exit 1)" \
   "not an Open File Bridge.*(exit 1)" "$OUT (exit $RC)"
 kill $SQUAT 2>/dev/null || true
 wait $SQUAT 2>/dev/null || true
+
+# ---------- link ttl env pin beats the setting (2.9) ----------
+# FILE_BRIDGE_LINK_TTL is the deployment override: /state must report it
+# with source "env", and the picker API must REFUSE a link_ttl save so
+# the UI never claims a value that isn't in effect.
+for _ in $(seq 1 40); do port_bindable && break; sleep 0.25; done
+ENVDIR=$(mktemp -d); ENVSTATE=$(mktemp -d)
+echo "e1" > "$ENVDIR/e.txt"
+FILE_BRIDGE_STATE_DIR="$ENVSTATE" FILE_BRIDGE_PORT="$PORT_NUM" \
+  FILE_BRIDGE_LINK_TTL=120 $BRIDGE_CMD "$ENVDIR" & ENV_PID=$!
+for _ in $(seq 1 60); do curl -s -m 1 "$BRIDGE/health" >/dev/null 2>&1 && break; sleep 0.5; done
+check "ttl env beats setting"  '"link_ttl": *120' "$(curl -s $BRIDGE/state)"
+check "ttl env source"         '"link_ttl_source": *"env"' "$(curl -s $BRIDGE/state)"
+check "ttl save refused under env pin" 'FILE_BRIDGE_LINK_TTL' \
+  "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"link_ttl":3600}')"
+kill $ENV_PID 2>/dev/null || true
+wait $ENV_PID 2>/dev/null || true
+rm -rf "$ENVDIR" "$ENVSTATE" 2>/dev/null || true
 
 echo
 if [[ $fail -eq 0 ]]; then echo "ALL TESTS PASSED ✅"; else echo "SOME TESTS FAILED ❌"; exit 1; fi

@@ -52,7 +52,7 @@ SKILL_DIR = "skill/open-file-bridge"
 # Skill version (own line: moves only when skill TEXT changes, independent
 # of the app VERSION — see docs/DEVNOTES.md "Versioning"). Keep in sync
 # with the skill folder's CHANGELOG.md.
-SKILL_VERSION = "2.8.1"
+SKILL_VERSION = "2.9"
 REPO = Path(__file__).resolve().parent.parent
 
 
