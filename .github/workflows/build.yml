@@ -90,6 +90,34 @@ jobs:
           Write-Output "smoke OK: root=$($health.root) addons=$($health.addons) wheels=$($health.wheels)"
           Stop-Process -Id $p.Id -Force
 
+      - name: Console-attached launch regression (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Regression for the v2.8.1 crash-on-startup: a --windowed exe
+          # launched WITH an attached console (cmd/PowerShell) inherits
+          # cp1252 stdout on Western locales; the ⚠ UNLOCKED startup banner
+          # raised UnicodeEncodeError and killed the app before any UI.
+          # main() now reconfigures both streams to UTF-8 — this launch
+          # (fresh state dir = UNLOCKED = the exact crashing banner) must
+          # stay alive AND serve. When the runner step has no console the
+          # exe falls back to the already-tested null-stdout path.
+          $env:FILE_BRIDGE_STATE_DIR = "$env:RUNNER_TEMP\fbstate-con"
+          $share = "$env:RUNNER_TEMP\fbshare-con"
+          New-Item -ItemType Directory -Force $share | Out-Null
+          $p = Start-Process -PassThru -NoNewWindow `
+            -FilePath "dist\OpenFileBridge\OpenFileBridge.exe" `
+            -ArgumentList $share
+          Start-Sleep -Seconds 6
+          if ($p.HasExited) {
+            throw "console-attached launch exited early (cp1252 UnicodeEncodeError regression)"
+          }
+          $h = $null
+          try { $h = Invoke-RestMethod -Uri "http://127.0.0.1:8765/health" -TimeoutSec 2 } catch {}
+          Stop-Process -Id $p.Id -Force
+          if (-not $h -or -not $h.ok) { throw "console-attached launch not serving" }
+          Write-Output "console-attached cp1252 launch OK (v$($h.version), security $($h.security))"
+
       # ---------------- macOS (onefile binary -> .app + zip) ---------------
       # Signing path: set repo secrets MAC_SIGNING_P12 (base64 of the
       # Developer-ID .p12), MAC_SIGNING_PASSWORD, NOTARY_APPLE_ID,

@@ -5769,6 +5769,23 @@ def main():
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w")
 
+    # Windows console-less exes launched WITH an attached console (cmd /
+    # PowerShell / double-click under some shells) inherit stdout in the
+    # legacy ANSI code page (cp1252 on Western locales). Startup banners
+    # contain non-ASCII (⚠ UNLOCKED notice, · separators) — print() then
+    # raises UnicodeEncodeError and the app dies before the UI opens
+    # (user-reported crash-on-startup, v2.8.1 exe). Force UTF-8 on both
+    # streams BEFORE any print; unencodable bytes degrade gracefully
+    # instead of killing the process. stderr keeps backslashreplace so
+    # tracebacks stay legible even for exotic characters.
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _rc = getattr(_s, "reconfigure", None)
+            if _rc:
+                _rc(encoding="utf-8", errors="backslashreplace")
+        except Exception:
+            pass
+
     folder = sys.argv[1] if len(sys.argv) > 1 else None
     if folder:
         p = Path(folder).expanduser().resolve()
