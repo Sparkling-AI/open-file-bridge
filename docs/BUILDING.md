@@ -10,6 +10,7 @@ file (3.8+), so the "build" is just freezing it with PyInstaller per OS.
 | Linux | `build/build_linux.sh` | `dist/OpenFileBridge` (single binary) |
 | Windows | `pyinstaller build/open_file_bridge_windows.spec` (on Windows) | `dist/OpenFileBridge/OpenFileBridge.exe` |
 | Windows installer | Inno Setup on `build/installer_windows.iss` | `OpenFileBridge-Setup.exe` |
+| Windows Store | `build/build_msix.ps1` after the Windows build | `dist/OpenFileBridge-windows-x64.msix` |
 | macOS | `pyinstaller --onefile --windowed --name OpenFileBridge src/file_bridge.py` then `build/package_macos.sh` | `OpenFileBridge-macos.zip` (.app inside) |
 | All three (CI) | push a `v*` tag | GitHub Actions artifacts |
 
@@ -49,13 +50,32 @@ pyinstaller --noconfirm file_bridge_windows.spec
   `build/appicon.svg`) — Explorer, Taskbar and shortcuts show it. Regenerate
   alongside the `.icns` below; both come from the same SVG.
 - Unsigned exe ⇒ SmartScreen "Windows protected your PC" on first run.
-  Users click **More info → Run anyway**. An EV code-signing cert removes this.
+  Users click **More info → Run anyway** when policy permits it. A valid
+  Authenticode signature identifies the publisher and can accumulate reputation,
+  but OV and EV certificates can both warn on early downloads. Store-installed
+  MSIX packages are re-signed by Microsoft and do not show this warning.
 
 Optional proper installer (Start-menu entry, uninstaller, desktop icon):
 
 1. Install [Inno Setup](https://jrsoftware.org/isinfo.php)
 2. Build the exe first (above)
 3. Compile `build/installer_windows.iss` → `OpenFileBridge-Setup.exe`
+
+### Microsoft Store MSIX
+
+The Store path avoids a separate Windows signing subscription. Reserve the app
+in Partner Center, copy its package identity values, and follow
+[`docs/MICROSOFT-STORE.md`](MICROSOFT-STORE.md). On Windows:
+
+```powershell
+.\build\build_msix.ps1
+```
+
+The script stamps the app's `VERSION` as a four-part MSIX version, stages the
+PyInstaller output and bundled assets, validates the manifest with MakeAppx,
+and writes `dist\OpenFileBridge-windows-x64.msix`. The public Partner Center
+identity lives in `build/msix/store-identity.json`, so tagged Windows CI builds
+produce the same Store-ready package without signing secrets or variables.
 
 ## macOS
 

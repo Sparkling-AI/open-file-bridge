@@ -6,9 +6,9 @@ is the deployed artifact.
 
 ## 1. "Windows protected your PC" (SmartScreen)
 
-**Cause:** unsigned exe — Windows flags any new unsigned binary with
-no reputation. Expected for current builds (signing matrix deferred,
-ROADMAP P3).
+**Cause:** direct-download Windows builds are unsigned, or a new signed build
+has not accumulated SmartScreen reputation. Store-installed MSIX builds are
+signed by Microsoft and do not show this prompt.
 
 **Fix (user-facing, 30 seconds):**
 1. On the blue dialog click **More info** (easy to miss — bottom left).
@@ -24,10 +24,11 @@ ROADMAP P3).
 - Orange/red browser warning instead → they downloaded from a weird
   source; re-download from the internal share; verify hash.
 
-**Escalation rule:** if more than ~10% of a rollout hits the Defender
-*policy* variant, that's the signal to revisit the signing matrix
-(Windows OV cert ~$100–200/yr kills both variants) — track in the
-rollout notes.
+**Escalation rule:** enterprise policy is controlled by the employer. Prefer
+the Microsoft Store MSIX or ask IT to deploy/allow the app through Intune or
+App Control. A public OV/EV signature improves publisher identity but does not
+override an organization's allow policy and does not guarantee immediate
+SmartScreen reputation.
 
 ## 2. Port conflict — bridge won't start / "port already in use"
 

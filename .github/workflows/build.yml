@@ -118,6 +118,31 @@ jobs:
           if (-not $h -or -not $h.ok) { throw "console-attached launch not serving" }
           Write-Output "console-attached cp1252 launch OK (v$($h.version), security $($h.security))"
 
+      # Store identity is public package metadata committed in
+      # build/msix/store-identity.json. MakeAppx validates it while packing.
+      - name: Build Microsoft Store MSIX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\build\build_msix.ps1
+
+      - name: Inspect Microsoft Store MSIX (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $makeAppx = Get-ChildItem "${env:ProgramFiles(x86)}\Windows Kits\10\bin" -Filter MakeAppx.exe -Recurse |
+            Where-Object { $_.FullName -match '\\x64\\MakeAppx\.exe$' } |
+            Sort-Object FullName -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          & $makeAppx unpack /v /o /p dist\OpenFileBridge-windows-x64.msix /d "$env:RUNNER_TEMP\msix-check"
+          if (-not (Test-Path "$env:RUNNER_TEMP\msix-check\OpenFileBridge.exe")) {
+            throw "MSIX does not contain OpenFileBridge.exe"
+          }
+          [xml]$manifest = Get-Content "$env:RUNNER_TEMP\msix-check\AppxManifest.xml"
+          $storeIdentity = Get-Content build\msix\store-identity.json -Raw | ConvertFrom-Json
+          if ($manifest.Package.Identity.Name -ne $storeIdentity.identityName) {
+            throw "MSIX identity does not match Partner Center"
+          }
+
       # ---------------- macOS (onefile binary -> .app + zip) ---------------
       # Signing path: set repo secrets MAC_SIGNING_P12 (base64 of the
       # Developer-ID .p12), MAC_SIGNING_PASSWORD, NOTARY_APPLE_ID,
@@ -201,7 +226,9 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
-          path: dist/OpenFileBridge/
+          path: |
+            dist/OpenFileBridge/
+            dist/OpenFileBridge-windows-x64.msix
           if-no-files-found: error
 
       - name: Upload artifact (Linux)

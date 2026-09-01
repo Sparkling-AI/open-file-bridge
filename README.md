@@ -299,6 +299,8 @@ user"), not list features. Both shipped skill variants carry this wording.
 | [OWUI-COMPAT.md](docs/OWUI-COMPAT.md) | compatibility window + per-upgrade checklist |
 | [SUPPORT.md](docs/SUPPORT.md) | SmartScreen, port 8765, Safari runbook |
 | [BUILDING.md](docs/BUILDING.md) | building the per-OS packages |
+| [MICROSOFT-STORE.md](docs/MICROSOFT-STORE.md) | free Store/MSIX publishing checklist |
+| [PRIVACY.md](docs/PRIVACY.md) | privacy-policy source for Store publication |
 | [RCLONE.md](docs/RCLONE.md) | mounting cloud drives into the shared folder |
 | [ROADMAP.md](docs/ROADMAP.md) | design decisions, verified results, history |
 | [DEVNOTES.md](docs/DEVNOTES.md) | every gotcha we hit (agent-friendly) |
