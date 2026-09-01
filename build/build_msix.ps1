@@ -61,8 +61,17 @@ if (Test-Path $Staging) {
 New-Item -ItemType Directory -Path $Staging | Out-Null
 
 Copy-Item (Join-Path $AppDirectory "*") $Staging -Recurse -Force
-Copy-Item (Join-Path $RepoRoot "src\wheels") (Join-Path $Staging "wheels") -Recurse -Force
-Copy-Item (Join-Path $RepoRoot "src\tessdata") (Join-Path $Staging "tessdata") -Recurse -Force
+
+# Copy directory contents rather than the directory itself. The normal CI
+# build already places these assets in AppDirectory; copying the source folder
+# onto an existing destination would otherwise create wheels\wheels and
+# tessdata\tessdata inside the package.
+foreach ($AssetName in @("wheels", "tessdata")) {
+    $AssetSource = Join-Path $RepoRoot "src\$AssetName"
+    $AssetDestination = Join-Path $Staging $AssetName
+    New-Item -ItemType Directory -Path $AssetDestination -Force | Out-Null
+    Copy-Item (Join-Path $AssetSource "*") $AssetDestination -Recurse -Force
+}
 Copy-Item (Join-Path $RepoRoot "build\msix\Assets") (Join-Path $Staging "Assets") -Recurse -Force
 
 # Include the optional Windows OCR engine when the release preparation step
@@ -70,7 +79,9 @@ Copy-Item (Join-Path $RepoRoot "build\msix\Assets") (Join-Path $Staging "Assets"
 # depend on it.
 $Tesseract = Join-Path $RepoRoot "build\bundle\tesseract"
 if (Test-Path $Tesseract -PathType Container) {
-    Copy-Item $Tesseract (Join-Path $Staging "tesseract") -Recurse -Force
+    $TesseractDestination = Join-Path $Staging "tesseract"
+    New-Item -ItemType Directory -Path $TesseractDestination -Force | Out-Null
+    Copy-Item (Join-Path $Tesseract "*") $TesseractDestination -Recurse -Force
 }
 
 $Manifest | Set-Content (Join-Path $Staging "AppxManifest.xml") -Encoding utf8
