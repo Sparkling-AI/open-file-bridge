@@ -37,7 +37,7 @@ if (-not (Test-Path $ExePath -PathType Leaf)) {
 }
 
 $SourceText = Get-Content (Join-Path $RepoRoot "src\file_bridge.py") -Raw
-$VersionMatch = [regex]::Match($SourceText, '(?m)^VERSION = "(?<version>\d+\.\d+\.\d+)"$')
+$VersionMatch = [regex]::Match($SourceText, '(?m)^VERSION = "(?<version>\d+\.\d+\.\d+)"\r?$')
 if (-not $VersionMatch.Success) {
     throw "Could not read VERSION from src\file_bridge.py"
 }
