@@ -63,7 +63,7 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 #                  always fine (API is backward-compatible). Bump only
 #                  when the skill starts referencing an endpoint that
 #                  didn't exist in older bridges.
-VERSION = "2.9.0"
+VERSION = "2.9.1"
 SKILL_MIN = "2.5"
 
 
@@ -5476,6 +5476,27 @@ class _RotatingLog:
 # Only reachable from the loopback picker API — the local user clicking
 # the button IS the consent, same stance as /reveal but local-initiated.
 
+# Windows picker script, as ONE literal. REGRESSION GUARD: v2.4-2.9.0
+# shipped this snippet assembled from adjacent string fragments with a
+# MISSING closing brace (the outer "& {" block was never closed) — every
+# real-Windows Browse click died with PowerShell "MissingEndCurlyBrace"
+# before the dialog could open (user report against 2.9.0, 2026-09-02;
+# never caught earlier because macOS=osascript, Linux=zenity, Wine can't
+# host the windowed exe, and CI never parsed the snippet). Rules for
+# anyone editing this: (1) braces must BALANCE — two opens "& {" and the
+# "if (" block get two closes; (2) keep it a single literal so tests can
+# import and parse it with a real PowerShell engine (e2e brace-check +
+# the CI Windows job's ParseInput step, both engines); (3) never switch
+# to base64 -EncodedCommand for "cleanliness" — the readable form is the
+# testable form.
+_WIN_PICK_PS_CMD = (
+    "& {Add-Type -AssemblyName System.Windows.Forms; "
+    "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
+    "$d.Description = 'Open File Bridge: choose the folder to share'; "
+    "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) { "
+    "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
+    "[Console]::Out.Write($d.SelectedPath) } }")
+
 _ACTIVE_DIALOGS: set = set()
 _DIALOGS_LOCK = threading.Lock()
 
@@ -5531,15 +5552,9 @@ def pick_folder_dialog(prompt: str = "Open File Bridge — choose the folder to 
                 out = out[:-1]
             return out or None, None
         if _IS_WINDOWS:
-            ps = ("& {Add-Type -AssemblyName System.Windows.Forms; "
-                  "$d = New-Object System.Windows.Forms.FolderBrowserDialog; "
-                  "$d.Description = 'Open File Bridge: choose the folder to share'; "
-                  "if ($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK) "
-                  "{ [Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
-                  "[Console]::Out.Write($d.SelectedPath) }")
             try:
                 rc, out_b, err_b = _run_dialog(["powershell", "-NoProfile", "-STA",
-                                                "-Command", ps])
+                                                "-Command", _WIN_PICK_PS_CMD])
             except subprocess.TimeoutExpired:
                 return None, "folder dialog timed out (10 min) — try again or type the path"
             if rc == 0:

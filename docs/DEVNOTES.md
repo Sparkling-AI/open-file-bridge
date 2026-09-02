@@ -1090,3 +1090,47 @@ bump while being structurally unable to detect actual drift (it
 compared the bridge's own embedded constant with itself). This is the
 standard pattern (VS Code engines.vscode, WordPress "requires at
 least").
+
+## 2.9.1 — Windows Browse… fix: the unbalanced-brace PowerShell snippet (2026-09-02, user report)
+
+A real-Windows user on 2.9.0 reported: clicking **Browse…** in the
+settings page shows `✗ Missing closing } in statement block or type
+definition. … MissingEndCurlyBrace`, while typing the path manually +
+Save folder works. Root cause: the Windows branch of
+`pick_folder_dialog()` assembled its PowerShell snippet from adjacent
+string fragments with a MISSING closing brace — `& {` + `if (…) {`
+gave two opens but only one close, so Windows PowerShell refused to
+parse it and died before the FolderBrowserDialog could open (stderr →
+picker status line, which is why the user saw the raw ParserError).
+Bug window: v2.4 (6d536bb) through 2.9.0. Manual path entry never
+touches this code path — always a full workaround.
+
+Why it survived every gate for five versions:
+- macOS uses osascript and Linux zenity/kdialog — the Windows branch
+  never executes on dev machines.
+- Wine cannot host the --windowed exe (bootloader stdout deadlock),
+  so no local Windows runtime test existed.
+- CI Windows launch-smoke only hits /health — /api/pick_folder
+  would hang 600 s on a real modal dialog, so it was never in CI.
+- The e2e suite never inspected the snippet text itself.
+
+Fix (app 2.9.1, skill untouched — versioning policy):
+- Snippet lifted to module constant `_WIN_PICK_PS_CMD` as ONE literal
+  with balanced braces, plus edit-rules comment (never -EncodedCommand:
+  the readable form is the testable form).
+- e2e: import the constant, assert brace/paren balance + shape in
+  process (marker pattern — import-time stdout can carry lib warnings
+  like the fitz deprecation notice under `uv run --with pymupdf`;
+  never parse captured stdout). e2e 310→311.
+- CI Windows job: new step parses the EXACT constant with BOTH
+  engines users have — pwsh AND Windows PowerShell 5.1 (`powershell`),
+  each in its own process via `-File` with a param()-based parse-check
+  script (parse-only, dialog never shown). Repro proven first in
+  mcr.microsoft.com/powershell:latest on dpc: OLD snippet → the exact
+  user error; fixed → parses clean, 59 tokens.
+
+Lesson (generalizes): any string-built foreign-language snippet sent
+to a shell interpreter is only testable if it is importable as a
+constant AND parsed by a real engine in CI. Balance-counting in e2e
+on Linux would NOT alone have caught a semantically broken but
+balanced snippet; the CI real-engine parse is the actual guard.

@@ -143,6 +143,49 @@ jobs:
             throw "MSIX identity does not match Partner Center"
           }
 
+      - name: Folder-picker PowerShell snippet parses (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Regression for v2.9.0: the Browse… button's PowerShell snippet
+          # shipped with a missing closing '}' — every real-Windows Browse
+          # click failed with MissingEndCurlyBrace before the dialog could
+          # open (user report 2026-09-02). Parse the EXACT string the app
+          # sends with BOTH engines users actually have: pwsh (this shell)
+          # and Windows PowerShell 5.1 (what "powershell" resolves to on
+          # every stock Windows box). Each engine parses in its OWN process
+          # via -File (parse-only — the dialog is never shown/executed).
+          $py = @"
+          import sys; sys.path.insert(0, 'src')
+          import file_bridge as fb
+          sys.stdout.write(fb._WIN_PICK_PS_CMD)
+          "@
+          $snippet = $py | python -
+          if (-not $snippet) { throw "could not import _WIN_PICK_PS_CMD from file_bridge" }
+          $parsecheck = @'
+          param([string]$Code)
+          $tokens = $null; $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseInput($Code, [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            Write-Output "PARSE ERROR: $($errors[0].Message)"
+            exit 1
+          }
+          Write-Output "parses clean ($($tokens.Count) tokens)"
+          '@
+          Set-Content -Path "$env:RUNNER_TEMP\parsecheck.ps1" -Value $parsecheck -Encoding Utf8
+          $engines = @(
+            @{ Name = 'pwsh';         Exe = (Get-Command pwsh).Source },
+            @{ Name = 'powershell51'; Exe = 'powershell' }
+          )
+          foreach ($e in $engines) {
+            $out = & $e.Exe -NoProfile -File "$env:RUNNER_TEMP\parsecheck.ps1" -Code $snippet
+            if ($LASTEXITCODE -ne 0) {
+              throw "$($e.Name): picker snippet does not parse: $out"
+            }
+            Write-Output "$($e.Name): picker snippet $($out)"
+          }
+          Write-Output "picker snippet OK in both PowerShell engines"
+
       # ---------------- macOS (onefile binary -> .app + zip) ---------------
       # Signing path: set repo secrets MAC_SIGNING_P12 (base64 of the
       # Developer-ID .p12), MAC_SIGNING_PASSWORD, NOTARY_APPLE_ID,

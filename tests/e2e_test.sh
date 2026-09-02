@@ -110,6 +110,28 @@ check "picker: stop button"       'stopBridge'       "$PH"
 check "picker: token show toggle" 'id="tokvis"'      "$PH"
 check "picker: foldable cards"    'details class="sec" id="sec-root" open' "$PH"
 check "picker: fold persistence"  'FOLD_KEY'         "$PH"
+
+# Windows Browse… dialog snippet must survive a REAL parse: v2.4-2.9.0
+# shipped it with a missing closing brace, so every real-Windows Browse
+# click failed with PowerShell MissingEndCurlyBrace (found 2026-09-02).
+# On Linux/macOS we import the constant and check balance + shape in
+# process (import-time stdout can carry lib warnings, so never parse the
+# captured output — assert inside and print one marker); the CI Windows
+# job parses it with real PowerShell (both engines).
+WINPS_OK=$(python3 - <<'PYEOF' 2>/dev/null
+import sys; sys.path.insert(0, "src")
+import file_bridge as fb
+ps = fb._WIN_PICK_PS_CMD
+assert ps.count("{") == ps.count("}"), f"brace mismatch {ps.count('{')} vs {ps.count('}')}"
+assert ps.count("(") == ps.count(")"), "paren mismatch"
+assert ps.startswith("& {"), "outer scriptblock & { missing"
+assert "ShowDialog" in ps and "SelectedPath" in ps, "dialog calls missing"
+assert "FolderBrowserDialog" in ps, "wrong dialog class"
+print("win-picker-snippet-ok")
+PYEOF
+)
+check "win picker: snippet balanced + shaped" "win-picker-snippet-ok" "$WINPS_OK"
+
 case "$(uname -s)" in
   Darwin)  check "picker: mac placeholder"     '/Users/you/Documents' "$PH" ;;
   Linux)   check "picker: linux placeholder"   '/home/you/Documents'  "$PH" ;;

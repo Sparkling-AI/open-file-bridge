@@ -105,7 +105,22 @@ desktop Chrome as PNA rolls out).
 that's a real blocker → Direct Tool connections (Plan B) evaluation,
 not more support.
 
-## 4. Quick reference — what to collect first (any issue)
+## 4. "Missing closing '}'" when clicking Browse… (Windows, fixed in 2.9.1)
+
+**Symptom:** clicking **Browse…** on the settings page shows
+`✗ Missing closing '}' in statement block or type definition` — but
+typing the folder path manually + **Save folder** works fine.
+
+**Cause:** app versions 2.4–2.9.0 shipped the folder-picker PowerShell
+snippet with a missing closing brace, so Windows PowerShell refused to
+parse it and the dialog never opened. Fixed in 2.9.1; typing the path
+was always a full workaround.
+
+**What to tell the user:** "Update to 2.9.1 or newer (releases/latest).
+Until then, type the folder path into the box and press Save folder —
+that path was never affected."
+
+## 5. Quick reference — what to collect first (any issue)
 
 1. `http://127.0.0.1:8765/health` output (or screenshot).
 2. `http://127.0.0.1:8765/version` — bridge version + expected skill
