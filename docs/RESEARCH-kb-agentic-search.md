@@ -85,3 +85,48 @@ math ran on real fetched data, not memorized/embedded chunks.
   large KBs want a server-side listing+range API or the Jupyter route.
 - Natural extension: merge with the bridge — local files AND server
   KB in one sandbox filesystem.
+
+## Part C — filter-based per-user token injection (verified 2026-09-03)
+
+Production shape for auth: an OWUI **Filter function**
+(`docs/prototype-kb-token-filter.py`, installed as
+`kb_agentic_token_injector`) whose `inlet(body, __user__)` hook mints a
+**short-lived (10 min) JWT for the calling user** via the platform's own
+`open_webui.utils.auth.create_token({"id": user.id})` and prepends a
+system message with recipe + token. No token ever stored in the model
+record; each request gets a fresh token for whoever is chatting.
+
+Verified on 0.11.3 (real browser, glm-5.3-flash):
+- **Admin (KB owner)**: full agentic answer — 90 days termination
+  (docx quote), 955,000 SEK total computed from raw CSV bytes, monthly
+  table, "used raw CSV not the flattened extracted text".
+- **Bob (regular user, NO KB grant)**: his minted token hits the KB
+  list and gets 400 permission-denied → model reports
+  "Access to the KB was denied (HTTP 400, permission error)",
+  "I won't guess or fabricate either figure", and helpfully suggests
+  the two fixes (grant access / attach files in chat). Per-user ACLs
+  enforced end-to-end, honest failure on denial.
+
+Gotchas found while wiring (0.11.3):
+- Function **ids allow only `[A-Za-z0-9_]`** (hyphens rejected).
+- `functions/create` installs the function **inactive**; activate via
+  `POST /functions/id/{id}/toggle`, set valves via
+  `POST /functions/id/{id}/valves/update` (valves in the create body's
+  meta are ignored).
+- Attach the filter by putting its id in the preset's
+  `meta.filterIds` (models/model/update).
+- **Chained base-model access**: `check_model_access` walks the
+  `base_model_id` chain and a base model WITHOUT a `models` table row
+  is admin-only ("a shared preset cannot be used to reach a base model
+  the caller could not use directly"). For non-admin users to use a
+  preset over a connection model, create a public model row for the
+  base id (or grant it to a group).
+- Filter system-message injection survives the pipeline; the model
+  used the token verbatim and did not echo it.
+
+Security notes: token TTL 10 min (valve); the token appears in the
+prompt so it IS visible to the model itself (same trust level as the
+baked-prompt variant, but per-user + expiring); a strict-skill-style
+"never print the token" line is included in the recipe. A stronger
+variant would mint a token with a narrowed scope (read-only file/
+knowledge routes) — needs server support for scoped tokens.
