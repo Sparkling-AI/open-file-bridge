@@ -1,13 +1,16 @@
 ---
 name: open-file-bridge-strict
-description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
+description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through Open File Bridge. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — STRICT variant — skill v2.10
+# Local File Bridge — STRICT variant — skill v2.10.1
 
 Built for models that need guardrails: fixed recipes, bridge-only writes,
 verify-after-write. (Stronger models: use the standard "Local File
 Bridge" skill instead — more endpoints, more freedom.)
+
+Use this skill to read, create, edit, search, convert, and organize files in
+the folder the user shared from their computer through Open File Bridge.
 
 ## THE 10 RULES — follow exactly, never improvise
 
@@ -34,11 +37,15 @@ Bridge" skill instead — more endpoints, more freedom.)
 7. Creating a new file needs no confirmation. **HTTP 409 on a write
    means approval is required** because the action would overwrite,
    delete, restore, or destructively update files in bulk. Show the
-   exact action and ask the user to approve it. After approval, re-send
-   the SAME payload plus the returned `"confirmation_token"`. Treat
-   that value as an internal implementation detail: never display it,
-   name it, or ask the user to copy it. It is single-use, bound to the
-   exact payload, and valid for about 10 minutes. If it expires, require
+   exact action and ask the user to approve it, then STOP that code
+   execution. `bridge_post` preserves the exact payload in
+   `PENDING_BRIDGE_WRITE`. Only in a LATER turn, after a new explicit
+   user approval, call `bridge_commit_approved()` once. NEVER rebuild
+   or regenerate the file, NEVER issue and consume a fresh approval in
+   one execution, and NEVER send another token-free request after the
+   user approved. The internal value is single-use, bound to the exact
+   payload, and valid for about 10 minutes; never display it, name it,
+   or ask the user to copy it. If it expires, require
    renewed approval and say: *"The approval window expired before I
    could complete the change. Please review the action above and
    approve it again."* If the action changes, show the revised action
@@ -67,6 +74,7 @@ import json
 # to BRIDGE_HEADERS for the rest of the session, retry once. Never
 # echo the token back.
 BRIDGE_HEADERS = {"Content-Type": "application/json"}
+PENDING_BRIDGE_WRITE = globals().get("PENDING_BRIDGE_WRITE")
 
 async def bridge_get(path, params=None):
     url = f"http://127.0.0.1:8765{path}"
@@ -79,12 +87,40 @@ async def bridge_get(path, params=None):
     return json.loads(t)
 
 async def bridge_post(path, payload):
+    global PENDING_BRIDGE_WRITE
     r = await pyfetch(f"http://127.0.0.1:8765{path}", method="POST",
                       headers=BRIDGE_HEADERS,
                       body=json.dumps(payload))
+    t = await r.text()
+    d = json.loads(t) if t else {}
+    if r.status == 409 and d.get("confirmation_required"):
+        PENDING_BRIDGE_WRITE = {
+            "path": path,
+            "payload": json.loads(json.dumps(payload)),
+            "confirmation_token": d.get("confirmation_token"),
+        }
+        safe = {k: v for k, v in d.items() if k != "confirmation_token"}
+        raise RuntimeError(f"bridge {path} -> HTTP 409: {json.dumps(safe)}; "
+                           "STOP and ask the user for approval")
     if r.status != 200:
-        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {await r.text()}")
-    return await r.json()
+        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {t}")
+    return d
+
+async def bridge_commit_approved():
+    """Call only in a later turn, after the user explicitly approves."""
+    global PENDING_BRIDGE_WRITE
+    if not PENDING_BRIDGE_WRITE:
+        raise RuntimeError("no pending approved bridge write")
+    pending = PENDING_BRIDGE_WRITE
+    PENDING_BRIDGE_WRITE = None  # one attempt only, including failures
+    payload = json.loads(json.dumps(pending["payload"]))
+    payload["confirmation_token"] = pending["confirmation_token"]
+    r = await pyfetch(f"http://127.0.0.1:8765{pending['path']}", method="POST",
+                      headers=BRIDGE_HEADERS, body=json.dumps(payload))
+    t = await r.text()
+    if r.status != 200:
+        raise RuntimeError(f"bridge {pending['path']} -> HTTP {r.status}: {t}")
+    return json.loads(t) if t else {}
 
 # session start (Rule 3) — ONE call: /health already carries the version:
 h = await bridge_get("/health")
@@ -167,12 +203,18 @@ document_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relat
 styles = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style></w:styles>'''
 document_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{heading}</w:t></w:r></w:p><w:p><w:r><w:t>{sentence}</w:t></w:r></w:p><w:sectPr/></w:body></w:document>'''
 buf = io.BytesIO()
+parts = {
+    "[Content_Types].xml": content_types,
+    "_rels/.rels": package_rels,
+    "word/_rels/document.xml.rels": document_rels,
+    "word/styles.xml": styles,
+    "word/document.xml": document_xml,
+}
 with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as docx:
-    docx.writestr("[Content_Types].xml", content_types)
-    docx.writestr("_rels/.rels", package_rels)
-    docx.writestr("word/_rels/document.xml.rels", document_rels)
-    docx.writestr("word/styles.xml", styles)
-    docx.writestr("word/document.xml", document_xml)
+    for name, data in sorted(parts.items()):
+        info = zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))
+        info.compress_type = zipfile.ZIP_DEFLATED
+        docx.writestr(info, data)
 d = await bridge_post("/write_b64", {
     "path": "review-note.docx",
     "b64": base64.b64encode(buf.getvalue()).decode("ascii"),
@@ -180,7 +222,15 @@ d = await bridge_post("/write_b64", {
 print(d)
 ```
 
-A new target is written immediately and needs no confirmation. If the target already exists, `/write_b64` returns HTTP 409: follow Rule 7 before overwriting it. After a 200 response, verify with `/docx_read` and report the returned `written` path. Do not use `/docx_write` for new Word documents in packaged installations. For richer formatting, expand the OOXML parts in memory while preserving this `/write_b64` flow.
+The fixed timestamp and sorted part names make this package deterministic, but
+still build it only once. A new target is written immediately. If the target
+exists, `bridge_post` saves the exact payload and stops: follow Rule 7, then in
+the later approved turn call only `d = await bridge_commit_approved()` before
+verification. Do not rebuild the document. After a 200 response, verify with
+`/docx_read` and report the returned `written` path. Do not use `/docx_write`
+for new Word documents in packaged installations. For richer formatting,
+expand the OOXML parts while preserving deterministic ZIP metadata and this
+approval-safe `/write_b64` flow.
 
 ## Recipe C — legacy formats (.doc/.xls/.ppt)
 
@@ -200,8 +250,9 @@ d = await bridge_post("/convert", {"path": "old.doc", "out": "new.docx"})
 | fetch/`/health` failure | "Your Open File Bridge app isn't running. Please start the Open File Bridge app, then ask me again." |
 | 401 | "This bridge needs an access token. Please paste your bridge token (Open File Bridge settings → 🔒 Security → Show) here in chat." |
 | 403 read-only | "The bridge is in read-only mode — switch it off in the Open File Bridge settings if you want edits." |
-| approval expired or invalid | "The approval window expired before I could complete the change. Please review the action above and approve it again." |
-| approved action no longer matches | "The requested change is different from the action you approved. Please review the revised action and approve it again." |
+| `approval_error: expired` | "The approval window expired before I could complete the change. Please review the action above and approve it again." |
+| `approval_error: invalid` | "The previous approval is no longer valid. Please review the action above and approve it again." |
+| `approval_error: payload_changed` | "The requested change is different from the action you approved. Please review the revised action and approve it again." |
 | 429 | "The write-rate safety brake tripped (many writes in a minute). Please confirm you want me to continue." |
 | 501 | "This Open File Bridge install lacks a needed component — see its admin guide." |
 

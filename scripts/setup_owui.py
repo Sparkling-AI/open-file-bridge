@@ -40,23 +40,24 @@ STRICT_SKILL_ID = "open-file-bridge-strict"
 STRICT_MODEL_ID = "local-files-assistant-strict"
 # Skill description, shared by BOTH variants (standard + strict).
 # Models are only guaranteed to SEE the name+description (tool list);
-# opening the body is optional. The failure-mode wording is what makes
-# weak models actually call the skill — validated on glm-4.5-air
-# 2026-08-28 (fabrication → full bridge flow /list→/read→/write with
-# this exact text), and re-validated on glm-5.3 with the same text on
-# the standard skill (no regression for strong models). See ROADMAP
-# multi-model smoke + references/multi-model-smoke.md.
+# opening the body is optional. Lead with purpose and routing terms, then
+# retain the mandatory-call/failure-mode language that made weak models
+# actually load the skill. The earlier warning-first wording was validated
+# on glm-4.5-air and glm-5.3; re-run that matrix when those models are
+# available. See ROADMAP multi-model smoke notes.
 UNIFIED_DESC = (
-    "MUST-CALL before ANY file task. User's real files are reachable "
-    "ONLY via the local bridge (http://127.0.0.1:8765) — call this "
-    "skill first and run its Bootstrap. Files written with open()/os "
-    "in this sandbox are LOST and INVISIBLE to the user; claiming "
-    "success without a bridge response is a failure.")
+    "Read, create, edit, search, convert, and organize documents and "
+    "other files in the folder the user shared from their computer "
+    "through Open File Bridge. Use for requests involving the user's "
+    "local Word, Excel, PowerPoint, PDF, image, archive, email, text, "
+    "or code files. MUST-CALL before acting: sandbox file APIs cannot "
+    "reach that folder; only a successful bridge response confirms "
+    "the work.")
 SKILL_DIR = "skill/open-file-bridge"
 # Skill version (own line: moves only when skill TEXT changes, independent
 # of the app VERSION — see docs/DEVNOTES.md "Versioning"). Keep in sync
 # with the skill folder's CHANGELOG.md.
-SKILL_VERSION = "2.10"
+SKILL_VERSION = "2.10.1"
 REPO = Path(__file__).resolve().parent.parent
 
 

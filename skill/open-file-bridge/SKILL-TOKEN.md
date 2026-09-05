@@ -1,9 +1,9 @@
 ---
 name: open-file-bridge
-description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
+description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through Open File Bridge. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v2.10
+# Local File Bridge — skill v2.10.1
 
 > Requires bridge ≥ **2.5** (checked at bootstrap below; newer bridges are
 > always fine — the API is backward-compatible).
@@ -129,6 +129,7 @@ import json, base64, io
 
 BRIDGE_HEADERS = {"Content-Type": "application/json",
                   "X-Bridge-Token": "__ORG_TOKEN__"}   # org token EMBEDDED — required on every call
+PENDING_BRIDGE_WRITE = globals().get("PENDING_BRIDGE_WRITE")
 
 async def bridge_get(path, params=None):
     url = f"http://127.0.0.1:8765{path}"
@@ -141,12 +142,40 @@ async def bridge_get(path, params=None):
     return json.loads(t)
 
 async def bridge_post(path, payload):
+    global PENDING_BRIDGE_WRITE
     r = await pyfetch(f"http://127.0.0.1:8765{path}", method="POST",
                       headers=BRIDGE_HEADERS,
                       body=json.dumps(payload))
+    t = await r.text()
+    d = json.loads(t) if t else {}
+    if r.status == 409 and d.get("confirmation_required"):
+        PENDING_BRIDGE_WRITE = {
+            "path": path,
+            "payload": json.loads(json.dumps(payload)),
+            "confirmation_token": d.get("confirmation_token"),
+        }
+        safe = {k: v for k, v in d.items() if k != "confirmation_token"}
+        raise RuntimeError(f"bridge {path} -> HTTP 409: {json.dumps(safe)}; "
+                           "STOP and ask the user for approval")
     if r.status != 200:
-        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {await r.text()}")
-    return await r.json()
+        raise RuntimeError(f"bridge {path} -> HTTP {r.status}: {t}")
+    return d
+
+async def bridge_commit_approved():
+    """Call only in a later turn, after the user explicitly approves."""
+    global PENDING_BRIDGE_WRITE
+    if not PENDING_BRIDGE_WRITE:
+        raise RuntimeError("no pending approved bridge write")
+    pending = PENDING_BRIDGE_WRITE
+    PENDING_BRIDGE_WRITE = None  # one attempt only, including failures
+    payload = json.loads(json.dumps(pending["payload"]))
+    payload["confirmation_token"] = pending["confirmation_token"]
+    r = await pyfetch(f"http://127.0.0.1:8765{pending['path']}", method="POST",
+                      headers=BRIDGE_HEADERS, body=json.dumps(payload))
+    t = await r.text()
+    if r.status != 200:
+        raise RuntimeError(f"bridge {pending['path']} -> HTTP {r.status}: {t}")
+    return json.loads(t) if t else {}
 
 async def read_binary(path):
     d = await bridge_get("/read_b64", {"path": path})
@@ -501,12 +530,16 @@ For a folder: name + [📂 Show in folder](reveal_url) only.
 3. **New files need no confirmation. Destructive changes do.** Creating a new
    output proceeds immediately. Overwriting, editing, deleting, restoring, or a
    bulk operation that would replace existing files returns HTTP 409. Show the
-   user exactly what will change and ask for approval. Only after approval,
-   re-send the SAME request with the returned `"confirmation_token"`; it is
-   single-use, bound to the exact payload, and valid for 10 minutes. This token
-   is an internal transport detail: NEVER show it, name it, or ask the user to
-   copy it. The bridge snapshots existing files automatically before overwrite.
-   If approval expires, require renewed approval and say: "The approval window
+   user exactly what will change and ask for approval, then STOP that code
+   execution. `bridge_post` preserves the exact request in
+   `PENDING_BRIDGE_WRITE`. Only in a LATER turn, after a new explicit user
+   approval, call `bridge_commit_approved()` once. NEVER rebuild or regenerate
+   the payload, issue and consume a fresh approval in one execution, or send a
+   token-free request after the user approved. The internal value is single-use,
+   exact-payload-bound, and valid for 10 minutes: NEVER show it, name it, or ask
+   the user to copy it. The bridge snapshots existing files automatically.
+   Only `approval_error: expired` means the time window elapsed; a new HTTP 409
+   means approval is required, not expired. If approval expires, say: "The approval window
    expired before I could complete the change. Please review the action above
    and approve it again." If the request changed after approval, show the revised
    action and ask again. Never proceed using an earlier approval.

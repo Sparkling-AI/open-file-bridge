@@ -63,7 +63,7 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 #                  always fine (API is backward-compatible). Bump only
 #                  when the skill starts referencing an endpoint that
 #                  didn't exist in older bridges.
-VERSION = "2.10.0"
+VERSION = "2.10.1"
 SKILL_MIN = "2.5"
 
 
@@ -1015,6 +1015,9 @@ def _windowed_read(p: Path, start_line: int, max_lines: int) -> dict:
 # ------------------------------------------------- versions + confirmations
 
 CONFIRM_TTL_SECONDS = 10 * 60
+# Retain expired grants briefly so the API can report a genuine timeout
+# instead of conflating it with an unknown or already-consumed value.
+CONFIRM_EXPIRED_RETENTION_SECONDS = 10 * 60
 _CONFIRM_FILE = STATE_DIR / "pending-confirmations.json"
 _CONFIRM_LOCK = threading.Lock()
 
@@ -1121,16 +1124,18 @@ def version_restore(root: Path, rel: str, ts: str) -> tuple[bool, str]:
 
 # ---- two-step confirmation tokens (pattern: openapi-servers filesystem) ----
 
-def _confirm_load() -> dict:
+def _confirm_load(*, include_expired: bool = False) -> dict:
     try:
         data = json.loads(_CONFIRM_FILE.read_text(encoding="utf-8"))
     except Exception:
         return {}
     now = time.time()
+    cutoff = (now - CONFIRM_EXPIRED_RETENTION_SECONDS
+              if include_expired else now)
     out = {}
     for tok, det in data.items():
         try:
-            if float(det["expiry"]) > now:
+            if float(det["expiry"]) > cutoff:
                 out[tok] = det
         except Exception:
             continue
@@ -1161,29 +1166,41 @@ def confirmation_params(op: str, body: dict, **summary) -> dict:
 def confirmation_issue(params: dict) -> dict:
     """Create a pending, single-use approval grant (10-minute lifetime)."""
     with _CONFIRM_LOCK:
-        allc = _confirm_load()
+        allc = _confirm_load(include_expired=True)
         tok = _secrets.token_hex(8)  # transport detail; never shown to the user
         allc[tok] = {"params": params, "expiry": time.time() + CONFIRM_TTL_SECONDS}
         _confirm_save(allc)
-    return {"confirmation_token": tok,
+    return {"approval_error": "required",
+            "confirmation_token": tok,
             "expires_in": CONFIRM_TTL_SECONDS}
 
 
-def confirmation_consume(tok: str, params: dict) -> tuple[bool, str]:
+def confirmation_consume(tok: str, params: dict) -> tuple[bool, str, str | None]:
     """Validate token + params match. The token is burned on ANY consume
     attempt — mismatch included (stricter than the openapi-servers original,
     which allowed retries: a mismatch means the model changed its request)."""
     with _CONFIRM_LOCK:
-        allc = _confirm_load()
+        # Load expired grants too so callers can distinguish a real timeout
+        # from an unknown/already-consumed value. Prune every other expired
+        # grant while this file is locked.
+        allc = _confirm_load(include_expired=True)
         det = allc.pop(tok, None)
-        _confirm_save(allc)
+        now = time.time()
+        cutoff = now - CONFIRM_EXPIRED_RETENTION_SECONDS
+        _confirm_save({key: value for key, value in allc.items()
+                       if float(value.get("expiry", 0)) > cutoff})
         if not det:
-            return False, ("the approval window expired or is no longer valid — "
-                           "show the action again and ask the user to approve it")
+            return False, ("the approval is no longer valid — show the action "
+                           "again and ask the user to approve it"), "invalid"
+        if float(det.get("expiry", 0)) <= now:
+            return False, ("the approval window expired before the action was "
+                           "completed — show the action again and ask the user "
+                           "to approve it"), "expired"
         if det["params"] != params:
             return False, ("the requested action changed after approval — show the "
-                           "revised action and ask the user to approve it again")
-        return True, ""
+                           "revised action and ask the user to approve it again"), \
+                          "payload_changed"
+        return True, "", None
 
 
 # ---- outcome links (v2.7): user-clickable open/reveal nonces ----
@@ -4149,9 +4166,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                        "but never mention or display that token"),
                         **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 if _readonly_for(cfg):
                     return self._json(403, {"error": "read-only mode is active — "
                                                      "writes are disabled"})
@@ -4183,9 +4202,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 if _readonly_for(cfg):
                     return self._json(403, {"error": "read-only mode is active — "
                                                      "writes are disabled"})
@@ -4211,9 +4232,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         iss = confirmation_issue(confirm_params)
                         return 409, {"error": "edit needs confirmation",
                                      "confirmation_required": True, **iss}
-                    okc, err = confirmation_consume(tok, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        tok, confirm_params)
                     if not okc:
-                        return 400, {"error": err}
+                        return 400, {"error": err,
+                                     "approval_error": approval_error}
                     return 0, {}
 
                 code, resp = _edit_file(root, cfg, body, _confirm_edit)
@@ -4257,9 +4280,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(409, {"error": "restore overwrites the current file — "
                                                      "needs confirmation",
                                             "confirmation_required": True, **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
+                okc, err, approval_error = confirmation_consume(
+                    confirm_token, confirm_params)
                 if not okc:
-                    return self._json(400, {"error": err})
+                    return self._json(400, {"error": err,
+                                            "approval_error": approval_error})
                 okr, mes = version_restore(_rr, rel, ts)
                 if not okr:
                     return self._json(404, {"error": mes})
@@ -4285,9 +4310,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "error": f"deletion needs confirmation ({desc}) — the file "
                                  f"goes to the trash store, not unrecoverable",
                         "confirmation_required": True, **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
+                okc, err, approval_error = confirmation_consume(
+                    confirm_token, confirm_params)
                 if not okc:
-                    return self._json(400, {"error": err})
+                    return self._json(400, {"error": err,
+                                            "approval_error": approval_error})
                 okr, err = rate_check(0)
                 if not okr:
                     return self._json(429, {"error": err, "rate_limited": True})
@@ -4318,9 +4345,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(409, {
                         "error": "restoring this item needs confirmation",
                         "confirmation_required": True, **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
+                okc, err, approval_error = confirmation_consume(
+                    confirm_token, confirm_params)
                 if not okc:
-                    return self._json(400, {"error": err})
+                    return self._json(400, {"error": err,
+                                            "approval_error": approval_error})
                 okr, mes = trash_restore(_rr, rel, ts)
                 if not okr:
                     return self._json(409, {"error": mes})
@@ -4346,9 +4375,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 code, resp = zip_create(root, cfg, body)
                 return self._json(code, resp)
 
@@ -4364,9 +4395,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                       f"{summary['overwrites']} existing file(s) — "
                                       "confirmation is required"),
                             "confirmation_required": True, **iss}
-                    okc, err = confirmation_consume(tok, params)
+                    okc, err, approval_error = confirmation_consume(tok, params)
                     if not okc:
-                        return 400, {"error": err}
+                        return 400, {"error": err,
+                                     "approval_error": approval_error}
                     return 0, {}
 
                 code, resp = zip_extract(root, cfg, body, _confirm_unzip)
@@ -4409,9 +4441,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 raw_lang = body.get("lang") or _get_ocr_lang()
                 parts = [x for x in re.split(r"[\s,+]+", raw_lang)
                          if x and re.fullmatch(r"[a-zA-Z_]{2,8}", x)]
@@ -4494,9 +4528,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                   "existing PDF file(s) — confirmation is required"),
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 code, resp = pdf_op(op, resolved, opath, oroot, spec_pages, angle)
                 return self._json(code, resp)
 
@@ -4533,9 +4569,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 code, resp = docx_merge(p, op, oroot, values,
                                         bool(body.get("strict")))
                 return self._json(code, resp)
@@ -4588,9 +4626,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 code, resp = pptx_from_template(p, op, oroot, slides, values)
                 return self._json(code, resp)
 
@@ -4636,9 +4676,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 code, resp = pdf_from_text(op, oroot, title, blocks, page_size)
                 return self._json(code, resp)
 
@@ -4684,9 +4726,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 code, resp = docx_write(op, oroot, title, sections)
                 return self._json(code, resp)
 
@@ -4731,9 +4775,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                  "needs confirmation",
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 code, resp = xlsx_append(p, rows, sheet, proot, header)
                 return self._json(code, resp)
 
@@ -4826,9 +4872,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "overwrites": overwrite_count,
                         **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 code, resp = docx_mailmerge(p, out_rel, oroot, _r, rows, to_zip)
                 return self._json(code, resp)
 
@@ -4867,9 +4915,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                         "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 code, resp = convert_file(p, op, oroot, to_ext)
                 return self._json(code, resp)
 
@@ -4915,9 +4965,11 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                        "that token"),
                         "plan": plan, **iss})
                 if confirm_token:
-                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    okc, err, approval_error = confirmation_consume(
+                        confirm_token, confirm_params)
                     if not okc:
-                        return self._json(400, {"error": err})
+                        return self._json(400, {"error": err,
+                                                "approval_error": approval_error})
                 results = []
                 for it in items:
                     path = it.get("path", "")

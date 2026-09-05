@@ -272,26 +272,32 @@ check "write new file ok"     '"ok": *true'   "$(curl -s -X POST $BRIDGE/write -
 OW=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
 check "overwrite demands confirm" 'confirmation_required' "$OW"
 check "approval window is 10 minutes" '"expires_in": *600' "$OW"
+check "approval required has machine code" '"approval_error": *"required"' "$OW"
 CT=$(echo "$OW" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
 # overwrite with WRONG params (same content length) → exact-payload mismatch
 # token was consumed by the failed attempt → now invalid
 CPM=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v3\",\"confirmation_token\":\"$CT\"}")
 check "approval binds exact payload" 'requested action changed' "$CPM"
+check "changed approval has machine code" '"approval_error": *"payload_changed"' "$CPM"
 CPM2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT\"}")
-check "approval is one-shot" 'approval window expired or is no longer valid' "$CPM2"
+check "approval is one-shot" 'approval is no longer valid' "$CPM2"
+check "consumed approval has invalid code" '"approval_error": *"invalid"' "$CPM2"
 # Force one pending grant to expire without making the suite sleep 10 minutes.
 OW_EXP=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v4"}')
 CT_EXP=$(echo "$OW_EXP" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
 python3 - "$STATEDIR/pending-confirmations.json" <<'PY'
-import json, pathlib, sys
+import json, pathlib, sys, time
 p = pathlib.Path(sys.argv[1])
 d = json.loads(p.read_text(encoding="utf-8"))
 for item in d.values():
-    item["expiry"] = 0
+    item["expiry"] = time.time() - 1
 p.write_text(json.dumps(d), encoding="utf-8")
 PY
+# Issuing another grant must not erase the recent-expiry tombstone.
+curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v5"}' >/dev/null
 EXP=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v4\",\"confirmation_token\":\"$CT_EXP\"}")
 check "expired approval is explained plainly" 'approval window expired' "$EXP"
+check "expired approval has machine code" '"approval_error": *"expired"' "$EXP"
 if echo "$EXP" | grep -q 'confirmation token'; then echo "  FAIL: expired approval exposed token jargon"; fail=1; else echo "  PASS: expired approval hides token jargon"; fi
 OW2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
 CT2=$(echo "$OW2" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")

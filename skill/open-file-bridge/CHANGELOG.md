@@ -2,6 +2,22 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.10.1 — 2026-09-05
+
+Approval retries now preserve and resend the exact original payload through a
+persistent Pyodide helper. A 409 hard-stops the current execution, strips the
+internal confirmation value from visible errors, and requires a later explicit
+user turn before the single pending request can be committed. The skill now
+forbids rebuilding binary payloads, token-free retries after approval, and
+issuing plus consuming a fresh approval in one execution. The strict Word
+recipe also uses sorted OOXML parts and fixed ZIP timestamps so identical
+documents produce identical bytes. Bridge errors now distinguish `required`,
+`expired`, `invalid`, and `payload_changed` for reliable user-facing wording.
+The discovery description now leads with the skill's purpose and supported
+local-file requests while retaining the mandatory bridge-only safety invariant
+that prevents sandbox-only writes. Standard, strict, token, and no-token
+variants share the exact published description.
+
 ## 2.10 — 2026-09-05
 
 Creating a new file no longer asks for approval. Approval is limited to overwrites, deletes, restores, and destructive bulk operations; its internal value remains single-use, is bound to the exact request payload, and is valid for about 10 minutes. If approval expires or the action changes, the skill explains the situation in plain language and asks the user to review and approve again without exposing implementation details. Overwrites continue to snapshot the previous version automatically. The strict Word recipe now creates a standards-based OOXML package in browser memory with Python's standard library and writes it through `/write_b64`, avoiding the unavailable Pyodide `lxml` dependency. Standard and strict variant headings advance together to 2.10; the minimum compatible bridge remains 2.5.
