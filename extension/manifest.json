@@ -1,0 +1,18 @@
+{
+  "manifest_version": 3,
+  "name": "Open File Bridge Connector",
+  "version": "0.1.0",
+  "description": "Connects model code running in Open WebUI's sandbox to the Open File Bridge app on this machine. The page relay only forwards narrow, id-correlated requests; the service worker only talks to the bridge.",
+  "permissions": ["storage"],
+  "host_permissions": ["http://127.0.0.1:8765/"],
+  "background": { "service_worker": "sw.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://*/*"],
+      "js": ["relay.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": { "default_title": "Open File Bridge Connector — settings" }
+}

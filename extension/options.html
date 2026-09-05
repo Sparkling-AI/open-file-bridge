@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Open File Bridge Connector</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 1.3rem; }
+  code { background: #f2f2f2; padding: 2px 6px; border-radius: 4px; }
+  input[type=password], input[type=text] { width: 100%; padding: 8px; margin: 8px 0 16px; box-sizing: border-box; }
+  button { padding: 8px 20px; }
+  .status { margin-top: 12px; min-height: 1.2em; font-weight: 600; }
+  .hint { color: #555; font-size: 0.9em; }
+</style>
+</head>
+<body>
+<h1>Open File Bridge Connector</h1>
+<p class="hint">The connector lets model code running in Open WebUI's sandbox use the
+Open File Bridge app on this machine. It only ever talks to
+<code>http://127.0.0.1:8765</code> — nothing else.</p>
+
+<h3>Bridge token</h3>
+<p class="hint">Paste the token shown by the Open File Bridge settings page (the same
+value you would otherwise put in the skill). It is stored in this browser only
+(<code>chrome.storage.local</code>) and attached automatically — model code never
+sees it.</p>
+<input type="password" id="token" placeholder="Bridge token" autocomplete="off">
+<button id="save">Save</button>
+<div class="status" id="status"></div>
+
+<h3>Connection test</h3>
+<p class="hint">Checks that the bridge is running and the token is accepted.</p>
+<button id="test">Test connection</button>
+<div class="status" id="testout"></div>
+
+<script src="options.js"></script>
+</body>
+</html>
