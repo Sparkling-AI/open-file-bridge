@@ -1143,3 +1143,70 @@ to a shell interpreter is only testable if it is importable as a
 constant AND parsed by a real engine in CI. Balance-counting in e2e
 on Linux would NOT alone have caught a semantically broken but
 balanced snippet; the CI real-engine parse is the actual guard.
+
+## Browser-extension spike — Stage 1 COMPLETE (2026-09-05/06, feat/browser-extension)
+
+Sessions 1–3. Full plan + verified results: `docs/EXTENSION-PLAN.md`
+(§4 answer, §5/§7 decisions, §9 checklist). Artifacts shipped on the
+branch: `extension/` (MV3 manifest, sw.js narrow pipe, relay.js, options),
+`tests/extension_e2e.py` (self-contained real-extension e2e runner),
+`skill/open-file-bridge/SKILL-EXT.md` (extension-transport skill variant,
+2.10-EXT, manual publish until `setup_owui.py` learns it — follow-up).
+
+What was proven (all GREEN, real browser runs):
+
+- §4: sandboxed-iframe Pyodide (`from js import parent`) → page relay →
+  bridge round-trip WORKS; the relay-polling fallback is not needed.
+- Real-extension e2e: /health /list /read /write+readback /state 200
+  through relay.js → sw.js; token set via the real options page; 0/10
+  sniffed page-visible messages contain the token.
+- Negatives: non-OFB shape ignored; `//evil.com/x` → bridge 404
+  (destination hardcoded); `//evil.com:9/x` → SW pre-fetch refusal;
+  foreign url/port/host fields dropped; PUT refused; no token → 401;
+  rate limit fires at exactly 120 ok / 80 limited over 200 rapid reqs.
+- Binary pipe: 250,910-byte openpyxl wheel via `b64:true` →
+  `zipfile.extractall(sysconfig purelib)` → `import openpyxl` 3.1.5 →
+  real xlsx via /write_b64 → /stat 200 (micropip CANNOT install from
+  file: or localhost inside the sandbox — b64+zipfile is the way).
+- **Key result**: public https origin (cloudflared quick tunnel) — the
+  SAME page's direct pyfetch to 127.0.0.1:8765 is BLOCKED by Chrome LNA
+  ("Permission was denied for this request to access the loopback address
+  space") while the extension path round-trips. Extension SW loopback
+  fetches are NOT LNA-gated (Chrome for Testing 151).
+- PWA/app-window (headed `--app=` on Xvfb :99): all cells incl.
+  write+readback — UI-less requirement holds.
+
+Evidence-hygiene note: `final-e.log` from session 2 shows VERDICT: FAIL —
+that run tripped the /write 409 overwrite gate on a reused filename
+(`ext-e2e-report.xlsx`, two 409s in the bridge audit log) BEFORE the
+unique-filename fix. The fixed harness's final run is green in the audit
+log (`ext-e2e-report-1788644516.xlsx` write_b64 200 + stat 200, real
+Excel file on disk). Lesson: freeze logs from the LAST run of a fixed
+harness, and treat "log says FAIL" as "check the audit log" — never as
+final without triangulation.
+
+Gotchas that cost time (durable list in the project skill's
+extension-spike reference; the expensive ones):
+
+- **Chromium caches MV3 service workers in the persistent profile** —
+  edited sw.js + same profile = OLD code runs silently (the session-2
+  symptom was a "lost" b64 flag). Fresh profile dir per extension-test
+- `const X` in page JS is invisible to Pyodide's `import js` — use
+  `globalThis.X` (read via `str(js.X)`).
+- Content scripts skip file:// pages — serve harness pages over
+  http://127.0.0.1 (test manifest copy adds the `http://127.0.0.1/*`
+  match; the shipped manifest is https-only).
+- Page-side sniffing is blind to iframe-targeted replies (they go to
+  `ev.source`) and to content-script isolated-world state — instrument
+  INSIDE the iframe.
+- Public-origin harness needs SAME-ORIGIN pyodide (mixed content): tiny
+  reverse proxy (harness from disk + /pyodide/* → owui-test) with
+  cloudflared in front.
+- Playwright full-Chromium layout is now `chromium-*/chrome-linux64/`
+  (not chrome-linux/), and the headless shell CANNOT load extensions —
+  `playwright install chromium` + launchPersistentContext.
+
+Follow-up work (not in this branch): `setup_owui.py` variant wiring for
+SKILL-EXT.md (manual publish until then); CWS `matches` scope decision at
+review time; LNA re-verification on each Chromium major once shipped;
+Stage 2 native-messaging host = fresh plan.
