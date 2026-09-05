@@ -2,6 +2,10 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.10 — 2026-09-05
+
+Creating a new file no longer asks for approval. Approval is limited to overwrites, deletes, restores, and destructive bulk operations; its internal value remains single-use, is bound to the exact request payload, and is valid for about 10 minutes. If approval expires or the action changes, the skill explains the situation in plain language and asks the user to review and approve again without exposing implementation details. Overwrites continue to snapshot the previous version automatically. The strict Word recipe now creates a standards-based OOXML package in browser memory with Python's standard library and writes it through `/write_b64`, avoiding the unavailable Pyodide `lxml` dependency. Standard and strict variant headings advance together to 2.10; the minimum compatible bridge remains 2.5.
+
 ## 2.9 — 2026-08-31
 
 Outcome-link lifetime is now configurable per bridge (settings page →

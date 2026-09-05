@@ -63,7 +63,7 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 #                  always fine (API is backward-compatible). Bump only
 #                  when the skill starts referencing an endpoint that
 #                  didn't exist in older bridges.
-VERSION = "2.9.1"
+VERSION = "2.10.0"
 SKILL_MIN = "2.5"
 
 
@@ -1014,7 +1014,7 @@ def _windowed_read(p: Path, start_line: int, max_lines: int) -> dict:
 
 # ------------------------------------------------- versions + confirmations
 
-CONFIRM_TTL_SECONDS = 60
+CONFIRM_TTL_SECONDS = 10 * 60
 _CONFIRM_FILE = STATE_DIR / "pending-confirmations.json"
 _CONFIRM_LOCK = threading.Lock()
 
@@ -1144,11 +1144,25 @@ def _confirm_save(data: dict):
     os.replace(tmp, _CONFIRM_FILE)
 
 
+def confirmation_params(op: str, body: dict, **summary) -> dict:
+    """Bind an approval to the exact request payload.
+
+    The transport-only confirmation token is excluded so the first request and
+    approved retry hash identically.  Summary fields keep the on-disk record
+    diagnosable without storing the complete content being written.
+    """
+    payload = {k: v for k, v in body.items() if k != "confirmation_token"}
+    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
+                           ensure_ascii=False, default=str)
+    return {"op": op, **summary,
+            "payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
+
+
 def confirmation_issue(params: dict) -> dict:
-    """Create a pending confirmation; returns the token payload (TTL 60 s)."""
+    """Create a pending, single-use approval grant (10-minute lifetime)."""
     with _CONFIRM_LOCK:
         allc = _confirm_load()
-        tok = _secrets.token_hex(4)  # 8 hex chars — relayed via chat
+        tok = _secrets.token_hex(8)  # transport detail; never shown to the user
         allc[tok] = {"params": params, "expiry": time.time() + CONFIRM_TTL_SECONDS}
         _confirm_save(allc)
     return {"confirmation_token": tok,
@@ -1164,10 +1178,11 @@ def confirmation_consume(tok: str, params: dict) -> tuple[bool, str]:
         det = allc.pop(tok, None)
         _confirm_save(allc)
         if not det:
-            return False, "invalid or expired confirmation token"
+            return False, ("the approval window expired or is no longer valid — "
+                           "show the action again and ask the user to approve it")
         if det["params"] != params:
-            return False, ("request parameters do not match the original request "
-                           "for this token (token consumed — request a new one)")
+            return False, ("the requested action changed after approval — show the "
+                           "revised action and ask the user to approve it again")
         return True, ""
 
 
@@ -1443,7 +1458,7 @@ def zip_create(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
                  "note": "members stored FLAT (basename only) — directories recurse"}
 
 
-def zip_extract(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
+def zip_extract(root: Path, cfg: dict, body: dict, confirm_func=None) -> tuple[int, dict]:
     """Unzip <path> (.zip, root-relative) under <dest>/ (root-relative dir).
     Every member name is sanitized: no absolute, no .., no drive letters,
     no symlink attrs — then extracted under resolve_guarded(dest)."""
@@ -1481,30 +1496,46 @@ def zip_extract(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
             total = sum(i.file_size for i in infos)
             if total > MAX_BINARY:
                 return 413, {"error": f"unzipped payload too large (> {MAX_BINARY} bytes)"}
-            okr, err = rate_check(total)
-            if not okr:
-                return 429, {"error": err, "rate_limited": True}
-            count = 0
+            targets = []
             for info in infos:
                 if info.is_dir():
                     continue
+                if info.external_attr >> 16 & 0o170000 == 0o120000:
+                    return 400, {"error": "refusing to extract symlink member"}
                 nm = safe_name(info.filename)
                 if nm is None:
                     return 400, {"error": f"unsafe member name: {info.filename!r}"}
                 target = safe_child(dp, nm)
-                # ignore rules apply to the EXTRACTED path too
                 frel = target.relative_to(droot).as_posix()
                 if _ignore_match(frel, False, _all_ignore(dcfg)):
                     continue
+                targets.append((info, target))
+            overwrite_count = sum(target.exists() for _info, target in targets)
+            if overwrite_count and confirm_func is not None:
+                code, resp = confirm_func({"dest": dest_rel,
+                                           "files": len(targets),
+                                           "overwrites": overwrite_count})
+                if code:
+                    return code, resp
+            okr, err = rate_check(total)
+            if not okr:
+                return 429, {"error": err, "rate_limited": True}
+            count = 0
+            snapshots = []
+            for info, target in targets:
+                if target.exists():
+                    snap = snapshot_before_write(droot, target)
+                    if snap:
+                        snapshots.append({"path": target.relative_to(droot).as_posix(),
+                                          "snapshot": snap})
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with zf.open(info) as src, open(target, "wb") as dst:
                     shutil.copyfileobj(src, dst)
-                if info.external_attr >> 16 & 0o170000 == 0o120000:
-                    return 400, {"error": "refusing to extract symlink member"}
                 count += 1
     except zipfile.BadZipFile:
         return 400, {"error": "not a valid zip archive"}
-    return 200, {"ok": True, "dest": str(dp), "files": count}
+    return 200, {"ok": True, "dest": str(dp), "files": count,
+                 "snapshots": snapshots}
 
 
 def directory_tree(p: Path, cfg: dict, q: dict) -> dict:
@@ -4104,17 +4135,18 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 p, root, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
                 content = body.get("content", "")
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "write", "path": body.get("path", ""),
-                                  "bytes": len(content)}
+                confirm_params = confirmation_params(
+                    "write", body, path=body.get("path", ""), bytes=len(content))
                 if p.exists() and p.is_file() and not confirm_token:
-                    # destructive overwrite → two-step confirmation (60 s)
+                    # destructive overwrite → two-step confirmation (10 min)
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
                         "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True,
-                        "confirm_op": ("reply to the user with the token; re-send the "
-                                       "SAME write with confirmation_token set after "
-                                       "the user approves"),
+                        "confirm_op": ("tell the user what will be overwritten and ask "
+                                       "for approval; after approval re-send the exact "
+                                       "request using the returned confirmation_token, "
+                                       "but never mention or display that token"),
                         **iss})
                 if confirm_token:
                     okc, err = confirmation_consume(confirm_token, confirm_params)
@@ -4143,8 +4175,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if len(raw) > MAX_BINARY:
                     return self._json(413, {"error": f"payload too large: {len(raw)} > {MAX_BINARY} bytes"})
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "write_b64", "path": body.get("path", ""),
-                                  "bytes": len(raw)}
+                confirm_params = confirmation_params(
+                    "write_b64", body, path=body.get("path", ""), bytes=len(raw))
                 if p.exists() and p.is_file() and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
@@ -4171,6 +4203,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _ep, _er, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
                 def _confirm_edit(confirm_params):
                     # returns (http_code_or_0, resp) — mirrors /write flow
+                    confirm_params = confirmation_params(
+                        "edit", body, path=body.get("path", ""),
+                        bytes=confirm_params.get("bytes", 0))
                     tok = body.get("confirmation_token")
                     if not tok:
                         iss = confirmation_issue(confirm_params)
@@ -4215,7 +4250,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 rel = _rp.relative_to(_rr).as_posix()
                 # restore is itself a write over an existing file → confirm
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "restore", "path": rel, "ts": ts}
+                confirm_params = confirmation_params(
+                    "restore", body, path=rel, ts=ts)
                 if not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {"error": "restore overwrites the current file — "
@@ -4240,7 +4276,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(404, {"error": f"not found: {rel}"})
                 if _readonly_for(cfg):
                     return self._json(403, {"error": "read-only mode is active"})
-                confirm_params = {"op": "delete", "path": rel}
+                confirm_params = confirmation_params("delete", body, path=rel)
                 confirm_token = body.get("confirmation_token")
                 if not confirm_token:
                     iss = confirmation_issue(confirm_params)
@@ -4274,6 +4310,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _rp, _rr, _rc = resolve_guarded(rel)
                 if _readonly_for(_rc):
                     return self._json(403, {"error": "read-only mode is active"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = confirmation_params(
+                    "trash_restore", body, path=rel, ts=ts)
+                if not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "restoring this item needs confirmation",
+                        "confirmation_required": True, **iss})
+                okc, err = confirmation_consume(confirm_token, confirm_params)
+                if not okc:
+                    return self._json(400, {"error": err})
                 okr, mes = trash_restore(_rr, rel, ts)
                 if not okr:
                     return self._json(409, {"error": mes})
@@ -4284,13 +4331,45 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                  "action, not an API call"})
 
             if u.path == "/zip":
-                _, _, cfg = resolve_guarded(".")
+                out_rel = body.get("out", "")
+                if not out_rel or Path(out_rel).suffix.lower() != ".zip":
+                    return self._json(400, {"error": "out must end in .zip "
+                                                    "(root-relative)"})
+                op, _oroot, cfg = resolve_guarded(unquote(out_rel), for_write=True)
+                if _readonly_for(cfg):
+                    return self._json(403, {"error": "read-only mode is active"})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = confirmation_params("zip", body, out=out_rel)
+                if op.exists() and not confirm_token:
+                    iss = confirmation_issue(confirm_params)
+                    return self._json(409, {
+                        "error": "target exists — overwrite needs confirmation",
+                        "confirmation_required": True, **iss})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
                 code, resp = zip_create(root, cfg, body)
                 return self._json(code, resp)
 
             if u.path == "/unzip":
                 _, _, cfg = resolve_guarded(".")
-                code, resp = zip_extract(root, cfg, body)
+                def _confirm_unzip(summary):
+                    params = confirmation_params("unzip", body, **summary)
+                    tok = body.get("confirmation_token")
+                    if not tok:
+                        iss = confirmation_issue(params)
+                        return 409, {
+                            "error": (f"extracting this archive would overwrite "
+                                      f"{summary['overwrites']} existing file(s) — "
+                                      "confirmation is required"),
+                            "confirmation_required": True, **iss}
+                    okc, err = confirmation_consume(tok, params)
+                    if not okc:
+                        return 400, {"error": err}
+                    return 0, {}
+
+                code, resp = zip_extract(root, cfg, body, _confirm_unzip)
                 return self._json(code, resp)
 
             if u.path == "/ocr_pdf":
@@ -4320,18 +4399,19 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
                 if _readonly_for(ocfg):
                     return self._json(403, {"error": "read-only mode is active"})
-                # source read + result write → confirm BEFORE raster/OCR work
+                # New output is safe; confirm an overwrite BEFORE raster/OCR work.
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "ocr_pdf", "path": rel, "out": out_rel}
-                if not confirm_token:
+                confirm_params = confirmation_params(
+                    "ocr_pdf", body, path=rel, out=out_rel)
+                if op.exists() and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
-                        "error": "ocr_pdf reads the source and writes a new PDF — "
-                                 "needs confirmation",
+                        "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
                 raw_lang = body.get("lang") or _get_ocr_lang()
                 parts = [x for x in re.split(r"[\s,+]+", raw_lang)
                          if x and re.fullmatch(r"[a-zA-Z_]{2,8}", x)]
@@ -4385,14 +4465,33 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if op == "rotate" and angle == 0:
                     return self._json(400, {"error": "angle 0 does nothing"})
                 spec_pages = str(body.get("pages", "") or "")
-                # confirmation mirrors /write: only when OUT already exists
+                # Confirmation mirrors /write. Split writes derived
+                # <out-base>.pN.pdf targets, so preflight those exact files
+                # rather than checking only the unused base name.
+                output_targets = [opath]
+                if op == "split":
+                    try:
+                        split_doc = fitz.open(resolved[0])
+                        try:
+                            wanted = _parse_pages(spec_pages, split_doc.page_count)
+                        finally:
+                            split_doc.close()
+                    except Exception as e:
+                        return self._json(400, {"error": f"cannot read input PDF: {e}"})
+                    if not wanted:
+                        return self._json(400, {"error": "no pages selected"})
+                    base = opath.with_suffix("")
+                    output_targets = [Path(f"{base}.p{i + 1}.pdf") for i in wanted]
+                existing_outputs = [p for p in output_targets if p.exists()]
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "pdf_op", "pdfop": op,
-                                  "paths": srcs_rel, "out": out_rel}
-                if opath.exists() and not confirm_token:
+                confirm_params = confirmation_params(
+                    "pdf_op", body, pdfop=op, paths=srcs_rel, out=out_rel,
+                    overwrites=len(existing_outputs))
+                if existing_outputs and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
+                        "error": (f"operation would overwrite {len(existing_outputs)} "
+                                  "existing PDF file(s) — confirmation is required"),
                         "confirmation_required": True, **iss})
                 if confirm_token:
                     okc, err = confirmation_consume(confirm_token, confirm_params)
@@ -4426,15 +4525,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if len(json.dumps(values, default=str)) > MAX_READ:
                     return self._json(413, {"error": "values payload too large"})
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "docx_merge", "path": rel, "out": out_rel}
-                if not confirm_token:
+                confirm_params = confirmation_params(
+                    "docx_merge", body, path=rel, out=out_rel)
+                if op.exists() and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
-                        "error": "docx_merge writes a new file — needs confirmation",
+                        "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
                 code, resp = docx_merge(p, op, oroot, values,
                                         bool(body.get("strict")))
                 return self._json(code, resp)
@@ -4479,17 +4580,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if len(json.dumps({"v": values, "s": slides}, default=str)) > MAX_READ:
                     return self._json(413, {"error": "payload too large"})
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "pptx_from_template", "path": rel,
-                                  "out": out_rel}
-                if not confirm_token:
+                confirm_params = confirmation_params(
+                    "pptx_from_template", body, path=rel, out=out_rel)
+                if op.exists() and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
-                        "error": "pptx_from_template writes a new file — needs "
-                                 "confirmation",
+                        "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
                 code, resp = pptx_from_template(p, op, oroot, slides, values)
                 return self._json(code, resp)
 
@@ -4527,16 +4628,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if _readonly_for(ocfg):
                     return self._json(403, {"error": "read-only mode is active"})
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "pdf_from_text", "out": out_rel}
-                if not confirm_token:
+                confirm_params = confirmation_params(
+                    "pdf_from_text", body, out=out_rel)
+                if op.exists() and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
-                        "error": "pdf_from_text writes a new file — needs "
-                                 "confirmation",
+                        "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
                 code, resp = pdf_from_text(op, oroot, title, blocks, page_size)
                 return self._json(code, resp)
 
@@ -4574,16 +4676,17 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if _readonly_for(ocfg):
                     return self._json(403, {"error": "read-only mode is active"})
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "docx_write", "out": out_rel}
-                if not confirm_token:
+                confirm_params = confirmation_params(
+                    "docx_write", body, out=out_rel)
+                if op.exists() and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
-                        "error": "docx_write writes a new file — needs "
-                                 "confirmation",
+                        "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
                 code, resp = docx_write(op, oroot, title, sections)
                 return self._json(code, resp)
 
@@ -4619,7 +4722,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if _readonly_for(pcfg):
                     return self._json(403, {"error": "read-only mode is active"})
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "xlsx_append", "path": rel}
+                confirm_params = confirmation_params(
+                    "xlsx_append", body, path=rel)
                 if p.exists() and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
@@ -4707,19 +4811,24 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                          "the pattern"})
                 if len(json.dumps(rows, default=str)) > MAX_READ:
                     return self._json(413, {"error": "payload too large"})
+                overwrite_count = (1 if op.exists() else 0) if to_zip else sum(
+                    (oroot / name).exists() for name in probes)
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "docx_mailmerge", "path": rel,
-                                  "out": out_rel}
-                if not confirm_token:
+                confirm_params = confirmation_params(
+                    "docx_mailmerge", body, path=rel, out=out_rel,
+                    documents=len(rows), overwrites=overwrite_count)
+                if overwrite_count and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
-                        "error": f"docx_mailmerge writes {len(rows)} files — "
-                                 "needs confirmation",
+                        "error": (f"mail merge would overwrite {overwrite_count} "
+                                  "existing file(s) — confirmation is required"),
                         "confirmation_required": True, "documents": len(rows),
+                        "overwrites": overwrite_count,
                         **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
                 code, resp = docx_mailmerge(p, out_rel, oroot, _r, rows, to_zip)
                 return self._json(code, resp)
 
@@ -4750,35 +4859,65 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 if _readonly_for(ocfg):
                     return self._json(403, {"error": "read-only mode is active"})
                 confirm_token = body.get("confirmation_token")
-                confirm_params = {"op": "convert", "path": rel, "out": out_rel}
-                if not confirm_token:
+                confirm_params = confirmation_params(
+                    "convert", body, path=rel, out=out_rel)
+                if op.exists() and not confirm_token:
                     iss = confirmation_issue(confirm_params)
                     return self._json(409, {
-                        "error": "convert writes a new file — needs confirmation",
+                        "error": "target exists — overwrite needs confirmation",
                         "confirmation_required": True, **iss})
-                okc, err = confirmation_consume(confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
                 code, resp = convert_file(p, op, oroot, to_ext)
                 return self._json(code, resp)
 
 
             if u.path == "/write_many":
-                # batch writes; >5 files needs {"confirmed": true} (mass-edit
-                # detection, roadmap P0b)
+                # Batch creation is safe. Any existing target makes this a
+                # destructive bulk operation and uses the standard token flow.
                 items = body.get("items", [])
                 if not isinstance(items, list) or not items or len(items) > 50:
                     return self._json(400, {"error": "items must be a 1-50 list"})
-                if len(items) > 5 and not body.get("confirmed"):
+                plan = []
+                overwrite_count = 0
+                for it in items:
+                    if not isinstance(it, dict):
+                        return self._json(400, {"error": "each item must be an "
+                                                        "object with path + content"})
+                    path = it.get("path", "")
+                    content = it.get("content", "")
+                    if not isinstance(path, str) or not path or \
+                       not isinstance(content, str):
+                        return self._json(400, {"error": "each item needs string "
+                                                        "path + content"})
+                    p, _proot, pcfg = resolve_guarded(unquote(path), for_write=True)
+                    if _readonly_for(pcfg):
+                        return self._json(403, {"error": "read-only mode is active"})
+                    exists = p.exists()
+                    overwrite_count += int(exists)
+                    plan.append({"path": path, "bytes": len(content),
+                                 "overwrites": exists})
+                confirm_token = body.get("confirmation_token")
+                confirm_params = confirmation_params(
+                    "write_many", body, files=len(items),
+                    overwrites=overwrite_count)
+                if overwrite_count and not confirm_token:
+                    iss = confirmation_issue(confirm_params)
                     return self._json(409, {
-                        "error": f"batch of {len(items)} files needs explicit "
-                                 f"confirmation",
+                        "error": (f"batch would overwrite {overwrite_count} "
+                                  "existing file(s) — confirmation is required"),
                         "confirmation_required": True,
-                        "confirm_op": "list the plan to the user; on approval "
-                                      "re-send with confirmed:true",
-                        "plan": [{"path": it.get("path"),
-                                  "bytes": len(it.get("content", ""))}
-                                 for it in items]})
+                        "confirm_op": ("show the overwrite plan to the user; after "
+                                       "approval re-send the exact request with the "
+                                       "returned confirmation_token without displaying "
+                                       "that token"),
+                        "plan": plan, **iss})
+                if confirm_token:
+                    okc, err = confirmation_consume(confirm_token, confirm_params)
+                    if not okc:
+                        return self._json(400, {"error": err})
                 results = []
                 for it in items:
                     path = it.get("path", "")

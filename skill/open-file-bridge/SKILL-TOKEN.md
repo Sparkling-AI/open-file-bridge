@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v2.9
+# Local File Bridge — skill v2.10
 
 > Requires bridge ≥ **2.5** (checked at bootstrap below; newer bridges are
 > always fine — the API is backward-compatible).
@@ -27,20 +27,20 @@ Access files in **the user's own computer** through their local Open File Bridge
 | `/pdf_text?path=X&pages=1-3,5` | GET | **Extract text layer** from PDF (addon: pymupdf) |
 | `/pdf_text?path=X&mode=images&max_pages=100` | GET | **Vision mode**: pages as PNG data URLs (144 dpi, pypdfium2 addon) — for vision models |
 | `/ocr?path=X&lang=swe+eng&max_pages=5` | GET | **OCR** scanned PDF/image (tesseract) |
-| `/ocr_pdf` | POST | `{"path","out":"x.pdf","lang","dpi"}` → **searchable PDF** (invisible text layer; confirm flow) |
+| `/ocr_pdf` | POST | `{"path","out":"x.pdf","lang","dpi"}` → **searchable PDF** (invisible text layer; confirm on overwrite) |
 | `/pdf_op` | POST | `{"op":"split\|merge\|rotate","paths":[...],"out","pages":"1-3","angle":90}` — page surgery (confirm on overwrite) |
-| `/docx_merge` | POST | `{"path":"template.docx","out","values":{"name":"…"},"strict":false}` — fill `{{placeholders}}` (confirm flow; reports missing) |
-| `/pptx_from_template` | POST | `{"path":"deck.potx","out","values":{…},"slides":[{"layout":1,"title":"…","body":"…"}]}` — build deck from corporate template (confirm flow) |
+| `/docx_merge` | POST | `{"path":"template.docx","out","values":{"name":"…"},"strict":false}` — fill `{{placeholders}}` (confirm on overwrite; reports missing) |
+| `/pptx_from_template` | POST | `{"path":"deck.potx","out","values":{…},"slides":[{"layout":1,"title":"…","body":"…"}]}` — build deck from corporate template (confirm on overwrite) |
 | `/image_info?path=X` | GET | Image dimensions/format/megapixels + EXIF orientation (effective size) — stdlib, no addon |
 | `/image_b64?path=X&max_bytes=` | GET | Image as a **data URL** (`data:image/png;base64,…`), size-capped (default 4 MB; auto-downscaled when pymupdf is present) — for showing images in chat |
 | `/reveal?path=X` | GET | Open the user's file manager at the file — **consent-gated** (403 unless the user enabled it in settings) |
 | `/link` | POST | `{"path":"x.pdf"}` → user-clickable links for your ANSWER: `open_url` (default app) + `reveal_url` (file manager), multi-use; TTL is configured on the user's bridge (default 7 days; older bridges 1 h) — **outcome links** (v2.7+) |
 | `/ocr/config` | GET | Current OCR language + installed languages |
-| `/convert` | POST | `{"path":"old.doc","out":"new.docx"}` — **LibreOffice headless conversion**: legacy .doc/.xls/.ppt → modern, office → PDF, xlsx → csv, docx → png/html. Format pair comes from the extensions; confirm flow; 501 with install hint if the user has no LibreOffice |
-| `/pdf_from_text` | POST | `{"out":"x.pdf","blocks":[{"style":"title\|h1\|h2\|body\|pagebreak","text":"…"}]}` — create PDF natively (fpdf2 addon, no Pyodide shim); confirm flow |
-| `/docx_write` | POST | `{"out":"x.docx","sections":[{"style":"h1\|h2\|paragraph\|list\|numbered\|pagebreak","text":"…","items":["…"]}]}` — create Word from structured sections; confirm flow |
+| `/convert` | POST | `{"path":"old.doc","out":"new.docx"}` — **LibreOffice headless conversion**: legacy .doc/.xls/.ppt → modern, office → PDF, xlsx → csv, docx → png/html. Format pair comes from the extensions; confirm on overwrite; 501 with install hint if the user has no LibreOffice |
+| `/pdf_from_text` | POST | `{"out":"x.pdf","blocks":[{"style":"title\|h1\|h2\|body\|pagebreak","text":"…"}]}` — create PDF natively (fpdf2 addon, no Pyodide shim); confirm on overwrite |
+| `/docx_write` | POST | `{"out":"x.docx","sections":[{"style":"h1\|h2\|paragraph\|list\|numbered\|pagebreak","text":"…","items":["…"]}]}` — create Word from structured sections; confirm on overwrite |
 | `/xlsx_append` | POST | `{"path":"log.xlsx","rows":[["a",1],…],"header":["…"],"sheet":"Sheet1"}` — create-or-append Excel (header only applied on create; appending to an existing file needs confirm) |
-| `/docx_mailmerge` | POST | `{"path":"template.docx","out":"merged/{{client}}.docx"\|"bundle.zip","rows":[…]\|"rows.xlsx"\|"rows.csv"}` — one document per row; collision + unresolved-pattern checks BEFORE confirm |
+| `/docx_mailmerge` | POST | `{"path":"template.docx","out":"merged/{{client}}.docx"\|"bundle.zip","rows":[…]\|"rows.xlsx"\|"rows.csv"}` — one document per row; new outputs need no confirmation, existing outputs do |
 | `/eml_read?path=X&max_chars=` | GET | Read .eml: headers + date_iso, text body (html stripped), attachment **metadata only**; .msg → 415 hint |
 | `/xlsx_read?path=X&sheet=&range=A1:B2&max_rows=` | GET | Read **Excel** as JSON (row_count, headers, grid, merged cells) — no install needed |
 | `/docx_read?path=X` | GET | Read **Word** as markdown-ish text (headings, lists, pipe tables) |
@@ -51,8 +51,8 @@ Access files in **the user's own computer** through their local Open File Bridge
 | `/search?q=&glob=*.md&exclude=&context=2&case=0` | GET | Cross-file grep with context lines; respects ignore lists |
 | `/edit` | POST | `{"path","edits":[{"old_text","new_text"}],"dry_run":true}` → unified diff preview; real apply needs confirmation token (409 flow) |
 | `/directory_tree?path=.&max_entries=500&max_depth=6` | GET | Recursive folder **tree** (name/type/size + children) — respects ignore lists, symlinks never listed |
-| `/zip` | POST | `{"members":["dir","file.txt"],"out":"bundle.zip"}` — create archive (members stored flat; recursive for dirs) |
-| `/unzip` | POST | `{"path":"bundle.zip","dest":"outdir"}` — extract under dest/ (zip-slip names rejected) |
+| `/zip` | POST | `{"members":["dir","file.txt"],"out":"bundle.zip"}` — create archive (members stored flat; recursive for dirs; confirm on overwrite) |
+| `/unzip` | POST | `{"path":"bundle.zip","dest":"outdir"}` — extract under dest/ (zip-slip names rejected; confirm if members overwrite existing files) |
 | `/wheels` | GET | Local wheel URLs for micropip (openpyxl etc.) |
 
 **Caching (P2):** `/pdf_text` and `/ocr` results are cached per
@@ -196,8 +196,8 @@ d = await bridge_post("/pptx_from_template",
                        "slides": [{"layout": 1, "title": "Agenda",
                                    "body": "One\nTwo"}]})
 ```
-Both follow the 409 confirmation flow. For docs without a template, keep
-the Pyodide route below.
+New output files need no confirmation; overwriting an existing output follows
+the 409 approval flow. For docs without a template, keep the Pyodide route below.
 
 ```python
 import micropip
@@ -343,7 +343,7 @@ text layer, so the PDF becomes searchable/copyable forever:
 d = await bridge_post("/ocr_pdf", {"path": "scans/receipt-2024.pdf",
                                    "out": "scans/receipt-2024-searchable.pdf",
                                    "lang": "swe+eng"})
-# 409 + confirmation_token flow (see write rules) — confirm, re-send
+# New output: no confirmation. Existing output: follow the approval flow.
 ```
 
 **Vision models:** if YOU can see images and the user asks about layout,
@@ -498,13 +498,18 @@ For a folder: name + [📂 Show in folder](reveal_url) only.
    format reader (`/xlsx_read` `/docx_read` `/pptx_read`) or b64 endpoints;
    only `text` kinds work with `/read`. Unknown extension or unsure →
    `/peek` and follow its hint.
-3. **Never overwrite without confirmation.** Writing to an EXISTING file returns
-   HTTP 409 with a `confirmation_token` (60 s). Show the user what will change,
-   and when they approve re-send the SAME request plus `"confirmation_token"`.
-   The bridge snapshots the old version automatically — if the user regrets an
-   edit, offer `POST /versions/list` → `POST /versions/restore` (restore itself
-   needs a confirmation token too). Do NOT resend with a changed payload: the
-   token burns on any attempt and you must start a new 409 flow.
+3. **New files need no confirmation. Destructive changes do.** Creating a new
+   output proceeds immediately. Overwriting, editing, deleting, restoring, or a
+   bulk operation that would replace existing files returns HTTP 409. Show the
+   user exactly what will change and ask for approval. Only after approval,
+   re-send the SAME request with the returned `"confirmation_token"`; it is
+   single-use, bound to the exact payload, and valid for 10 minutes. This token
+   is an internal transport detail: NEVER show it, name it, or ask the user to
+   copy it. The bridge snapshots existing files automatically before overwrite.
+   If approval expires, require renewed approval and say: "The approval window
+   expired before I could complete the change. Please review the action above
+   and approve it again." If the request changed after approval, show the revised
+   action and ask again. Never proceed using an earlier approval.
 4. **Legacy formats (.doc/.xls/.ppt) are read-only-ish:** no library support —
    tell the user to convert to the modern format first (e.g. open in Office →
    Save As .docx).

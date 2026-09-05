@@ -3,7 +3,7 @@ name: open-file-bridge-strict
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge (http://127.0.0.1:8765) — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — STRICT variant — skill v2.9
+# Local File Bridge — STRICT variant — skill v2.10
 
 Built for models that need guardrails: fixed recipes, bridge-only writes,
 verify-after-write. (Stronger models: use the standard "Local File
@@ -28,13 +28,21 @@ Bridge" skill instead — more endpoints, more freedom.)
    then the matching reader endpoint from the table below. Never
    `/read` a binary file (Office/PDF/image) — the error response tells
    you the right endpoint; follow its `hint`.
-6. To write: ALWAYS a bridge POST endpoint (`/write`, `/edit`,
-   `/docx_write`, `/xlsx_append`, `/pdf_from_text`, `/docx_merge`).
+6. To write: ALWAYS a bridge POST endpoint (`/write`, `/write_b64`,
+   `/edit`, `/xlsx_append`, `/pdf_from_text`, `/docx_merge`).
    NEVER local file APIs (Rule 2).
-7. **HTTP 409 = the bridge wants confirmation.** Show the user what
-   will change, then re-send the SAME payload plus the
-   `"confirmation_token"` from the response (valid 60 s). Do NOT
-   change any other field — the token burns on mismatch.
+7. Creating a new file needs no confirmation. **HTTP 409 on a write
+   means approval is required** because the action would overwrite,
+   delete, restore, or destructively update files in bulk. Show the
+   exact action and ask the user to approve it. After approval, re-send
+   the SAME payload plus the returned `"confirmation_token"`. Treat
+   that value as an internal implementation detail: never display it,
+   name it, or ask the user to copy it. It is single-use, bound to the
+   exact payload, and valid for about 10 minutes. If it expires, require
+   renewed approval and say: *"The approval window expired before I
+   could complete the change. Please review the action above and
+   approve it again."* If the action changes, show the revised action
+   and ask again. Never use an earlier approval for a changed action.
 8. **After EVERY write: verify.** Re-read the file via the bridge (or
    confirm the response contains `"ok": true` and the `"written"`
    path) and report THOSE facts. Never claim success from your own
@@ -43,8 +51,9 @@ Bridge" skill instead — more endpoints, more freedom.)
    paths. Never dump a whole large file into chat — summarize and cite
    `path:line`.
 10. On any 4xx/5xx: read the `error` and `hint` fields and follow
-    them. Still stuck? Tell the user the exact error text — do not
-    guess.
+    them. For an expired, invalid, or changed approval, use the plain
+    language in Rule 7 and never expose token terminology. Otherwise,
+    if still stuck, tell the user the exact error text — do not guess.
 
 ## Bootstrap — run this first, copy it exactly
 
@@ -125,7 +134,7 @@ lists — a missing file may be excluded on purpose; say so).
 |---|---|
 | write/edit plain text, md, csv, code | `/write {"path","content"}` (overwrite → 409 flow, Rule 7) |
 | surgical text replacements | `/edit {"path","edits":[…],"dry_run":true}` — show the diff, then apply via 409 flow |
-| new Word document | `/docx_write {"out":"x.docx","sections":[…]}` |
+| new Word document | use the fixed in-memory Word recipe below → `/write_b64` (do NOT use `/docx_write`) |
 | new PDF | `/pdf_from_text {"out":"x.pdf","blocks":[…]}` |
 | Excel rows (create or append) | `/xlsx_append {"path":"x.xlsx","rows":[[…]],"header":[…]}` |
 | fill a .docx template | `/docx_merge {"path","out","values":{…}}` |
@@ -142,13 +151,45 @@ lists — a missing file may be excluded on purpose; say so).
    (folders: Show in folder only). Passing mentions stay plain code spans.
    No `d["links"]` (older bridge) → plain code span, no extra call.
 
+### Fixed Word recipe — create a new `.docx`
+
+Use this exact in-memory pattern, changing only the requested file name and document content. It creates a standards-based OOXML package with Python's standard library, so it does not depend on `lxml` being available in the current Pyodide build. Never use `open()`, `os.*`, or `pathlib`; `BytesIO` is temporary memory, not the user's filesystem.
+
+```python
+import base64, io, zipfile
+from xml.sax.saxutils import escape
+
+heading = escape("Certification Test")
+sentence = escape("hello world")
+content_types = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/><Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/><Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>'''
+package_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/></Relationships>'''
+document_rels = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships"><Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/></Relationships>'''
+styles = '''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:styles xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/></w:style><w:style w:type="paragraph" w:styleId="Heading1"><w:name w:val="heading 1"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/><w:pPr><w:outlineLvl w:val="0"/></w:pPr><w:rPr><w:b/><w:sz w:val="32"/></w:rPr></w:style></w:styles>'''
+document_xml = f'''<?xml version="1.0" encoding="UTF-8" standalone="yes"?><w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:pPr><w:pStyle w:val="Heading1"/></w:pPr><w:r><w:t>{heading}</w:t></w:r></w:p><w:p><w:r><w:t>{sentence}</w:t></w:r></w:p><w:sectPr/></w:body></w:document>'''
+buf = io.BytesIO()
+with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as docx:
+    docx.writestr("[Content_Types].xml", content_types)
+    docx.writestr("_rels/.rels", package_rels)
+    docx.writestr("word/_rels/document.xml.rels", document_rels)
+    docx.writestr("word/styles.xml", styles)
+    docx.writestr("word/document.xml", document_xml)
+d = await bridge_post("/write_b64", {
+    "path": "review-note.docx",
+    "b64": base64.b64encode(buf.getvalue()).decode("ascii"),
+})
+print(d)
+```
+
+A new target is written immediately and needs no confirmation. If the target already exists, `/write_b64` returns HTTP 409: follow Rule 7 before overwriting it. After a 200 response, verify with `/docx_read` and report the returned `written` path. Do not use `/docx_write` for new Word documents in packaged installations. For richer formatting, expand the OOXML parts in memory while preserving this `/write_b64` flow.
+
 ## Recipe C — legacy formats (.doc/.xls/.ppt)
 
 Convert to a modern format first, then Recipe A/B on the product:
 
 ```python
 d = await bridge_post("/convert", {"path": "old.doc", "out": "new.docx"})
-# 409 confirmation flow applies (Rule 7). 501 → the user has no
+# A new output needs no confirmation. If the output already exists,
+# follow the 409 approval flow in Rule 7. 501 → the user has no
 # LibreOffice: say so and ask them to convert manually.
 ```
 
@@ -159,6 +200,8 @@ d = await bridge_post("/convert", {"path": "old.doc", "out": "new.docx"})
 | fetch/`/health` failure | "Your Open File Bridge app isn't running. Please start the Open File Bridge app, then ask me again." |
 | 401 | "This bridge needs an access token. Please paste your bridge token (Open File Bridge settings → 🔒 Security → Show) here in chat." |
 | 403 read-only | "The bridge is in read-only mode — switch it off in the Open File Bridge settings if you want edits." |
+| approval expired or invalid | "The approval window expired before I could complete the change. Please review the action above and approve it again." |
+| approved action no longer matches | "The requested change is different from the action you approved. Please review the revised action and approve it again." |
 | 429 | "The write-rate safety brake tripped (many writes in a minute). Please confirm you want me to continue." |
 | 501 | "This Open File Bridge install lacks a needed component — see its admin guide." |
 

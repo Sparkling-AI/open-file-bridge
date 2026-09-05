@@ -271,13 +271,28 @@ check "write new file ok"     '"ok": *true'   "$(curl -s -X POST $BRIDGE/write -
 # overwrite WITHOUT token → 409 + token
 OW=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
 check "overwrite demands confirm" 'confirmation_required' "$OW"
+check "approval window is 10 minutes" '"expires_in": *600' "$OW"
 CT=$(echo "$OW" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-# overwrite with WRONG params (different content length) → token mismatch
+# overwrite with WRONG params (same content length) → exact-payload mismatch
 # token was consumed by the failed attempt → now invalid
-CPM=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2-CHANGED\",\"confirmation_token\":\"$CT\"}")
-check "confirm params mismatch" 'do not match' "$CPM"
+CPM=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v3\",\"confirmation_token\":\"$CT\"}")
+check "approval binds exact payload" 'requested action changed' "$CPM"
 CPM2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT\"}")
-check "token one-shot" 'invalid or expired' "$CPM2"
+check "approval is one-shot" 'approval window expired or is no longer valid' "$CPM2"
+# Force one pending grant to expire without making the suite sleep 10 minutes.
+OW_EXP=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v4"}')
+CT_EXP=$(echo "$OW_EXP" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+python3 - "$STATEDIR/pending-confirmations.json" <<'PY'
+import json, pathlib, sys
+p = pathlib.Path(sys.argv[1])
+d = json.loads(p.read_text(encoding="utf-8"))
+for item in d.values():
+    item["expiry"] = 0
+p.write_text(json.dumps(d), encoding="utf-8")
+PY
+EXP=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v4\",\"confirmation_token\":\"$CT_EXP\"}")
+check "expired approval is explained plainly" 'approval window expired' "$EXP"
+if echo "$EXP" | grep -q 'confirmation token'; then echo "  FAIL: expired approval exposed token jargon"; fail=1; else echo "  PASS: expired approval hides token jargon"; fi
 OW2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
 CT2=$(echo "$OW2" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
 W2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT2\"}")
@@ -382,7 +397,10 @@ TL=$(curl -s -X POST $BRIDGE/trash/list -H 'Content-Type: application/json' $T -
 check "trash lists entry"     '"path": *"delme.txt"' "$TL"
 TTS=$(echo "$TL" | python3 -c "import json,sys; print(json.load(sys.stdin)['trash'][0]['ts'])")
 TRS=$(curl -s -X POST $BRIDGE/trash/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"delme.txt\",\"ts\":\"$TTS\"}")
-check "trash restore"         '"ok": *true' "$TRS"
+check "trash restore needs approval" 'confirmation_required' "$TRS"
+TRT=$(echo "$TRS" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+TRS=$(curl -s -X POST $BRIDGE/trash/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"delme.txt\",\"ts\":\"$TTS\",\"confirmation_token\":\"$TRT\"}")
+check "trash restore approved" '"ok": *true' "$TRS"
 check "trash restored content" 'trash-me'  "$(cat "$TESTDIR/delme.txt")"
 check "trash purge is local"  'settings-page' "$(curl -s -X POST $BRIDGE/trash/purge -H 'Content-Type: application/json' $T -d '{}')"
 
@@ -390,13 +408,17 @@ check "trash purge is local"  'settings-page' "$(curl -s -X POST $BRIDGE/trash/p
 WM=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d '{"items":[{"path":"w1.txt","content":"a"},{"path":"w2.txt","content":"b"}]}')
 check "write_many small ok"   '"ok": *true' "$WM"
 check "write_many landed"     'a'           "$(cat "$TESTDIR/w1.txt")"
-# write_many big batch without confirmation
+# write_many all-new batch has no confirmation, regardless of batch size
 python3 -c "import json; print(json.dumps({'items':[{'path':f'b{i}.txt','content':'x'} for i in range(7)]}))" > /tmp/many.json
 WMB=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d @/tmp/many.json)
-check "write_many mass gated" 'needs explicit confirmation' "$WMB"
-# with confirmed:true it goes through
-WMBC=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d "$(python3 -c "import json; d=json.load(open('/tmp/many.json')); d['confirmed']=True; print(json.dumps(d))")")
-check "write_many confirmed"  '"ok": *true' "$WMBC"
+check "write_many all-new batch ok" '"ok": *true' "$WMB"
+# Any existing target makes the batch destructive and requires approval.
+WMO=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d '{"items":[{"path":"w1.txt","content":"updated"},{"path":"w3.txt","content":"new"}]}')
+check "write_many overwrite needs approval" 'confirmation_required' "$WMO"
+WMT=$(echo "$WMO" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+WMOC=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d "{\"items\":[{\"path\":\"w1.txt\",\"content\":\"updated\"},{\"path\":\"w3.txt\",\"content\":\"new\"}],\"confirmation_token\":\"$WMT\"}")
+check "write_many overwrite approved" '"ok": *true' "$WMOC"
+check "write_many overwrite snapshot" '"snapshot": *{' "$WMOC"
 
 # readonly mode blocks writes
 curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"readonly":true}' >/dev/null
@@ -575,7 +597,7 @@ check "edit atomic landed" '90 days' "$(cat "$TESTDIR/contract.txt")"
 chmod 640 "$TESTDIR/out.bin" 2>/dev/null || true
 OB=$(curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n x | base64)\"}")
 OBT=$(echo "$OB" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
-curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n y | base64)\",\"confirmation_token\":\"$OBT\"}" >/dev/null
+curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n x | base64)\",\"confirmation_token\":\"$OBT\"}" >/dev/null
 if [ "$(stat_mode "$TESTDIR/out.bin")" = "640" ]; then echo "  PASS: write_b64 preserves mode"; else echo "  FAIL: write_b64 mode $(stat_mode "$TESTDIR/out.bin")"; fail=1; fi
 # versions/restore lands atomically with snapshot's mode
 VLN=$(curl -s -X POST $BRIDGE/versions/list -H 'Content-Type: application/json' $T -d '{"path":"notes.txt"}')
@@ -653,6 +675,17 @@ printf 'junk' > "$TESTDIR/pack/.DS_Store"   # must NOT reach any archive
 echo "loose" > "$TESTDIR/loose.txt"
 check "zip creates archive"   '"ok": *true'    "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack","loose.txt"],"out":"bundle.zip"}')"
 check "zip counts files"     '"files": *2'     "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack"],"out":"p2.zip"}')"
+# Replacing an existing archive is an overwrite and needs approval.
+ZO=$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["loose.txt"],"out":"bundle.zip"}')
+check "zip overwrite needs approval" 'confirmation_required' "$ZO"
+ZOT=$(echo "$ZO" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+ZOC=$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d "{\"members\":[\"loose.txt\"],\"out\":\"bundle.zip\",\"confirmation_token\":\"$ZOT\"}")
+check "zip overwrite approved" '"ok": *true' "$ZOC"
+check "zip overwrite snapshot" '"snapshot": *{' "$ZOC"
+# Recreate the original multi-member archive for extraction checks.
+ZOR=$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack","loose.txt"],"out":"bundle.zip"}')
+ZORT=$(echo "$ZOR" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d "{\"members\":[\"pack\",\"loose.txt\"],\"out\":\"bundle.zip\",\"confirmation_token\":\"$ZORT\"}" >/dev/null
 if command -v unzip >/dev/null; then
   check "zip readable"       'a.txt'  "$(unzip -l "$TESTDIR/bundle.zip" 2>/dev/null || echo NOMEMBER)"
 else
@@ -664,6 +697,13 @@ check "zip bad ext refused" 'must end in .zip' "$(curl -s -X POST $BRIDGE/zip -H
 check "unzip extracts"      '"files": *3'    "$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"bundle.zip","dest":"unpacked"}')"
 check "unzip file content"  'alpha'          "$(cat "$TESTDIR/unpacked/a.txt")"
 check "unzip dir member"    'beta'           "$(cat "$TESTDIR/unpacked/b.txt")"
+# Extracting again would overwrite files, so it needs approval and snapshots.
+UO=$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"bundle.zip","dest":"unpacked"}')
+check "unzip overwrite needs approval" 'confirmation_required' "$UO"
+UOT=$(echo "$UO" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
+UOC=$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d "{\"path\":\"bundle.zip\",\"dest\":\"unpacked\",\"confirmation_token\":\"$UOT\"}")
+check "unzip overwrite approved" '"ok": *true' "$UOC"
+check "unzip overwrite snapshots" '"snapshots": *\[' "$UOC"
 # zip-slip: craft a malicious archive with ../ member
 python3 - "$TESTDIR/evil.zip" <<'PY'
 import sys, zipfile

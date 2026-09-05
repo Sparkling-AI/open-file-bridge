@@ -84,8 +84,10 @@ every layer below before touching a file:
 - **L3 Filesystem gate** — exactly ONE user-chosen folder; `../` traversal
   rejected, symlink components refused, credential-looking filenames
   (`id_rsa`, `.env`, `*.pem`…) blocked outright.
-- **L4 Operation semantics** — overwrites & deletes require a 409
-  confirmation token (60 s, bound to op+path+out); every overwrite
+- **L4 Operation semantics** — creating new files needs no confirmation;
+  overwrites, deletes, restores, and destructive bulk operations require a
+  409 approval round trip. Its internal token is single-use, valid for about
+  10 minutes, and bound to the exact request payload. Every overwrite
   snapshots the prior version; deletes are trash-moves (purge is 403 by
   design); JSONL audit log with secret scrubbing; optional read-only mode.
 

@@ -23,6 +23,15 @@ Add every new gotcha here, not to memory.
 
 ## Bridge runtime quirks (learned the hard way)
 
+- **Approval grants (bridge 2.10.0 / skill 2.10):** new targets are written
+  immediately. Only overwrites, edits, deletes, restores, and bulk requests
+  that replace existing files use the 409 approval round trip. The internal
+  grant is single-use, bound to a SHA-256 digest of the exact JSON payload
+  (excluding only `confirmation_token`), and expires after 10 minutes. A
+  mismatch burns the grant. Keep the skill's expiry response user-facing
+  ("approval window expired") and never relay token terminology to the user.
+  Overwrite paths, including ZIP extraction, must snapshot every existing
+  target before writing.
 - **Port 8765 conflicts**: `tests/e2e_test.sh` refuses to run if something
   already listens (it starts its OWN bridge on a temp dir). Kill strays:
   `pkill -f file_bridge` — then VERIFY with `ss -tln | grep 8765`, because

@@ -87,11 +87,13 @@ recommended when copying non-trivial blocks.
       continue — large files become page-through instead of a hard cap.
    Enforcement lives in the BRIDGE (hard), skill rules are advisory only.
 
-✅ **Write-before-overwrite snapshots + confirmation tokens** — before any
-   write to an existing file, copy original to `.fb-versions/<name>.<ts>`;
-   destructive ops get a two-step confirmation token (60 s validity — design
-   borrowed from OWUI openapi-servers filesystem server). Makes model edits
-   reversible and deliberate — trust foundation for office use.
+✅ **Write-before-overwrite snapshots + confirmation tokens** — creating a
+   new file needs no confirmation. Before any write to an existing file, copy
+   the original to `.fb-versions/<name>.<ts>`; overwrites, deletes, restores,
+   and destructive bulk operations get a two-step internal token. It is
+   single-use, valid for about 10 minutes, and bound to the exact request
+   payload. Makes model edits reversible and deliberate — trust foundation
+   for office use.
 ✅ **"Production mode" hard-fail** — bridge refuses to serve with CORS `*`
    AND no token simultaneously (Open Terminal v0.11.30 refuses keyless
    start; adopt the stance). ✅ done — see items 1/2 above.
@@ -164,10 +166,10 @@ inside a root (none planned): hard structural ignore, not user-configurable.
    rolling 60 s window (default 20) + max total MB written per window;
    exceeding triggers 429 with "ask user to confirm mass edit" message the
    skill relays. A runaway model hits the brake, not the folder.
-✅ **Mass-edit detection** — `/write_many` requires an explicit
-   `confirmed: true` second call when batch size is over 5 files (token
-   pattern from openapi-servers). Skill rule: for over 5 file changes, list
-   the plan first, get user OK, then batch.
+✅ **Mass-edit detection** — `/write_many` creates an all-new batch without
+   confirmation. If any target already exists, it requires the normal
+   single-use, exact-payload approval flow and snapshots every overwritten
+   target first.
 ✅ **Read-only mode toggle** (settings page, per root or global): disables
    /write, /edit, /delete entirely — for demo/paranoid mode. Env override
    too (FILE_BRIDGE_READONLY=1).

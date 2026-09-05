@@ -10,6 +10,8 @@ __pycache__/
 
 # local state
 .file-bridge.json
+.secret
+.private/
 # packaging output lands at repo root (build/package_macos.sh)
 FileBridge-macos.zip
 OpenFileBridge-*.msix

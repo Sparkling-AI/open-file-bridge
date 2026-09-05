@@ -113,17 +113,19 @@ if echo "$O4" | grep -q '"cached": *true'; then echo "  FAIL: params ignored in 
 # ---------- /ocr_pdf (P2 searchable PDF) ----------
 echo "not a scan" > "$TESTDIR/loose.txt"
 J() { python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get(sys.argv[1],''))" "$2" <<<"$1"; }
-# no token → 409 confirmation
+# A new OCR output is created immediately.
+P1=$(curl -s -m 120 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv-scan.pdf","out":"inv-searchable.pdf"}')
+check "ocr_pdf new output needs no confirmation" '"ok": *true' "$P1"
+# Overwriting that output needs approval. Any payload change burns the grant.
 P1=$(curl -s -m 20 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv-scan.pdf","out":"inv-searchable.pdf"}')
-check "ocr_pdf needs confirmation" 'confirmation_required' "$P1"
+check "ocr_pdf overwrite needs approval" 'confirmation_required' "$P1"
 TOKEN1=$(J "$P1" confirmation_token)
-# changed payload (different out) → 400, token burned
-P1b=$(curl -s -m 20 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv-scan.pdf","out":"inv-searchable2.pdf","confirmation_token":"'"$TOKEN1"'"}')
-check "ocr_pdf changed payload burns token" 'request parameters do not match\|invalid or expired' "$P1b"
-# fresh 409 → correct confirm → searchable pdf
-P1=$(curl -s -m 20 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv-scan.pdf","out":"inv-searchable.pdf"}')
+P1b=$(curl -s -m 20 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv-scan.pdf","out":"inv-searchable.pdf","lang":"eng","confirmation_token":"'"$TOKEN1"'"}')
+check "ocr_pdf changed payload burns approval" 'requested action changed' "$P1b"
+# Fresh approval with an identical payload succeeds.
+P1=$(curl -s -m 20 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv-scan.pdf","out":"inv-searchable.pdf","lang":"eng"}')
 TOKEN1=$(J "$P1" confirmation_token)
-P2=$(curl -s -m 120 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv-scan.pdf","out":"inv-searchable.pdf","confirmation_token":"'"$TOKEN1"'","lang":"eng"}')
+P2=$(curl -s -m 120 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv-scan.pdf","out":"inv-searchable.pdf","lang":"eng","confirmation_token":"'"$TOKEN1"'"}')
 check "ocr_pdf writes ok"        '"ok": *true'      "$P2"
 check "ocr_pdf page count"       '"pages": *1'      "$P2"
 check "ocr_pdf has snapshot key" 'snapshot'         "$P2"
@@ -135,10 +137,8 @@ check "searchable pdf text layer" 'INVOICE'         "$SRCH"
 SRCC=$(curl -s "$BRIDGE/pdf_text?path=inv-scan.pdf")
 if echo "$SRCC" | grep -q 'INVOICE'; then echo "  FAIL: source mutated"; fail=1; else echo "  PASS: source untouched"; fi
 # image input
-P3=$(curl -s -m 20 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv.png","out":"img-searchable.pdf"}')
-TOKEN3=$(J "$P3" confirmation_token)
-P4=$(curl -s -m 120 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv.png","out":"img-searchable.pdf","confirmation_token":"'"$TOKEN3"'"}')
-check "ocr_pdf image input"      '"pages": *1'      "$P4"
+P3=$(curl -s -m 120 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv.png","out":"img-searchable.pdf"}')
+check "ocr_pdf image input"      '"pages": *1'      "$P3"
 # overwrite needs a SECOND confirmation (existing target)
 P5=$(curl -s -m 20 -X POST $BRIDGE/ocr_pdf -H 'Content-Type: application/json' -d '{"path":"inv-scan.pdf","out":"inv-searchable.pdf"}')
 check "ocr_pdf overwrite confirmed" 'confirmation_required' "$P5"
@@ -185,24 +185,17 @@ print("fixtures ok")
 PYEOF
   # docx_merge happy path
   DM=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"contract-filled.docx","values":{"client_name":"Acme AB","amount":"12500"}}')
-  check "docx_merge needs confirmation" 'confirmation_required' "$DM"
-  TOK=$(J "$DM" confirmation_token)
-  DM2=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"contract-filled.docx","values":{"client_name":"Acme AB","amount":"12500"},"confirmation_token":"'"$TOK"'"}')
-  check "docx_merge ok"          '"ok": *true'   "$DM2"
+  check "docx_merge new output needs no confirmation" '"ok": *true' "$DM"
   # verify content via /docx_read (stdlib reader works without the lib)
   DR=$(curl -s "$BRIDGE/docx_read?path=contract-filled.docx")
   check "docx_merge filled name"   'Acme AB'      "$DR"
   check "docx_merge filled amount" '12500 SEK'    "$DR"
   # unfilled placeholder reported (non-strict leaves {{x}} in text)
   DM3=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"partial.docx","values":{"client_name":"Beta"}}')
-  TOK=$(J "$DM3" confirmation_token)
-  DM4=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"partial.docx","values":{"client_name":"Beta"},"confirmation_token":"'"$TOK"'"}')
-  check "docx_merge reports missing" '"missing": *\["amount"\]' "$DM4"
+  check "docx_merge reports missing" '"missing": *\["amount"\]' "$DM3"
   # strict mode refuses
   DM5=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"partial2.docx","values":{"client_name":"Beta"},"strict":true}')
-  TOK=$(J "$DM5" confirmation_token)
-  DM6=$(curl -s -m 20 -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"partial2.docx","values":{"client_name":"Beta"},"strict":true,"confirmation_token":"'"$TOK"'"}')
-  check "docx_merge strict blocks"  'unresolved placeholders' "$DM6"
+  check "docx_merge strict blocks"  'unresolved placeholders' "$DM5"
   if [ -f "$TESTDIR/partial2.docx" ]; then echo "  FAIL: strict wrote the file"; fail=1; else echo "  PASS: strict wrote nothing"; fi
   # policy errors
   check "docx_merge bad out ext" 'must end in .docx' "$(curl -s -X POST $BRIDGE/docx_merge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"x.pdf","values":{}}')"
@@ -212,11 +205,8 @@ PYEOF
 
   # pptx_from_template
   PT=$(curl -s -m 20 -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"deck-template.pptx","out":"deck-out.pptx","values":{"report_title":"Q4 Wrap","client_name":"Acme AB"},"slides":[{"layout":1,"title":"Agenda","body":"One\nTwo"}]}')
-  check "pptx_template needs confirmation" 'confirmation_required' "$PT"
-  TOK=$(J "$PT" confirmation_token)
-  PT2=$(curl -s -m 20 -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"deck-template.pptx","out":"deck-out.pptx","values":{"report_title":"Q4 Wrap","client_name":"Acme AB"},"slides":[{"layout":1,"title":"Agenda","body":"One\nTwo"}],"confirmation_token":"'"$TOK"'"}')
-  check "pptx_template ok"        '"ok": *true'      "$PT2"
-  check "pptx_template added"     '"slides_added": *1' "$PT2"
+  check "pptx_template new output needs no confirmation" '"ok": *true' "$PT"
+  check "pptx_template added"     '"slides_added": *1' "$PT"
   PR=$(curl -s "$BRIDGE/pptx_read?path=deck-out.pptx")
   check "pptx_template filled title" 'Q4 Wrap'       "$PR"
   check "pptx_template filled body"  'Acme AB'       "$PR"
@@ -227,13 +217,10 @@ PYEOF
   check "pptx_template traversal"    'escapes'       "$(curl -s -X POST $BRIDGE/pptx_from_template -H 'Content-Type: application/json' -d '{"path":"../../etc/passwd","out":"x.pptx"}')"
 
   # ---------- structured writes: /pdf_from_text /docx_write /xlsx_append (P3) ----------
-  # pdf_from_text happy path (confirm flow first)
+  # pdf_from_text happy path (new output needs no confirmation)
   PF=$(curl -s -m 20 -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"from-text.pdf","title":"Test Doc","blocks":[{"style":"title","text":"Quarterly Report"},{"style":"h1","text":"Summary"},{"style":"body","text":"Revenue is up 17% this quarter — arrows → and åäö survive latin-1 mapping."},{"style":"pagebreak"},{"style":"body","text":"Page two body."}]}')
-  check "pdf_from_text needs confirmation" 'confirmation_required' "$PF"
-  TOK=$(J "$PF" confirmation_token)
-  PF2=$(curl -s -m 20 -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"from-text.pdf","title":"Test Doc","blocks":[{"style":"title","text":"Quarterly Report"},{"style":"h1","text":"Summary"},{"style":"body","text":"Revenue is up 17% this quarter — arrows → and åäö survive latin-1 mapping."},{"style":"pagebreak"},{"style":"body","text":"Page two body."}],"confirmation_token":"'"$TOK"'"}')
-  check "pdf_from_text ok"        '"ok": *true'      "$PF2"
-  check "pdf_from_text blocks"    '"blocks": *5'     "$PF2"
+  check "pdf_from_text new output needs no confirmation" '"ok": *true' "$PF"
+  check "pdf_from_text blocks"    '"blocks": *5'     "$PF"
   # it IS a real PDF: bridge's own /pdf_text reads it back
   PT=$(curl -s "$BRIDGE/pdf_text?path=from-text.pdf")
   check "pdf_from_text readable"  'Quarterly Report' "$PT"
@@ -241,19 +228,14 @@ PYEOF
   check "pdf_from_text sanitize"  'arrows ->'        "$PT"
   # page_size letter + policy errors
   PF3=$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"letter.pdf","page_size":"letter","blocks":[{"style":"body","text":"x"}]}')
-  TOK=$(J "$PF3" confirmation_token)
-  PF4=$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"letter.pdf","page_size":"letter","blocks":[{"style":"body","text":"x"}],"confirmation_token":"'"$TOK"'"}')
-  check "pdf_from_text letter"    '"page_size": *"letter"' "$PF4"
+  check "pdf_from_text letter"    '"page_size": *"letter"' "$PF3"
   check "pdf_from_text bad ext"   'need out'  "$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"x.txt","blocks":[]}')"
   check "pdf_from_text bad style" 'unknown style\|each block' "$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"x.pdf","blocks":[{"style":"h5","text":"x"}]}')"
   check "pdf_from_text bad size"  'page_size must be' "$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"x.pdf","page_size":"a3","blocks":[{"style":"body","text":"x"}]}')"
 
   # docx_write happy path
   DW=$(curl -s -m 20 -X POST $BRIDGE/docx_write -H 'Content-Type: application/json' -d '{"out":"sections.docx","title":"Spec","sections":[{"style":"h1","text":"Overview"},{"style":"paragraph","text":"Some intro text."},{"style":"list","items":["first","second"]},{"style":"numbered","items":["step one","step two"]},{"style":"pagebreak"},{"style":"h2","text":"After break"}]}')
-  check "docx_write needs confirmation" 'confirmation_required' "$DW"
-  TOK=$(J "$DW" confirmation_token)
-  DW2=$(curl -s -m 20 -X POST $BRIDGE/docx_write -H 'Content-Type: application/json' -d '{"out":"sections.docx","title":"Spec","sections":[{"style":"h1","text":"Overview"},{"style":"paragraph","text":"Some intro text."},{"style":"list","items":["first","second"]},{"style":"numbered","items":["step one","step two"]},{"style":"pagebreak"},{"style":"h2","text":"After break"}],"confirmation_token":"'"$TOK"'"}')
-  check "docx_write ok"           '"ok": *true'      "$DW2"
+  check "docx_write new output needs no confirmation" '"ok": *true' "$DW"
   DR=$(curl -s "$BRIDGE/docx_read?path=sections.docx")
   check "docx_write title"        'Spec'             "$DR"
   check "docx_write bullet item"  'first'            "$DR"
@@ -301,12 +283,8 @@ print("merge fixtures ok")
 PYEOF
   # inline rows, loose outputs via name pattern
   MM=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"merged/{{client_name}}-contract.docx","rows":[{"client_name":"Acme AB","amount":"12500"},{"client_name":"Beta LLC","amount":"9900"}]}')
-  check "mailmerge needs confirmation" 'confirmation_required' "$MM"
-  TOK=$(J "$MM" confirmation_token)
-  check "mailmerge preview count"     '"documents": *2' "$MM"
-  MM2=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"merged/{{client_name}}-contract.docx","rows":[{"client_name":"Acme AB","amount":"12500"},{"client_name":"Beta LLC","amount":"9900"}],"confirmation_token":"'"$TOK"'"}')
-  check "mailmerge ok"            '"ok": *true'        "$MM2"
-  check "mailmerge doc count"     '"documents": *2'    "$MM2"
+  check "mailmerge new outputs need no confirmation" '"ok": *true' "$MM"
+  check "mailmerge doc count"     '"documents": *2'    "$MM"
   DR=$(curl -s "$BRIDGE/docx_read?path=merged/Acme%20AB-contract.docx")
   check "mailmerge row1 filled"   'Acme AB'            "$DR"
   check "mailmerge row1 amount"   '12500 SEK'          "$DR"
@@ -314,19 +292,15 @@ PYEOF
   check "mailmerge row2 filled"   'Beta LLC'           "$DR2"
   # xlsx rows file
   MM3=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"fromxlsx/{{name}}.docx","rows":"clients.xlsx"}')
-  TOK=$(J "$MM3" confirmation_token)
-  MM4=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"fromxlsx/{{name}}.docx","rows":"clients.xlsx","confirmation_token":"'"$TOK"'"}')
-  check "mailmerge xlsx ok"       '"documents": *2'    "$MM4"
+  check "mailmerge xlsx ok"       '"documents": *2'    "$MM3"
   DR3=$(curl -s "$BRIDGE/docx_read?path=fromxlsx/Gamma%20AB.docx")
   check "mailmerge xlsx row"      'Gamma AB'           "$DR3"
   LS=$(curl -s "$BRIDGE/list?path=fromxlsx")
   check "mailmerge xlsx names"    'Acme AB.docx'       "$LS"
   # csv rows -> zip
   MM5=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"batch.zip","rows":"clients.csv"}')
-  TOK=$(J "$MM5" confirmation_token)
-  MM6=$(curl -s -m 30 -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"batch.zip","rows":"clients.csv","confirmation_token":"'"$TOK"'"}')
-  check "mailmerge csv-zip ok"    '"ok": *true'        "$MM6"
-  check "mailmerge zip doc count" '"documents": *1'    "$MM6"
+  check "mailmerge csv-zip ok"    '"ok": *true'        "$MM5"
+  check "mailmerge zip doc count" '"documents": *1'    "$MM5"
   # policy errors
   check "mailmerge unresolved pattern" 'not present in the rows' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"{{nope}}.docx","rows":[{"client_name":"X"}]}')"
   check "mailmerge collision"     'collides' "$(curl -s -X POST $BRIDGE/docx_mailmerge -H 'Content-Type: application/json' -d '{"path":"template.docx","out":"same.docx","rows":[{"client_name":"A"},{"client_name":"B"}]}')"
@@ -354,11 +328,8 @@ PYEOF
     soffice --headless --norestore --convert-to doc --outdir "$TESTDIR" "$TESTDIR/conv-src.docx" >/dev/null 2>&1 || true
     if [ -f "$TESTDIR/conv-src.doc" ]; then
       CV=$(curl -s -m 130 -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.doc","out":"conv-back.docx"}')
-      check "convert needs confirmation" 'confirmation_required' "$CV"
-      TOK=$(J "$CV" confirmation_token)
-      CV2=$(curl -s -m 130 -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.doc","out":"conv-back.docx","confirmation_token":"'"$TOK"'"}')
-      check "convert doc->docx ok"    '"ok": *true'     "$CV2"
-      check "convert magic verified"  '"bytes": *[0-9]' "$CV2"
+      check "convert new output needs no confirmation" '"ok": *true' "$CV"
+      check "convert magic verified"  '"bytes": *[0-9]' "$CV"
       DR=$(curl -s "$BRIDGE/docx_read?path=conv-back.docx")
       check "convert roundtrip text"  'round-tripped to .doc' "$DR"
     else
@@ -366,9 +337,7 @@ PYEOF
     fi
     # docx -> pdf (the heavy everyday one)
     CV3=$(curl -s -m 130 -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.docx","out":"conv-doc.pdf"}')
-    TOK=$(J "$CV3" confirmation_token)
-    CV4=$(curl -s -m 130 -X POST $BRIDGE/convert -H 'Content-Type: application/json' -d '{"path":"conv-src.docx","out":"conv-doc.pdf","confirmation_token":"'"$TOK"'"}')
-    check "convert docx->pdf ok"    '"ok": *true'     "$CV4"
+    check "convert docx->pdf ok"    '"ok": *true'     "$CV3"
     PT2=$(curl -s "$BRIDGE/pdf_text?path=conv-doc.pdf")
     check "convert pdf readable"    'Legacy convert'  "$PT2"
     # policy errors
@@ -404,6 +373,13 @@ PYEOF
   done
   if [ -f "$TESTDIR/chunk.p2.pdf" ]; then echo "  FAIL: unselected page split out"; fail=1; else echo "  PASS: page 2 skipped"; fi
   SPV=$(curl -s "$BRIDGE/pdf_text?path=chunk.p2.pdf" 2>/dev/null || echo skip)
+  # A repeated split overwrites derived targets (chunk.p1.pdf), not chunk.pdf.
+  SP2=$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"split","paths":["multi.pdf"],"out":"chunk.pdf","pages":"1"}')
+  check "pdf_op split overwrite needs approval" 'confirmation_required' "$SP2"
+  SPT=$(J "$SP2" confirmation_token)
+  SP3=$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"split","paths":["multi.pdf"],"out":"chunk.pdf","pages":"1","confirmation_token":"'"$SPT"'"}')
+  check "pdf_op split overwrite approved" '"pages_split": *1' "$SP3"
+  check "pdf_op split overwrite snapshot" '"snapshot": *{' "$SP3"
   # merge
   MG=$(curl -s -X POST $BRIDGE/pdf_op -H 'Content-Type: application/json' -d '{"op":"merge","paths":["chunk.p1.pdf","chunk.p3.pdf"],"out":"merged.pdf"}')
   check "pdf_op merge"          '"ok": *true'      "$MG"
