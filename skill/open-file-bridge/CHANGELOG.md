@@ -2,6 +2,21 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.10-EXT — 2026-09-06 (extension-transport variant; not yet wired into setup_owui)
+
+New skill variant `SKILL-EXT.md` for users of the Open File Bridge
+Connector browser extension (Stage 1 spike, branch `feat/browser-extension`):
+same `bridge_get`/`bridge_post` signatures as the standard skill, but the
+transport is a `postMessage → page relay → extension service worker`
+round-trip that works on ANY Open WebUI origin — public HTTPS included —
+because the loopback fetch happens in the extension. `BRIDGE_HEADERS` is
+retired in this variant (the tier-2 token lives in the extension and is
+attached by the service worker; model code never sees it). Binary reads and
+wheel installs go through `ofb_fetch_b64` (pure-Python wheels unzip straight
+into site-packages — micropip cannot fetch localhost inside the sandbox).
+Until `setup_owui.py` learns this variant, admins publish it manually; the
+main standard/strict variants are unchanged.
+
 ## 2.10 — 2026-09-05
 
 Creating a new file no longer asks for approval. Approval is limited to overwrites, deletes, restores, and destructive bulk operations; its internal value remains single-use, is bound to the exact request payload, and is valid for about 10 minutes. If approval expires or the action changes, the skill explains the situation in plain language and asks the user to review and approve again without exposing implementation details. Overwrites continue to snapshot the previous version automatically. The strict Word recipe now creates a standards-based OOXML package in browser memory with Python's standard library and writes it through `/write_b64`, avoiding the unavailable Pyodide `lxml` dependency. Standard and strict variant headings advance together to 2.10; the minimum compatible bridge remains 2.5.
