@@ -42,7 +42,7 @@ jobs:
         working-directory: build
         # spec paths are CWD-relative (../src), so run from build/ but emit
         # to the repo-root dist/ the smoke test and installer expect
-        run: pyinstaller --noconfirm --distpath ../dist --hidden-import timeit --hidden-import uuid --hidden-import unittest.mock open_file_bridge_windows.spec
+        run: pyinstaller --noconfirm --distpath ../dist open_file_bridge_windows.spec
 
       - name: Bundle frozen assets (Windows)
         if: runner.os == 'Windows'
