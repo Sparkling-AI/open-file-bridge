@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "Open File Bridge",
+  "version": "3.0.0",
+  "description": "Lets the code interpreter in Open WebUI read and write files in one folder on this machine — no server, no network. The extension holds the folder grant; the page relay only forwards narrow, id-correlated requests.",
+  "permissions": ["storage"],
+  "background": { "service_worker": "sw.js" },
+  "content_scripts": [
+    {
+      "matches": ["https://*/*"],
+      "js": ["relay.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "options_page": "options.html",
+  "action": { "default_title": "Open File Bridge — choose folder" }
+}

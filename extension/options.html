@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Open File Bridge — settings</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 44rem; color: #1a1a2e; }
+h2 { margin-top: 0; }
+button { font-size: 1rem; padding: 0.4rem 1rem; border-radius: 8px;
+         border: 1px solid #b9b9c9; background: #4a5fc1; color: #fff; cursor: pointer; }
+button.secondary { background: #fff; color: #4a5fc1; }
+label { display: block; margin: 0.8rem 0 0.2rem; font-weight: 600; }
+input { font-size: 1rem; padding: 0.3rem 0.5rem; width: 14rem; }
+.small { font-size: 0.85rem; color: #555; }
+#roots { margin: 1rem 0; }
+.root-row { display: flex; gap: 0.5rem; align-items: center; padding: 0.5rem;
+            border: 1px solid #ddd; border-radius: 8px; margin-bottom: 0.5rem; }
+.root-row .name { flex: 1; }
+.ok { color: #1a7f37; } .err { color: #b3261e; }
+section { border: 1px solid #e2e2ea; border-radius: 10px; padding: 1rem; margin: 1rem 0; }
+</style>
+<script src="fs-idb.js"></script>
+<script src="options.js"></script>
+</head>
+<body>
+<h2>Open File Bridge</h2>
+<section id="folders">
+  <strong>Shared folders</strong>
+  <p class="small">Granted here in this browser; permission is re-checked before every
+  operation. After a browser restart the assistant may report
+  <code>permission-needed</code> — press Reconnect (the folder is not re-picked).</p>
+  <button id="setup">Choose / manage folders…</button>
+  <div id="roots"></div>
+</section>
+<section id="safety">
+  <strong>Safety</strong>
+  <label>Max writes per minute <input id="rate_writes" type="number" min="1" max="10000"></label>
+  <label>Max MiB per minute <input id="rate_mb" type="number" min="1" max="2048"></label>
+  <label>Default OCR language(s) <input id="ocr_lang" placeholder="swe+eng"></label>
+  <p><button id="save">Save</button> <span id="saved" class="ok" hidden>Saved ✓</span></p>
+  <p class="small">Writes are immediate and snapshot-first: before any overwrite the
+  current file is copied into <code>.ofb-snapshots/</code> inside the folder;
+  deletions move to <code>.ofb-trash/</code>. Both restore via
+  <code>/versions/list</code>, <code>/versions/restore</code>,
+  <code>/trash/list</code>, <code>/trash/restore</code>.</p>
+</section>
+<section id="audit">
+  <strong>Recent activity</strong>
+  <div id="auditrows" class="small">…</div>
+</section>
+</body>
+</html>
