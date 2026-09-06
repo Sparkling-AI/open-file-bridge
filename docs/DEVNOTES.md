@@ -1306,3 +1306,13 @@ guessing nonexistent endpoints (/ls /dir /entries → correct 404s).
 /list is the correct endpoint; engines/negatives suites already cover
 it. If multi-line stdout keeps vanishing in OWUI chats, prefer one
 json.dumps per cell.
+
+Skill 3.0.2-EXT (2026-09-07, Dandan's suggestion turned two-part): the
+403->Reconnect teaching already existed, but the real chat never SAW
+the 403 (OWUI last-stdout-line-only quirk). Added (1) a PERMISSION
+PREFLIGHT on the first /health — roots[].perm == "prompt" → STOP and
+tell the user toolbar icon → Reconnect → "Allow on every visit", wait
+for confirmation before any other call; (2) a diagnostics rule: ONE
+print(json.dumps(...)) per cell, because OWUI drops all but the last
+stdout line. DB rows left for Dandan's manual paste (his stated
+workflow) — they still hold 3.0.1-EXT until he pastes 3.0.2-EXT.

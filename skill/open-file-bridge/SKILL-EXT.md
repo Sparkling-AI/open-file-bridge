@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.1-EXT (extension backend)
+# Local File Bridge — skill v3.0.2-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -157,10 +157,29 @@ has not picked one yet → tell them to click the toolbar icon and choose
 a folder). `/health` failing with a TIMEOUT means no extension; a 503
 "no shared folder" means no folder picked yet.
 
+**Permission preflight (same /health call):** every root carries a
+`perm` field. If ANY root shows `"perm": "prompt"` instead of
+`"granted"`, STOP — do not call any other endpoint. Tell the user
+plainly: *"your browser needs to re-confirm folder access once — click
+the Open File Bridge toolbar icon (it opens the setup page), press
+**Reconnect** on the folder, and in Chrome's bubble choose **'Allow on
+every visit'** (the persistent choice; 'Allow this time' repeats after
+every restart). The folder is not re-picked."* Then WAIT for the user
+to confirm before retrying. A browser restart or extension reload
+resets `perm` to `prompt`; every read/write would fail with 403
+`permission_needed` until they Reconnect.
+
 **Errors are JSON** — read them, don't blind-retry. The three
 user-actionable shapes: 403 `permission_needed` (Reconnect → Allow on
 every visit), 409 `engine_needed` (open the engine tab), 503 no-folder
 (pick a folder). Never repeat a failed request unchanged.
+
+**Diagnostics: ONE `print(json.dumps(...))` per cell — never several
+prints.** OWUI chats can drop all but the LAST stdout line of a cell
+(observed 2026-09-07: a 403 `permission_needed` was printed, vanished
+from the transcript, and the session went guessing nonexistent
+endpoints). To show several results, collect them into one dict and
+print it once.
 
 Writes are IMMEDIATE and snapshot-first (extension inherits the 2.11
 no-approval contract): every overwrite keeps a copy under
