@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0-EXT (extension backend)
+# Local File Bridge — skill v3.0.1-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -107,7 +107,7 @@ async def ofb_fetch(method, path, body=None):
         msg["body"] = body
     parent.postMessage(to_js(msg), "*")
     ev = await asyncio.wait_for(fut, 60.0)
-    return ev.data.to_py()
+    return ev.to_py()   # fut holds the event's data (set in on_message) — do NOT unwrap .data again
 
 async def ofb_fetch_b64(path):
     _install()
@@ -118,7 +118,7 @@ async def ofb_fetch_b64(path):
     parent.postMessage(to_js({"ofb": True, "id": rid, "method": "GET",
                               "path": path, "b64": True}), "*")
     ev = await asyncio.wait_for(fut, 120.0)
-    d = ev.data.to_py()
+    d = ev.to_py()
     if not d.get("ok"):
         raise RuntimeError(f"bridge {path} -> HTTP {d.get('status')}: {d.get('error')}")
     return base64.b64decode(d["bodyB64"])

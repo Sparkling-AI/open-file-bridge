@@ -1282,3 +1282,27 @@ Harness gotcha that burned 30 min: srcdoc assigned as an ELEMENT
 PROPERTY must close its script with a literal </script> — the "<\/script>"
 escape (correct inside a JS template literal) leaves the tag unclosed,
 the script never runs, and the symptom is a silent pipe timeout.
+
+First real-OWUI extension chat (2026-09-07, Dandan's "list my local files"):
+three findings. (1) The listing "failure" was the documented permission
+gate — /health showed perm:"prompt" (the in-place extension reload for
+the loopback-manifest commit resets the session grant), and GET /list
+answers 403 {permission_needed:true, hint: Reconnect} exactly per plan
+§4.3. User action: setup page → Reconnect → "Allow on every visit".
+(2) REAL BUG in SKILL-EXT 3.0 bootstrap, caught by the model's first
+cell (AttributeError: data): ofb_fetch/ofb_fetch_b64 returned
+ev.data.to_py() while on_message stores the ALREADY-unwrapped event
+data in the future — double-unwrap. The session-2 e2e harness had
+ev.to_py(); SKILL-EXT.md drifted when written. Fixed to ev.to_py(),
+H1 bumped 3.0.1-EXT, both OWUI rows restaged (Dandan had manually
+published the body as skill id 'local-file-bridge-ext', is_active=1,
+per the skill's own publishing note; the surgically-updated
+'open-file-bridge' row sits is_active=0 — left as he set it).
+(3) OWUI-side display noise, not ours: cells printing MULTIPLE lines
+showed only the LAST line in the chat transcript, plus a recurring JS
+stderr 'Cannot read properties of undefined (reading includes)' — the
+model never saw its /list 403 (first loop iteration!) and burned cells
+guessing nonexistent endpoints (/ls /dir /entries → correct 404s).
+/list is the correct endpoint; engines/negatives suites already cover
+it. If multi-line stdout keeps vanishing in OWUI chats, prefer one
+json.dumps per cell.
