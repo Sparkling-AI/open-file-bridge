@@ -2,7 +2,7 @@
 """Spike 1: FS-handle backend through the real extension pipe.
 
 Proves (or kills) the Stage-3 foundation (STAGE3-PLAN §7.1):
-  1. showDirectoryPicker from a VISIBLE extension page (setup.html),
+  1. showDirectoryPicker from a VISIBLE extension page (options.html),
      driven OS-level (Xvfb + XTEST — Playwright cannot drive the native
      picker).
   2. Handle persisted in IndexedDB, survives SW restart.
@@ -571,10 +571,10 @@ def main():
             ctx.close(); return 1
         print("SW up:", ext_origin)
 
-        # --- 1. open setup.html and drive the picker ---
+        # --- 1. open options.html and drive the picker ---
         ensure_bookmark()
         page = ctx.new_page()
-        page.goto(ext_origin + "/setup.html")
+        page.goto(ext_origin + "/options.html")
         page.wait_for_selector("#pick")
         time.sleep(0.5)
         before_ids = {w.id for w in drv.mapped_toplevels()}
@@ -628,7 +628,7 @@ def main():
         # --- 4. PASS C: Reconnect "Allow on every visit" → pipe restored
         # AND persistent (survives the reconnect tab closing) ---
         rec = ctx.new_page()
-        rec.goto(ext_origin + "/setup.html")
+        rec.goto(ext_origin + "/options.html")
         rec.wait_for_selector("#pick")
         time.sleep(0.8)
         try:
@@ -706,7 +706,7 @@ def main():
         # Reconnect on the fresh session → the RESTART bubble offers
         # "Allow on every visit" (~420,381; vision-verified probe8/9)
         rec2 = ctx.new_page()
-        rec2.goto(ext_origin + "/setup.html")
+        rec2.goto(ext_origin + "/options.html")
         rec2.wait_for_selector("#pick")
         time.sleep(0.8)
         rec2.click("button:has-text('Reconnect')", timeout=4000)

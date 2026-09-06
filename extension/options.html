@@ -2,49 +2,177 @@
 <html>
 <head><meta charset="utf-8"><title>Open File Bridge — settings</title>
 <style>
-body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 44rem; color: #1a1a2e; }
-h2 { margin-top: 0; }
-button { font-size: 1rem; padding: 0.4rem 1rem; border-radius: 8px;
-         border: 1px solid #b9b9c9; background: #4a5fc1; color: #fff; cursor: pointer; }
+body { font-family: system-ui, sans-serif; max-width: 680px; margin: 50px auto;
+       padding: 0 20px; color: #222; }
+input:not([type=checkbox]), textarea { width: 100%; padding: 10px; font-size: 16px;
+       box-sizing: border-box; }
+textarea { font-family: ui-monospace, monospace; }
+#langbox label { white-space: nowrap; cursor: pointer; }
+#langbox input[type=checkbox] { width: auto; margin: 0 6px 0 0; vertical-align: middle; }
+button { padding: 10px 22px; font-size: 16px; margin-top: 12px; cursor: pointer;
+         border-radius: 8px; border: 1px solid #b9b9c9; background: #4a5fc1; color: #fff; }
+button.small { margin-top: 0; padding: 4px 12px; font-size: 13px; }
 button.secondary { background: #fff; color: #4a5fc1; }
-label { display: block; margin: 0.8rem 0 0.2rem; font-weight: 600; }
-input { font-size: 1rem; padding: 0.3rem 0.5rem; width: 14rem; }
-.small { font-size: 0.85rem; color: #555; }
-#roots { margin: 1rem 0; }
-.root-row { display: flex; gap: 0.5rem; align-items: center; padding: 0.5rem;
-            border: 1px solid #ddd; border-radius: 8px; margin-bottom: 0.5rem; }
-.root-row .name { flex: 1; }
-.ok { color: #1a7f37; } .err { color: #b3261e; }
-section { border: 1px solid #e2e2ea; border-radius: 10px; padding: 1rem; margin: 1rem 0; }
+.btnrow { display: flex; gap: 8px; align-items: stretch; }
+.ok { color: #0a7d32; font-weight: bold; }
+.hint { color: #666; font-size: 14px; }
+.warn { color: #b00; font-weight: bold; }
+details.sec { background: #f4f6f8; padding: 14px 18px; border-radius: 8px; margin: 16px 0; }
+details.sec > summary { cursor: pointer; list-style: none; display: flex;
+       align-items: center; gap: 10px; font-weight: bold; font-size: 1.17em;
+       user-select: none; }
+details.sec > summary::-webkit-details-marker { display: none; }
+details.sec > summary::after { content: '▸'; font-size: .8em; color: #999;
+       margin-left: auto; transition: transform .15s ease; }
+details.sec[open] > summary { margin-bottom: 8px; }
+details.sec[open] > summary::after { transform: rotate(90deg); }
+details.sec[open] > *:not(summary) { animation: secopen .18s ease; }
+@keyframes secopen { from { opacity: 0; transform: translateY(-2px); }
+                     to { opacity: 1; transform: none; } }
+.panel { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; }
+code { background: #eee; padding: 2px 6px; border-radius: 4px; }
+.root-row { display: flex; gap: 6px; align-items: center; padding: 8px 10px;
+            border: 1px solid #ddd; border-radius: 8px; margin-top: 8px;
+            background: #fff; flex-wrap: wrap; }
+.root-row .name { flex: 1; min-width: 12em; }
+#auditrows { white-space: pre; }
+hr { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
 </style>
 <script src="fs-idb.js"></script>
 <script src="options.js"></script>
 </head>
 <body>
-<h2>Open File Bridge</h2>
-<section id="folders">
-  <strong>Shared folders</strong>
-  <p class="small">Granted here in this browser; permission is re-checked before every
-  operation. After a browser restart the assistant may report
-  <code>permission-needed</code> — press Reconnect (the folder is not re-picked).</p>
-  <button id="setup">Choose / manage folders…</button>
-  <div id="roots"></div>
-</section>
-<section id="safety">
-  <strong>Safety</strong>
-  <label>Max writes per minute <input id="rate_writes" type="number" min="1" max="10000"></label>
-  <label>Max MiB per minute <input id="rate_mb" type="number" min="1" max="2048"></label>
-  <label>Default OCR language(s) <input id="ocr_lang" placeholder="swe+eng"></label>
-  <p><button id="save">Save</button> <span id="saved" class="ok" hidden>Saved ✓</span></p>
-  <p class="small">Writes are immediate and snapshot-first: before any overwrite the
-  current file is copied into <code>.ofb-snapshots/</code> inside the folder;
-  deletions move to <code>.ofb-trash/</code>. Both restore via
-  <code>/versions/list</code>, <code>/versions/restore</code>,
-  <code>/trash/list</code>, <code>/trash/restore</code>.</p>
-</section>
-<section id="audit">
-  <strong>Recent activity</strong>
-  <div id="auditrows" class="small">…</div>
-</section>
+<h2>Open File Bridge <span id="beat" style="font-size:18px;color:#999">●</span></h2>
+<p class="hint" id="beatinfo">checking whether the extension is running…</p>
+<p>This extension lets <b>Open WebUI in your browser</b> read &amp; write files
+in <b>folders you choose</b> on this computer — no server, no network. The
+folder grant lives in this browser and is re-checked before every operation.</p>
+
+<details class="sec" id="sec-folders" open>
+<summary>📁 Shared folders</summary>
+<p class="hint">Only these folders are exposed — nothing else on this computer.
+After a browser restart the assistant may report <code>permission-needed</code>
+— press Reconnect (the folder is not re-picked).</p>
+<button id="pick" class="secondary">Choose folder…</button>
+<p class="ok" id="folderstatus"></p>
+<div id="roots"></div>
+</details>
+
+<details class="sec" id="sec-security" open>
+<summary>🔒 Security</summary>
+<p class="hint">Extension mode replaces the app's origin lock and token with the
+browser's own permission gate: every read and write is re-checked against the
+folder grant stored in this browser, and only the Open WebUI page's own
+code-interpreter sandbox can reach the bridge — nothing else can send requests.</p>
+<p class="hint">Always on, not configurable: credential-looking files
+(<code>.env</code>, <code>id_rsa</code>, <code>*.pem</code>, …) are refused;
+every overwrite keeps the previous version; deletes go to a 30-day trash.</p>
+<p class="hint" id="secstatus"></p>
+</details>
+
+<details class="sec" id="sec-ocr" open>
+<summary>🔤 OCR language</summary>
+<p class="hint" id="engstat"></p>
+<div class="btnrow" style="align-items:center;gap:10px;margin-bottom:8px">
+<button id="engbtn" class="small" style="padding:6px 16px;font-size:14px">Open engine tab</button>
+<span class="hint" style="margin:0">PDF &amp; OCR run in that tab — keep it open
+while the assistant works with PDFs or scanned files.</span>
+</div>
+<p class="hint">For reading scanned PDFs / photos — tick one or more:</p>
+<div id="langbox" class="panel" style="font-size:15px;display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center"></div>
+<p class="hint">Ticks combine automatically in tesseract syntax (e.g.
+<code>eng+swe</code> — mixing languages fixes special letters and digits).
+Only the bundled languages above are available offline; typing others is
+possible but the engine will fail to load them.</p>
+<input id="ocrlang" placeholder="eng+swe" style="max-width:200px">
+<button id="savelang" class="small">Save language</button>
+<p class="hint" id="langs"></p>
+</details>
+
+<details class="sec" id="sec-ignore" open>
+<summary>🚫 Ignore patterns</summary>
+<p class="hint">Files matching these patterns are invisible to the AI — not
+listed, not readable, and <b>writes to them are refused</b>. One pattern per
+line, gitignore-style: <code>*.zip</code>, <code>secrets/</code> (that folder,
+anywhere), <code>/build</code> (top level only); bare names match at any
+depth. The preview below updates within seconds of saving.</p>
+<textarea id="ignorepats" rows="4" placeholder="*.zip&#10;.secrets&#10;node_modules/"></textarea>
+<div class="btnrow" style="align-items:center;gap:10px;margin-top:6px">
+<button id="saveignore" class="small" style="padding:6px 16px;font-size:14px">Save patterns</button>
+<span class="hint" id="ignstat" style="margin:0"></span>
+</div>
+<p class="hint">Always ignored (built in, not editable):
+<b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b> ·
+<b>.ofb-snapshots/</b> · <b>.ofb-trash/</b> · <b>.ofb-chunks/</b></p>
+</details>
+
+<details class="sec" id="sec-links" open>
+<summary>⏳ Link lifetime</summary>
+<p class="hint">How long the chat-answer file links keep working after the
+assistant posts them. The clock starts when the link is created; a longer
+lifetime means old chat answers stay clickable for longer.</p>
+<div class="btnrow" style="align-items:center">
+<select id="linkttl" style="flex:1;padding:10px;font-size:16px">
+<option value="3600">1 hour</option>
+<option value="86400">1 day</option>
+<option value="604800">7 days</option>
+<option value="2592000">30 days</option>
+<option value="7776000">90 days</option>
+<option value="31536000">1 year</option>
+</select>
+<button id="savettl" class="small">Save</button>
+</div>
+<p class="hint" id="ttlinfo"></p>
+</details>
+
+<details class="sec" id="sec-safety" open>
+<summary>🛟 Safety &amp; recovery</summary>
+<p class="hint">Nothing the AI changes is unrecoverable: every overwrite keeps the
+previous version, and deletes go to a 30-day trash. How to restore or find
+deleted files:</p>
+<div class="btnrow" style="align-items:center;gap:10px;margin-bottom:8px">
+<button id="openguide" class="small" style="padding:6px 16px;font-size:14px">📖 Recovery guide</button>
+<span class="hint" style="margin:0">opens the guide for <b>your installed version</b></span>
+</div>
+<p class="hint">Write-rate brake — stops runaway mass edits (rejected writes never
+happen; the AI is told to ask you before continuing):</p>
+<div class="btnrow" style="align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
+<label class="hint" style="margin:0;white-space:nowrap">writes / minute</label>
+<input id="ratelimitw" type="number" min="1" max="10000" style="width:110px" value="20">
+<label class="hint" style="margin:0;white-space:nowrap">MiB / minute</label>
+<input id="ratelimitmb" type="number" min="1" max="2048" style="width:110px" value="50">
+<button id="saverate" class="small" style="padding:6px 16px;font-size:14px">Save limits</button>
+</div>
+<p class="hint" id="ratestat"></p>
+<label style="display:flex;align-items:center;gap:10px;margin-top:10px;cursor:pointer">
+<input type="checkbox" id="readonlybox" style="width:auto">
+<span><b>Read-only mode</b> — block <i>all</i> writes to every shared folder
+(the AI can read and analyze, never modify). <span class="hint" id="rostat"></span></span>
+</label>
+</details>
+
+<details class="sec" id="sec-preview" open>
+<summary><span style="flex:1">👁 What the AI can see</span>
+<button id="pvrefresh" class="small" type="button">↻ Refresh</button></summary>
+<p class="hint">Exactly what Open WebUI's model sees when it lists your folders —
+after ignore lists and security rules. Folders are collapsible; the view
+auto-refreshes every 5&nbsp;s while this tab is visible. Nothing here is
+editable; change the folders above instead.</p>
+<div id="preview" class="panel hint" style="max-height:340px;overflow:auto;font-family:ui-monospace,monospace;
+font-size:13px;color:#333;text-align:left"></div>
+<p class="hint" id="previnfos"></p>
+</details>
+
+<details class="sec" id="sec-audit" open>
+<summary>🕓 Recent activity</summary>
+<p class="hint">The last operations the bridge served — newest first.</p>
+<div id="auditrows" class="panel hint">…</div>
+</details>
+
+<hr>
+<p class="hint" id="footerinfo">Status: extension mode</p>
+<p class="hint">The extension runs with your browser — there is nothing to stop
+or quit. Remove or reconnect folders above, or disable the extension on
+<code>chrome://extensions</code>.</p>
 </body>
 </html>

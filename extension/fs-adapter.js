@@ -50,6 +50,7 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       : { ok: false, hint: "no folder chosen yet", roots: [], version: FS_VERSION };
     if (ros.length) info.root = ros[0].path;
     info.addons = { pdf: FS_ENGINES.pdf, ocr: FS_ENGINES.ocr };
+    info.engine_alive = FS_ENGINE_ALIVE; // engine tab heartbeat (fs-engine)
     info.ocr_lang = await kvGet("ocr_lang", "eng");
     info.ocr_langs_available = FS_ENGINES.ocr ? FS_OCR_LANGS : [];
     info.wheels = FS_WHEELS.length;
@@ -76,7 +77,7 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       roots: ros, port: null,
       ocr_lang: await kvGet("ocr_lang", "eng"),
       allowed_origin: null, security: "extension",
-      readonly: false, readonly_source: "default",
+      readonly: await kvGet("readonly_global", false), readonly_source: "setting",
       allow_reveal: false,
       ignore_global: await kvGet("ignore_global", []),
       rate_limits: { max_writes: lim.w, max_mb: Math.floor(lim.b / 1024 / 1024),
@@ -262,7 +263,7 @@ async function epMovedRead(path, q) {
 /* ---------------- meta helpers ---------------- */
 
 async function listEndpoint(rootRec, startParts) {
-  const pats = allIgnorePatterns(rootRec);
+  const pats = await allIgnorePatterns(rootRec);
   const entries = [];
   let truncated = false;
   let startDir = rootRec.handle;
@@ -430,7 +431,7 @@ async function epSearch(q) {
   const roots = await enabledRoots();
   if (!roots.length) throw new OpFail(503, { error: "no shared folder configured — click the Open File Bridge toolbar icon and choose a folder" });
   const rootRec = roots[0];
-  const pats = allIgnorePatterns(rootRec);
+  const pats = await allIgnorePatterns(rootRec);
   const max = Math.min(parseInt(q.max || "50", 10) || 50, 200);
   const caseSensitive = q.case === "1" || q.case === "true";
   const glob = q.glob || null;
@@ -500,7 +501,7 @@ async function epTree(q) {
   }
   const maxEntries = Math.min(parseInt(q.max_entries || "500", 10) || 500, 2000);
   const maxDepth = Math.min(parseInt(q.max_depth || "6", 10) || 6, 12);
-  const pats = allIgnorePatterns(rootRec);
+  const pats = await allIgnorePatterns(rootRec);
   const rootName = startParts.length ? startParts[startParts.length - 1] : (rootRec.alias || rootRec.id);
   let truncated = false, count = 0;
   async function node(dir, name, depth, prefixParts) {

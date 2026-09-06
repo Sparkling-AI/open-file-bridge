@@ -1316,3 +1316,69 @@ for confirmation before any other call; (2) a diagnostics rule: ONE
 print(json.dumps(...)) per cell, because OWUI drops all but the last
 stdout line. DB rows left for Dandan's manual paste (his stated
 workflow) — they still hold 3.0.1-EXT until he pastes 3.0.2-EXT.
+
+## Stage-3 session #6: one settings page (toolbar icon == Options) (2026-09-07)
+
+Dandan's ask: the extension's two entries showed two different pages —
+toolbar icon opened setup.html (pick/reconnect only), Options opened
+options.html (folders list + rate limits + audit) — while the desktop
+app's settings page (PICKER_HTML) has 7 cards. Unified: **options.html
+is now the single dashboard**, porting the app page's look (same CSS
+vocabulary: details.sec cards with ▸ rotation, .btnrow, ok/hint/warn,
+fold-state in localStorage `ofb.folded`) and its sections with
+extension semantics:
+
+- 📁 Shared folders — pick (#pick id kept: the stage3 suites wait on
+  it) + root rows (Reconnect / Enable-Disable writes / Remove).
+- 🔒 Security — no origin/token inputs (retired): explains the browser
+  permission gate + relay gates + the always-on floors instead.
+- 🔤 OCR language — checkbox grid (bundled top-8) + free text,
+  two-way sync, saves through the SW's POST /ocr/lang (validation
+  parity); engine line + Open-engine-tab button.
+- 🚫 Ignore patterns — NEW editor (the kv `ignore_global` existed but
+  NOTHING applied or edited it before). fs-core's allIgnorePatterns
+  is now async and merges ignore_global; /list /search
+  /directory_tree + resolveGuarded all await it. This also makes the
+  fs-core 404 hint "ignore patterns are editable in the Open File
+  Bridge settings page" TRUE for the first time.
+- ⏳ Link lifetime — NEW select (same 6 choices as the app) → kv
+  link_ttl (fs-links already read it; default 7 days).
+- 🛟 Safety & recovery — guide button (guide.html), rate limits
+  (writes/min + MiB/min), and a NEW global Read-only checkbox (kv
+  `readonly_global`): resolveGuarded's forWrite path 403s with the
+  same "read-only mode is active" shape as per-root readonly.
+- 👁 What the AI can see — the app's preview card: /directory_tree
+  through the SW PIPE (engine aliveness + one router instance live in
+  the SW — a page-local fsRoute would report its own dead engine
+  state), collapsible folders with open-state preserved across the
+  5 s auto-refresh, lock messages for no-root / perm-prompt.
+- 🕓 Recent activity — the old audit card, kept.
+
+sw.js action.onClicked → options.html (was setup.html); setup.html is
+now a meta-refresh redirect (no script — CSP) so old deep links and
+guide wording keep working; setup.js deleted (merged into options.js).
+manifest action title "— settings". /health now reports
+`engine_alive` (FS_ENGINE_ALIVE heartbeat) so the page can say "engine
+tab not running" honestly — `addons` means BUNDLED, not running (the
+smoke initially showed "PDF ready · OCR ready" with no tab open; wrong
+signal, fixed). guide.html "Pick folder" → "Choose folder…" to match
+the button label.
+
+SKILL-EXT 3.0.2-EXT → 3.0.3-EXT: one wording fix (permission
+preflight said the toolbar icon "opens the setup page"). Stage3 suites
+(spike1/engines/negatives) repointed setup.html → options.html; they
+still wait on #pick, which the unified page keeps (wired synchronously
+inside DOMContentLoaded, ahead of the first await — the a1b8c8d
+head-script lesson). No manifest version bump (3.0.0 unreleased; the
+CWS zip is rebuilt per change).
+
+Verification on this Mac (stage3 suites need Linux/Xvfb — not run
+here): headless Chrome-for-Testing 1208 with the real extension
+loaded: page loads with ZERO console errors; heartbeat
+"Running · v3.0.0-EXT · security: extension · no folder chosen yet";
+every save path round-trips through the SW pipe (ignore_global
+["*.zip","secret-folder/"] lands in /state, ttl 30 days, rate 33/50,
+readonly true, ocr lang swe+eng); fold persistence works; GLM-4.6V
+render review: 9 sections in order, no layout defects. Picker-driven
+paths (grant → tree preview, reconnect) still need the Linux suites —
+next run there should confirm n1-n12 + engines 13/13 unchanged.

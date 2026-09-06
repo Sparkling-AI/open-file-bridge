@@ -75,10 +75,12 @@ async function handleOfbRequest(msg) {
   }
 }
 
-// Toolbar icon (manifest action title says "choose folder"): open the
-// grant page. No popup is declared, so this listener is the only wiring.
+// Toolbar icon: open the ONE settings page (same destination as
+// chrome://extensions → Options — Dandan's unification ask; setup.html
+// now just redirects there). No popup is declared, so this listener is
+// the only wiring.
 chrome.action.onClicked.addListener(() => {
-  chrome.tabs.create({ url: "setup.html" });
+  chrome.tabs.create({ url: "options.html" });
 });
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

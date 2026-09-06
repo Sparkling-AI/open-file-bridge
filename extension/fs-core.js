@@ -170,9 +170,13 @@ function sensitiveName(name) {
   if (i > 0 && SENSITIVE_EXTS.has(base.slice(i))) return true;
   return SENSITIVE_PATTERNS.test(base);
 }
-function allIgnorePatterns(rootRec) {
+// Async since the settings-page ignore editor landed: the global list
+// lives in the kv store (ignore_global), per-root extras on the root row.
+async function allIgnorePatterns(rootRec) {
   const per = (rootRec && Array.isArray(rootRec.ignore)) ? rootRec.ignore : [];
-  return per.concat(DEFAULT_IGNORE);
+  let global = await kvGet("ignore_global", []);
+  if (!Array.isArray(global)) global = [];
+  return per.concat(global, DEFAULT_IGNORE);
 }
 
 /* ---------------- kv / roots / permissions ---------------- */
@@ -249,7 +253,7 @@ async function resolveGuarded(rel, opts) {
       error: "'" + leafName + "' looks like a credential/secret file — the bridge refuses to serve it. Ask the user to handle it manually.",
     });
   }
-  const hit = ignoreMatch(relInRoot, false, allIgnorePatterns(rootRec));
+  const hit = ignoreMatch(relInRoot, false, await allIgnorePatterns(rootRec));
   if (hit) {
     throw new OpFail(404, {
       error: "excluded by ignore settings: " + hit,
@@ -271,6 +275,11 @@ async function resolveGuarded(rel, opts) {
     });
   }
   if (forWrite) {
+    // global switch from the settings page (Safety & recovery card) — same
+    // 403 shape as the per-root flags below it
+    if (await kvGet("readonly_global", false)) {
+      throw new OpFail(403, { error: "read-only mode is active — writes are disabled" });
+    }
     if (rootRec.mode === "read" || rootRec.readonly) {
       throw new OpFail(403, { error: "read-only mode is active — writes are disabled" });
     }

@@ -16,5 +16,5 @@
     }
   ],
   "options_page": "options.html",
-  "action": { "default_title": "Open File Bridge — choose folder" }
+  "action": { "default_title": "Open File Bridge — settings" }
 }

@@ -191,7 +191,7 @@ def main():
         print("SW up:", ext_origin)
 
         setup = ctx.new_page()
-        setup.goto(ext_origin + "/setup.html")
+        setup.goto(ext_origin + "/options.html")
         setup.wait_for_selector("#pick")
         time.sleep(0.5)
         before = {w.id for w in drv.mapped_toplevels()}

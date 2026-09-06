@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.2-EXT (extension backend)
+# Local File Bridge — skill v3.0.3-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -161,7 +161,7 @@ a folder). `/health` failing with a TIMEOUT means no extension; a 503
 `perm` field. If ANY root shows `"perm": "prompt"` instead of
 `"granted"`, STOP — do not call any other endpoint. Tell the user
 plainly: *"your browser needs to re-confirm folder access once — click
-the Open File Bridge toolbar icon (it opens the setup page), press
+the Open File Bridge toolbar icon (it opens this extension's settings page), press
 **Reconnect** on the folder, and in Chrome's bubble choose **'Allow on
 every visit'** (the persistent choice; 'Allow this time' repeats after
 every restart). The folder is not re-picked."* Then WAIT for the user

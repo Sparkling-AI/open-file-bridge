@@ -233,7 +233,9 @@ replaced-by-page).
 **Grant flow (first run):**
 
 1. The user clicks the extension action → opens the extension's own
-   page (`chrome-extension://…/setup.html`) in a tab — a **visible
+   page (`chrome-extension://…/options.html` — since session #6 the
+   SINGLE settings page for both the toolbar icon and Options;
+   setup.html is a redirect) in a tab — a **visible
    extension page**, because `showDirectoryPicker()` requires a user
    gesture in a visible document and does not exist in service-worker
    scope (verified against the live File System Access docs

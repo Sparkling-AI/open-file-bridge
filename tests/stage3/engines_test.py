@@ -364,7 +364,7 @@ def main():
 
         # grant via picker (spike1 main() pattern)
         setup = ctx.new_page()
-        setup.goto(ext_origin + "/setup.html")
+        setup.goto(ext_origin + "/options.html")
         setup.wait_for_selector("#pick")
         time.sleep(0.5)
         before_ids = {w.id for w in drv.mapped_toplevels()}
