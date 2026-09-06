@@ -1204,3 +1204,11 @@ bridge. Findings:
 - Verified live before teaching: /write_many (2 files, per-item
   results), /delete → /trash/list → /trash/restore round trip on a
   scratch file, plus contract test PASS. No bridge changes.
+
+## Release v2.11.2 (2026-09-06)
+
+App binary unchanged from 2.11.0 — this release ships the skill fixes
+(2.11.1 method rules + 2.11.2 endpoint-table audit) as versioned
+installers; only the version string moved (src VERSION + Windows
+AppVersion). Follows the v2.10.1 precedent of tagging skill-carried
+patches; skill/bridge version coupling stays one-way (SKILL_MIN 2.11).

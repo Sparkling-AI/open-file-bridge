@@ -63,7 +63,7 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 #                  always fine (API is backward-compatible). Bump only
 #                  when the skill starts referencing an endpoint that
 #                  didn't exist in older bridges.
-VERSION = "2.11.0"
+VERSION = "2.11.2"
 SKILL_MIN = "2.11"
 
 
