@@ -22,10 +22,10 @@ a = Analysis(
     pathex=['../src'],
     binaries=binaries,
     datas=datas,
-    hiddenimports=hiddenimports,
+    hiddenimports=hiddenimports + ['timeit', 'uuid', 'unittest.mock'],
     hookspath=[],
     runtime_hooks=[],
-    excludes=['tkinter', 'unittest', 'pydoc_data'],
+    excludes=['tkinter', 'pydoc_data'],
     cipher=block_cipher,
 )
 

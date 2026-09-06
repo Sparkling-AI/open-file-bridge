@@ -42,7 +42,7 @@ jobs:
         working-directory: build
         # spec paths are CWD-relative (../src), so run from build/ but emit
         # to the repo-root dist/ the smoke test and installer expect
-        run: pyinstaller --noconfirm --distpath ../dist open_file_bridge_windows.spec
+        run: pyinstaller --noconfirm --distpath ../dist --hidden-import timeit --hidden-import uuid --hidden-import unittest.mock open_file_bridge_windows.spec
 
       - name: Bundle frozen assets (Windows)
         if: runner.os == 'Windows'
@@ -216,13 +216,13 @@ jobs:
       - name: Build + package + sign + notarize (macOS)
         if: runner.os == 'macOS' && env.MAC_SIGNING_P12 != ''
         run: |
-          pyinstaller --onefile --windowed --name OpenFileBridge --noconfirm src/file_bridge.py
+          pyinstaller --onefile --windowed --name OpenFileBridge --noconfirm --hidden-import timeit --hidden-import uuid --hidden-import unittest.mock src/file_bridge.py
           ./build/package_macos.sh --sign
 
       - name: Build + package (macOS, unsigned fallback)
         if: runner.os == 'macOS' && env.MAC_SIGNING_P12 == ''
         run: |
-          pyinstaller --onefile --windowed --name OpenFileBridge --noconfirm src/file_bridge.py
+          pyinstaller --onefile --windowed --name OpenFileBridge --noconfirm --hidden-import timeit --hidden-import uuid --hidden-import unittest.mock src/file_bridge.py
           ./build/package_macos.sh
 
       - name: Smoke test (macOS)
@@ -244,13 +244,14 @@ jobs:
       # ---------------- Linux (onefile console binary) ----------------------
       - name: Build (Linux)
         if: runner.os == 'Linux'
-        run: pyinstaller --onefile --name OpenFileBridge --noconfirm src/file_bridge.py
+        run: pyinstaller --onefile --name OpenFileBridge --noconfirm --hidden-import timeit --hidden-import uuid --hidden-import unittest.mock src/file_bridge.py
 
       - name: Bundle frozen assets (Linux)
         if: runner.os == 'Linux'
         run: |
-          mkdir -p dist/docs
+          mkdir -p dist/docs dist/wheels
           cp docs/recovery-guide.html dist/docs/
+          cp -r src/wheels/. dist/wheels/
 
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
@@ -258,6 +259,15 @@ jobs:
           FILE_BRIDGE_STATE_DIR="$RUNNER_TEMP/fbstate" ./dist/OpenFileBridge /tmp &
           for _ in $(seq 1 20); do curl -sf -m 2 http://127.0.0.1:8765/health >/dev/null && break; sleep 1; done
           curl -sf http://127.0.0.1:8765/health
+          # wheel-backed PDF write must work in the FROZEN binary (regression
+          # guard: 2.11.0 shipped without timeit/uuid stdlib pieces fpdf2's
+          # wheel chain imports)
+          curl -sf -X POST http://127.0.0.1:8765/api/root -H 'Content-Type: application/json' -d '{"allowed_origin":"http://ci"}' >/dev/null
+          PDF=$(curl -sf -X POST http://127.0.0.1:8765/pdf_from_text -H 'Content-Type: application/json' -d '{"out":"ci-smoke.pdf","blocks":[{"style":"title","text":"CI"},{"style":"body","text":"frozen wheel check"}]}')
+          echo "$PDF" | grep -q '"ok": *true' || { echo "FAIL: pdf_from_text broken in frozen build: $PDF"; kill %1; exit 1; }
+          echo "pdf_from_text frozen OK"
+          # guide must ship next to the binary
+          grep -q "Recovery" dist/docs/recovery-guide.html || { echo "FAIL: guide missing"; kill %1; exit 1; }
           kill %1
 
       # Upload exactly this OS's outputs. NEVER use a multi-OS glob list
@@ -290,4 +300,5 @@ jobs:
           path: |
             dist/OpenFileBridge
             dist/docs/
+            dist/wheels/
           if-no-files-found: error

@@ -461,6 +461,7 @@ def check_request(headers) -> tuple[bool, int | None, str]:
 
 _wheel_import_lock = threading.Lock()
 _wheel_sys_paths_added = False
+_wheel_import_errors: dict = {}   # module -> last import error string (diag)
 
 
 def _import_wheel_addon(name: str):
@@ -469,14 +470,14 @@ def _import_wheel_addon(name: str):
     after the first success the import system resolves it normally."""
     try:
         return __import__(name)
-    except ImportError:
-        pass
+    except ImportError as e:
+        _wheel_import_errors[name] = str(e)
     global _wheel_sys_paths_added
     with _wheel_import_lock:
         try:
             return __import__(name)  # lost a race? re-check under lock
-        except ImportError:
-            pass
+        except ImportError as e:
+            _wheel_import_errors[name] = str(e)
         if not WHEELS_DIR.is_dir():
             return None
         added = False
@@ -489,7 +490,15 @@ def _import_wheel_addon(name: str):
             _wheel_sys_paths_added = True
         try:
             return __import__(name)
-        except ImportError:
+        except ImportError as e:
+            # Surface the real cause (frozen builds can fail on a
+            # dependency the wheel chain expects); stderr for the log.
+            _wheel_import_errors[name] = str(e)
+            try:
+                sys.stderr.write(f"[bridge] wheel add-on {name!r} import "
+                                 f"failed: {e}\n")
+            except Exception:
+                pass
             return None
 
 
