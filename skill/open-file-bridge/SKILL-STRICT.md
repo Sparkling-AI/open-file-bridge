@@ -3,7 +3,7 @@ name: open-file-bridge-strict
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through Open File Bridge. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — STRICT variant — skill v2.11
+# Local File Bridge — STRICT variant — skill v2.11.1
 
 Built for models that need guardrails: fixed recipes, bridge-only writes,
 verify-after-write. (Stronger models: use the standard "Local File
@@ -36,8 +36,8 @@ the folder the user shared from their computer through Open File Bridge.
    NEVER local file APIs (Rule 2).
 7. Writes execute immediately — the BRIDGE provides the safety net,
    not a chat round trip. Every write to an existing file snapshots the
-   prior version first (`/versions/list`, `/versions/restore`);
-   deletions are trash-moves (`/trash/list`, `/trash/restore`).
+   prior version first (POST `/versions/list`, POST `/versions/restore`);
+   deletions are trash-moves (POST `/trash/list`, POST `/trash/restore`).
    Do not ask the user to approve a write before performing it, and do
    not invent confirmation steps: when the user asked for the change,
    perform it, then verify (Rule 8) and REPORT what was replaced and
@@ -50,8 +50,9 @@ the folder the user shared from their computer through Open File Bridge.
    paths. Never dump a whole large file into chat — summarize and cite
    `path:line`.
 10. On any 4xx/5xx: read the `error` and `hint` fields and follow
-    them. If still stuck, tell the user the exact error text — do not
-    guess.
+    them. 404 `"unknown endpoint"` means wrong method — you sent a GET
+    to a POST endpoint: retry once with `bridge_post`. If still stuck,
+    tell the user the exact error text — do not guess.
 
 ## Bootstrap — run this first, copy it exactly
 

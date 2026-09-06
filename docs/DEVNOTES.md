@@ -1145,3 +1145,32 @@ to a shell interpreter is only testable if it is importable as a
 constant AND parsed by a real engine in CI. Balance-counting in e2e
 on Linux would NOT alone have caught a semantically broken but
 balanced snippet; the CI real-engine parse is the actual guard.
+
+## Skill 2.11.1 — POST endpoints called with GET → false "unsupported" (2026-09-06, user report)
+
+Real chat on the local test env: "how many versions does this file
+have?" → the model hand-rolled a fetch helper where `pyfetch(url,
+headers=…)` defaults to GET, called the POST-only `/versions/list` and
+`/trash/list` as GET-with-query-params, read the bare
+404 `{"error": "unknown endpoint"}`, and told the user the installation
+doesn't support those endpoints — twice, in two separate answers. The
+API table already said POST for both; the model never used
+`bridge_post`.
+
+- Root cause on the bridge side: `do_GET` has its own endpoint set and
+  its fallback 404 says "unknown endpoint" even when the path IS a
+  routed POST endpoint (src/file_bridge.py do_GET fallthrough) — the
+  message actively misleads.
+- Skill fix (2.11.1, all four variants): P0 "Method rules" note under
+  the API table (GET = query params, POST = JSON body via
+  `bridge_post`; that 404 means WRONG METHOD — retry once, never
+  report the bridge as lacking a tabled endpoint), the same line in
+  the JSON-errors guidance, POST markers on the recovery endpoints in
+  the write-safety rules, and a Rule 10 mapping in the strict pair.
+- Verified live before writing the fix: GET `/trash/list` → 404
+  unknown endpoint; POST → `{"trash": []}`; POST `/versions/list`
+  returned the real snapshot count (1) the user's question was about.
+- Follow-up left open (TODO §6): bridge-side 405 — make do_GET's
+  fallback detect paths routed in do_POST and answer 405 with a
+  "use POST" hint, teaching ANY client in one round trip. Not done in
+  2.11.1 (skill-only scope per request).

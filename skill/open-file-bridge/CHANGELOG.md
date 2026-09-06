@@ -2,6 +2,24 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.11.1 — 2026-09-06
+
+Method-explicitness fix from a real chat: asked how many versions a
+file had, the model hand-rolled a GET helper (plain `pyfetch` defaults
+to GET) against the POST-only `/versions/list` and `/trash/list`, read
+the bare 404 `unknown endpoint`, and told the user the bridge doesn't
+support them. The API table already said POST, but the Method column
+alone didn't stop a model that wrote its own fetch helper instead of
+using `bridge_post`. All four variants now teach the method as part of
+the contract: a P0 note under the API table (GET = query params, POST
+= JSON body via `bridge_post`; 404 `unknown endpoint` on a POST
+endpoint means WRONG METHOD — retry once with `bridge_post`, never
+report the bridge as lacking an endpoint from the table), the same
+rule in the JSON-errors guidance, POST markers on the recovery
+endpoints in the write-safety rules, and (strict pair) a Rule 10
+mapping for that 404. No API or compatibility changes — minimum
+bridge stays 2.11.
+
 ## 2.11 — 2026-09-06
 
 The chat-side approval round trip is REMOVED. Real usage showed models losing

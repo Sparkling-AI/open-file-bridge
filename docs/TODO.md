@@ -99,6 +99,12 @@ Bridge must be running during chats. Non-technical users will forget.
       filename with the user first" (cheap, catches most accident classes)
 - [ ] If weak models hallucinate bridge responses, enforce skill via
       `$open-file-bridge` mention in prompt suggestions
+- [ ] Bridge: `do_GET`'s 404 fallback should detect paths routed in
+      `do_POST` (`/versions/list`, `/trash/list`, …) and answer 405 with a
+      "use POST + JSON body" hint — today it replies "unknown endpoint",
+      which misled a model into declaring the endpoints unsupported
+      (skill 2.11.1 teaches the workaround; the bridge hint would fix any
+      client in one round trip)
 
 ## 7. CI gaps
 

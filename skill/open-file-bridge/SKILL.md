@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through Open File Bridge. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v2.11
+# Local File Bridge — skill v2.11.1
 
 > Requires bridge ≥ **2.11** (checked at bootstrap below; newer bridges are
 > always fine — the API is backward-compatible).
@@ -54,6 +54,14 @@ Access files in **the user's own computer** through their local Open File Bridge
 | `/zip` | POST | `{"members":["dir","file.txt"],"out":"bundle.zip"}` — create archive (members stored flat; recursive for dirs; overwrite snapshots first) |
 | `/unzip` | POST | `{"path":"bundle.zip","dest":"outdir"}` — extract under dest/ (zip-slip names rejected; overwritten members are snapshotted first) |
 | `/wheels` | GET | Local wheel URLs for micropip (openpyxl etc.) |
+
+**Method rules (P0):** the Method column is part of the contract — GET
+endpoints take query-string params, POST endpoints take a JSON body via
+`bridge_post`. Plain `pyfetch(url)` sends a GET, so a POST endpoint
+reached that way answers 404 `unknown endpoint`: that means WRONG
+METHOD, not an unsupported endpoint. Retry once via `bridge_post`;
+never tell the user the bridge lacks an endpoint that is in this table
+(seen in real chats on `/versions/list` and `/trash/list`).
 
 **Caching (P2):** `/pdf_text` and `/ocr` results are cached per
 (sha256(file), params) — a repeat call returns the same answer instantly
@@ -165,7 +173,9 @@ carries an `error` field (often a `hint` telling you the next step). HTTP
 401 `"missing or invalid bridge token"` → this bridge is in token mode
 (this is the NO-TOKEN skill, so the header is not set yet): run the
 recovery block below — ask the user for the token ONCE, set it, retry
-ONCE. Never repeat a failed request unchanged.
+ONCE. HTTP 404 `"unknown endpoint"` on a POST endpoint from the table
+above → you sent a GET; retry ONCE via `bridge_post`. Never repeat a
+failed request unchanged.
 
 **401 recovery — run this, then wait for the user's reply:**
 
@@ -512,9 +522,10 @@ For a folder: name + [📂 Show in folder](reveal_url) only.
 3. **Writes are immediate and recoverable.** Creating, overwriting, editing,
    deleting, restoring, and bulk writes all execute immediately — no approval
    round trips. Safety comes from the bridge itself: every write to an existing
-   file snapshots the prior version first (listed via `/versions/list`,
-   restorable via `/versions/restore`), deletions are trash-moves
-   (`/trash/list`, `/trash/restore`) — nothing is unrecoverable. When the user
+   file snapshots the prior version first (listed via POST
+   `/versions/list`, restorable via POST `/versions/restore`), deletions
+   are trash-moves (POST `/trash/list`, POST `/trash/restore`) — nothing
+   is unrecoverable. When the user
    asks for a change, just do it; when a write REPLACES a file the user
    clearly cares about, MENTION in your answer that the previous version is
    snapshotted and can be restored. Never invent approval prompts, tokens,
