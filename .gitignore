@@ -17,3 +17,4 @@ __pycache__/
 # packaging output lands at repo root (build/package_macos.sh)
 FileBridge-macos.zip
 OpenFileBridge-*.msix
+dist-stage3/

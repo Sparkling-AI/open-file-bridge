@@ -4,6 +4,9 @@
   "version": "3.0.0",
   "description": "Lets the code interpreter in Open WebUI read and write files in one folder on this machine — no server, no network. The extension holds the folder grant; the page relay only forwards narrow, id-correlated requests.",
   "permissions": ["storage"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"
+  },
   "background": { "service_worker": "sw.js" },
   "content_scripts": [
     {

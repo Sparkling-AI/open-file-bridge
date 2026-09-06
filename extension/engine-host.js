@@ -1,13 +1,13 @@
-// Open File Bridge — engine host page logic (Stage 3).
+// Open File Bridge — engine host page (Stage 3).
 //
-// tesseract.js + pdfium-WASM instantiate HERE (a visible extension
-// page), not in the SW (plan §4.2): WASM re-instantiation per SW cold
-// start would be slow and burn the 5-min cap. The SW forwards engine
-// endpoint requests to this page over chrome.runtime messaging; the
-// page holds engine instances and answers asynchronously.
+// tesseract.js + pdfium-WASM + pdf-lib instantiate HERE (a live extension
+// page), not in the SW (plan §4.2). The SW forwards engine endpoint requests
+// to this page over chrome.runtime messaging; the page holds engine
+// instances and answers asynchronously. This page ALSO holds the folder
+// permission session-grant alive while it's open (probe-verified model).
 //
-// Engines land in P3 (pdfium) and P4 (tesseract.js); handlers register
-// into ENGINE_HANDLERS when their vendor scripts load.
+// The page never touches the file system: inputs arrive as File objects
+// the SW resolved, outputs go back as bytes the SW writes.
 
 "use strict";
 
@@ -22,10 +22,19 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   h(msg.payload).then(
     (r) => sendResponse({ ok: true, result: r }),
-    (e) => sendResponse({ ok: false, error: String((e && e.message) || e) })
+    (e) => sendResponse({
+      ok: false,
+      error: String((e && e.statusCode || "") && (e.statusCode + "|" + ((e && e.message) || e)) || ((e && e.message) || e)),
+    })
   );
   return true;
 });
+
+function fsEngineHello() {
+  chrome.runtime.sendMessage({ ofbEngineHello: true }, () => {
+    void chrome.runtime.lastError; // SW may be asleep; it wakes on next use
+  });
+}
 
 function log(msg) {
   const el = document.getElementById("log");
@@ -43,7 +52,12 @@ async function keepalivePing() {
 }
 
 window.addEventListener("DOMContentLoaded", () => {
-  log("engine host page up (engines land in P3/P4)");
+  log("engine host page up");
+  fsEngineHello();
+  setInterval(fsEngineHello, 30000);
   keepalivePing();
   setInterval(keepalivePing, 5000);
+  import(chrome.runtime.getURL("engine-impl.js"))
+    .then(() => log("engines registered: pdfium + tesseract.js + pdf-lib"))
+    .catch((e) => log("engine load FAILED: " + e));
 });

@@ -10,10 +10,11 @@ parent directory, as-authored (not minified).
 | `tesseractjs/tesseract.min.js`, `worker.min.js` | tesseract.js browser library | 7.0.0 | Apache-2.0 | npm: tesseract.js |
 | `tesseractjs/tesseract-core-*-lstm.wasm{,.js}` | tesseract wasm core (LSTM, simd + relaxedsimd variants) | 7.0.0 | Apache-2.0 | npm: tesseract.js-core |
 | `pdfium/index.esm.js`, `pdfium.wasm` | PDFium compiled to WebAssembly + TypeScript wrapper | @hyzyla/pdfium 2.1.13 (pdfium @ googlesource) | Apache-2.0 (wrapper), BSD-3-Clause (PDFium) | npm: @hyzyla/pdfium |
+| `pdflib/pdf-lib.min.js` | pdf-lib UMD bundle (PDF writer: split/merge/rotate output, searchable-PDF assembly) | 1.17.1 | MIT | npm: pdf-lib (dist bundle as shipped upstream) |
 | `wheels/*.whl` | pure-Python wheels for the Pyodide office stack (same set as the desktop app's src/wheels) | see filenames | per-wheel (MIT/Apache-2.0/BSD) | mirrored from src/wheels |
 
 Sizes (2026-09-06): tessdata-fast 32.4 MB (9 files), tesseractjs 13.9 MB,
-pdfium 4.3 MB, wheels 2.6 MB — total ~53 MB.
+pdfium 4.3 MB, pdflib 0.5 MB, wheels 2.6 MB — total ~54 MB.
 
 Language set is a packaging variable (top-8 + osd per the Stage-3 plan);
 each language is one self-contained `.traineddata` file.

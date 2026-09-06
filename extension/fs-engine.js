@@ -1,27 +1,199 @@
-// Open File Bridge — engine bridge (P3/P4 placeholder).
+// Open File Bridge — engine RPC bridge (Stage 3, P3/P4).
 //
-// tesseract.js + pdfium-WASM run in the extension PAGE (plan §4.2);
-// the SW stays a thin router. Until those phases land, engine endpoints
-// answer with an honest 501 "engine not bundled yet".
+// The engines (pdfium-WASM, tesseract.js, pdf-lib) run in the ENGINE PAGE
+// (plan §4.2): the SW cannot importScripts wasm and WASM re-instantiation
+// per SW cold start would burn the 5-min MV3 cap. fsRoute calls
+// fsEngineRoute() which forwards to the page over chrome.runtime messaging.
+//
+// If no engine page is open, endpoints answer with a structured 409 telling
+// the model exactly what to ask the user for (open the engine tab).
 
 "use strict";
 
-const FS_ENGINES = { pdf: false, ocr: false };
-const FS_OCR_LANGS = [];
+// Capability flags for /health (bundled since 3.0.0). Runtime availability
+// is reported per-request: engine endpoints answer a structured 409
+// engine_needed when the engine tab is closed.
+const FS_ENGINES = { pdf: true, ocr: true };
+const FS_OCR_LANGS = ["eng", "swe", "dan", "nor", "deu", "fra", "spa", "chi_sim"];
 
-async function fsEngineRoute(method, path, q, body) {
-  return fsFail(501, {
-    error: path + " engine not bundled in this build",
-    hint: "pdfium-WASM and tesseract.js land in Stage-3 phases P3/P4",
-  });
+const FS_ENGINE_TIMEOUT_MS = 300000; // 5 min: OCR of a 50-page doc is slow
+let FS_ENGINE_ALIVE = false;         // set by the page's hello/heartbeat
+
+function fsEngineSetAlive(alive) {
+  FS_ENGINE_ALIVE = !!alive;
 }
 
-/* ---- zip helpers (fflate runs in the page; SW fallback = store-only) --- */
+async function fsEngineRoute(method, path, q, body) {
+  if (path === "/pdf_text" && method === "GET") return await engineCall("pdf.text", q);
+  if (path === "/ocr" && method === "GET") return await engineCall("ocr", q);
+  if (path === "/ocr_pdf" && method === "POST") return await engineCall("ocr.pdf", body);
+  if (path === "/pdf_op" && method === "POST") return await engineCall("pdf.op", body);
+  return fsFail(404, { error: "unknown engine endpoint: " + path });
+}
+
+/** Forward an op to the engine page; resolve the input(s) here in the SW
+ *  (the page never touches the FS). Files cross the RPC as base64 bytes —
+ *  chrome.runtime.sendMessage structured-clones and DROPS File/Blob
+ *  instances (found 2026-09-06: "Image file /input cannot be read"). */
+async function engineCall(op, params) {
+  const payload = Object.assign({}, params);
+  try {
+    async function packOne(p) {
+      const rg = await resolveGuarded(unquoteComp(String(p)), {});
+      const name = rg.parts[rg.parts.length - 1];
+      return { name: name, rel: rg.relInRoot, b64: await fileB64(rg) };
+    }
+    if (op === "pdf.op") {
+      const paths = Array.isArray(params.paths) && params.paths.length
+        ? params.paths
+        : (params.path ? [params.path] : []);
+      if (!paths.length || paths.length > 20) {
+        return fsFail(400, { error: "paths must be a 1-20 list" });
+      }
+      payload.__files = [];
+      for (const p of paths) {
+        const one = await packOne(p);
+        if (engExtOf(one.name) !== ".pdf") {
+          return fsFail(400, { error: "input must be .pdf, not " + engExtOf(one.name) });
+        }
+        payload.__files.push(one);
+      }
+      payload.path = params.path || (params.paths && params.paths[0]);
+    } else {
+      payload.__file = await packOne(params.path || "");
+    }
+  } catch (e) {
+    return opFailToResp(e);
+  }
+
+  // validate + preflight the OUTPUT path for write ops (before engines run)
+  let outRg = null;
+  try {
+    if (op === "pdf.op" || op === "ocr.pdf") {
+      const outRel = String(params.out || "");
+      if (!outRel) return fsFail(400, { error: "missing out" });
+      if (!outRel.toLowerCase().endsWith(".pdf")) return fsFail(400, { error: "out must end in .pdf" });
+      outRg = await resolveGuarded(unquoteComp(outRel), { forWrite: true });
+    }
+  } catch (e) {
+    return opFailToResp(e);
+  }
+
+  // call the page
+  let reply;
+  try {
+    reply = await new Promise((resolve, reject) => {
+      if (!FS_ENGINE_ALIVE && !enginePageMaybeOpen()) {
+        reject(new OpFail(409, engineNeededBody()));
+        return;
+      }
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (!settled) { settled = true; resolve({ ok: false, error: "engine timeout" }); }
+      }, FS_ENGINE_TIMEOUT_MS);
+      chrome.runtime.sendMessage({ ofbEngine: true, op: op, payload: payload }, (resp) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (chrome.runtime.lastError) {
+          reject(new Error("engine page not reachable: " + chrome.runtime.lastError.message));
+          return;
+        }
+        resolve(resp || { ok: false, error: "engine page returned nothing" });
+      });
+    });
+  } catch (e) {
+    if (e instanceof OpFail) return opFailToResp(e);
+    return fsFail(409, engineNeededBody(String(e.message || e)));
+  }
+  if (!reply.ok) {
+    // the page reported a domain error (bad ext, engine failure…)
+    const m = String(reply.error || "engine error");
+    const known = m.match(/^(\d{3})\|(.*)$/);
+    if (known) return fsFail(parseInt(known[1], 10), { error: known[2] });
+    return fsFail(500, { error: m });
+  }
+  const result = reply.result || {};
+
+  // write outputs through the guarded write path (snapshot-first, breaker)
+  try {
+    if (result.__writeFile) {
+      const res = await engineWriteOut(result.__writeFile);
+      const out = Object.assign({}, result);
+      delete out.__writeFile;
+      return fsOk(Object.assign(out, res));
+    }
+    if (result.__writeFiles) {
+      const results = [];
+      for (const w of result.__writeFiles) results.push(await engineWriteOut(w));
+      const out = Object.assign({}, result);
+      delete out.__writeFiles;
+      out.write_results = results;
+      return fsOk(out);
+    }
+  } catch (e) {
+    return opFailToResp(e);
+  }
+  return fsOk(result);
+}
+
+/** Write engine output (b64 payload): rate-breaker + snapshot-first +
+ *  audit — same semantics as the /write family. Returns {written, bytes,
+ *  snapshot}. */
+async function engineWriteOut(w) {
+  let bytes;
+  try { bytes = b64dec(w.b64); }
+  catch (e) { throw new OpFail(500, { error: "engine produced bad b64" }); }
+  if (!bytes.length) throw new OpFail(500, { error: "engine produced no bytes" });
+  if (bytes.length > MAX_BINARY) {
+    throw new OpFail(413, { error: "engine output too large: " + bytes.length + " > " + MAX_BINARY });
+  }
+  const rg = await resolveGuarded(unquoteComp(String(w.rel || "")), { forWrite: true });
+  const rc = await rateCheck(bytes.length);
+  if (!rc.ok) throw new OpFail(429, { error: rc.err, rate_limited: true });
+  const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts);
+  await writeFileBytes(rg.rootRec, rg.parts, bytes);
+  await auditRow({ endpoint: "/pdf_op", method: "POST", path: rg.relInRoot, size: bytes.length, status: 200 });
+  return { written: "/" + rg.relInRoot, bytes: bytes.length, snapshot: snap };
+}
+
+function enginePageMaybeOpen() {
+  // engine-host pings on load + every 30s; if it ever pinged we optimistically
+  // forward (sendMessage fails cleanly if the page died since)
+  return FS_ENGINE_ALIVE;
+}
+
+/** Read the guarded file as base64 (the RPC channel is structured-clone:
+ *  only plain strings/arrays survive). */
+async function fileB64(rg) {
+  const f = await getFileFor(rg.rootRec, rg.parts);
+  if (f.size > MAX_BINARY) {
+    throw new OpFail(413, { error: "input too large for the engine channel: " + f.size + " > " + MAX_BINARY });
+  }
+  return b64enc(new Uint8Array(await f.arrayBuffer()));
+}
+
+function engExtOf(name) {
+  const m = String(name).match(/(\.[^.]+)$/);
+  return m ? m[1].toLowerCase() : "";
+}
+
+function engineNeededBody(extra) {
+  const b = {
+    error: "PDF/OCR engines are not running — the engine tab is closed",
+    engine_needed: true,
+    hint: "tell the user: click the Open File Bridge toolbar icon and open the engine tab (keep it open while the assistant works with PDFs or scanned files)",
+  };
+  if (extra) b.detail = extra;
+  return b;
+}
+
+/* ---- zip helpers (used by /zip + /unzip in fs-writes.js) ---- */
 
 async function fsZipBytes(items) {
-  // items: [{name, file}] — needs a real deflate implementation.
-  // Vendor fflate in P2b; for now build a STORE-method zip (correct,
-  // readable by every unzipper, just uncompressed).
+  // items: [{name, file}] — STORE-method zip (correct, readable by every
+  // unzipper, just uncompressed). Deflate via the engine page if it grows
+  // into a need.
   const chunks = [];
   const central = [];
   let offset = 0;
@@ -102,7 +274,6 @@ function makeCrc32() {
 async function fsUnzipList(bytes) {
   const entries = [];
   const dv = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  // find EOCD
   let eocd = -1;
   for (let i = bytes.length - 22; i >= 0; i--) {
     if (dv.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
@@ -138,5 +309,9 @@ async function fsUnzipEntry(bytes, name) {
   const dataStart = lho + 30 + nameLen + extraLen;
   const comp = bytes.subarray(dataStart, dataStart + e.compSize);
   if (e.method === 0) return new Uint8Array(comp); // STORE
-  throw new Error("deflate members need the fflate engine (P2b)");
+  // deflate: DecompressionStream is available in SW + pages (Chrome 103+)
+  const ds = new DecompressionStream("deflate");
+  const stream = new Blob([comp]).stream().pipeThrough(ds);
+  const buf = await new Response(stream).arrayBuffer();
+  return new Uint8Array(buf);
 }

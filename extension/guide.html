@@ -1,0 +1,55 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Open File Bridge — recovery guide</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2rem auto; max-width: 42rem;
+       color: #1a1a2e; line-height: 1.5; }
+h1 { font-size: 1.3rem; }
+code { background: #f4f4f8; padding: 0.1rem 0.35rem; border-radius: 4px;
+       font-size: 0.9em; }
+.step { margin: 0.75rem 0; padding-left: 1rem; border-left: 3px solid #6c8cff; }
+.warn { background: #fff6e6; border: 1px solid #f0c36d; border-radius: 8px;
+        padding: 0.75rem 1rem; }
+</style>
+</head>
+<body>
+<h1>Open File Bridge — recovery guide</h1>
+<p>Version-matched to extension <span id="ver">…</span> (the desktop app's
+<code>recovery-guide.html</code> equivalents, extension mode).</p>
+
+<h2>“permission needed” error</h2>
+<p>The browser requires the user to re-confirm folder access after a
+restart or when the grant expires.</p>
+<div class="step">Click the Open File Bridge toolbar icon.</div>
+<div class="step">Press <b>Reconnect</b> — the folder is NOT re-picked;
+permission is re-asked on the stored handle.</div>
+<div class="step">On the browser's permission bubble choose
+<b>“Allow on every visit”</b> — that choice is persistent and you will not
+be asked again on future restarts. (“Allow this time” works too but asks
+again after the next browser restart.)</div>
+
+<h2>“engine tab closed” / engine_needed error</h2>
+<p>PDF text extraction, PDF operations and OCR run in a background tab of
+the extension itself — not on any server.</p>
+<div class="step">Click the Open File Bridge toolbar icon.</div>
+<div class="step">Open the <b>engine tab</b> and keep it open while the
+assistant works with PDFs or scanned files.</div>
+
+<h2>“no shared folder configured”</h2>
+<div class="step">Click the toolbar icon and choose a folder with
+<b>Pick folder</b>. Files outside that folder are never accessible.</div>
+
+<h2>Writes refused (403)</h2>
+<div class="warn">The folder may be read-only, or writes were disabled for
+it in the extension's options page. Either re-pick the folder with write
+access or enable writes in settings.</div>
+
+<h2>Legacy formats (.doc, .xls)</h2>
+<p>Open the file in your office app (Word / Excel / LibreOffice) and save
+it as <code>.docx</code> / <code>.xlsx</code> — then the assistant can read
+and edit it.</p>
+
+<script src="fs-core.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>

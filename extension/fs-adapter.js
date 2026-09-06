@@ -113,6 +113,14 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     return fsOk({ ocr_lang: await kvGet("ocr_lang", "eng"), available: FS_ENGINES.ocr ? FS_OCR_LANGS : [] });
   }
 
+  if (method === "POST" && path === "/ocr/lang") {
+    const raw = String(body.lang || "");
+    const parts = raw.split(/[\s,+]+/).filter(Boolean).filter((p) => /^[a-zA-Z_]{2,8}$/.test(p));
+    if (!parts.length) return fsFail(400, { error: "bad lang: " + raw });
+    await kvSet("ocr_lang", parts.join("+"));
+    return fsOk({ ok: true, ocr_lang: parts.join("+"), available: FS_OCR_LANGS });
+  }
+
   if (path.startsWith("/click/")) {
     return fsFail(404, { error: "outcome links are served by the extension page — see /link" });
   }
@@ -217,6 +225,39 @@ function opFailToResp(e) {
 const MOVED_READ_ENDPOINTS = new Set(["/eml_read", "/html_text", "/docx_read", "/pptx_read", "/xlsx_read"]);
 const MOVED_WRITE_ENDPOINTS = new Set(["/docx_write", "/docx_merge", "/docx_mailmerge",
   "/pptx_from_template", "/xlsx_append", "/pdf_from_text", "/csv_head", "/csv_stats"]);
+
+/** Moved read endpoints (plan §2): the FILE is still validated with the
+ *  app's semantics (permission gate, sensitive floor, 404/503) so models
+ *  get the same errors they know — then a clean 501 + the recipe instead
+ *  of parsing anything. */
+const MOVED_RECIPES = {
+  "/docx_read": 'python-docx from /wheels/python_docx (read via /read_b64, docx.Document(BytesIO(b64decode(...))))',
+  "/pptx_read": 'python-pptx from /wheels/python_pptx (read via /read_b64, pptx.Package.open)',
+  "/xlsx_read": 'openpyxl from /wheels/openpyxl (read via /read_b64, load_workbook(BytesIO(...)))',
+  "/eml_read": "stdlib email module: /read_b64 → email.message_from_bytes",
+  "/html_text": "stdlib html.parser or bs4-style regex strip: /read_b64 → decode → strip tags",
+};
+
+async function epMovedRead(path, q) {
+  // validate the target first — same resolution semantics as the app
+  // (a missing file / locked permission still gives the app's 404/403,
+  // not a generic adapter error)
+  let file = null;
+  try {
+    const rg = await resolveGuarded(unquoteComp(q.path || ""));
+    file = await getFileFor(rg.rootRec, rg.parts);
+  } catch (e) {
+    if (e instanceof OpFail) return fsFail(e.status, e.obj);
+    return fsFail(400, { error: path + ": bad request — " + e });
+  }
+  return fsFail(501, {
+    moved: true,
+    error: path + " is not available in extension mode — the office stack runs in the Pyodide sandbox",
+    size: file.size,
+    hint: "fetch the bytes with /read_b64?path=" + encodeURIComponent(q.path || "") +
+      " then parse in Pyodide: " + (MOVED_RECIPES[path] || "see SKILL-EXT §moved"),
+  });
+}
 
 /* ---------------- meta helpers ---------------- */
 

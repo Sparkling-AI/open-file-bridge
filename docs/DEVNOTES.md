@@ -1145,3 +1145,75 @@ to a shell interpreter is only testable if it is importable as a
 constant AND parsed by a real engine in CI. Balance-counting in e2e
 on Linux would NOT alone have caught a semantically broken but
 balanced snippet; the CI real-engine parse is the actual guard.
+
+## Stage-3 session #5: engines (P3+P4) + negatives (P1b) + CWS pass (P2b) + skill 3.0-EXT (P5) (2026-09-06)
+
+Engine architecture landed (all verdicts from real-browser runs through the
+real sandbox→relay→SW pipe, tests/stage3/engines_test.py — 13/13 PASS):
+
+- **pdfium = PDF READER only** (text + page render). Its SAVE side is
+  unusable in the @hyzyla 2.1.13 build: FPDF_SaveAsCopy needs a wasm-table
+  function pointer; `addFunction` is NOT exported and `WebAssembly.Function`
+  is not shipped in production Chromium (probed both — dead ends, don't
+  retry). Page-surgery exports (ImportPages/Page_New/CreateTextObj) exist
+  but without Save they're useless.
+- **pdf-lib 1.17.1 (vendored UMD, MIT, 525KB) = PDF WRITER**: /pdf_op
+  split/merge/rotate output + searchable-PDF assembly.
+- **tesseract.js 7 `outputs:{pdf:true}`** = the /ocr_pdf writer: its
+  TessPDFRenderer emits image + invisible-text-layer pages; pdf-lib merges.
+  Cross-engine proof: pdfium getText on the tesseract output returns the
+  probe terms ("E2E INVOICE 997 … 44000 SEK").
+- **`gzip:false` + absolute chrome-extension:// langPath** (both
+  first-class tesseract.js options): plain .traineddata files from
+  vendor/tessdata-fast/ — NO gz packaging needed.
+
+Three extension-platform blockers found & fixed (each cost a probe):
+
+1. **Extension-page CSP blocks WebAssembly.instantiate** ("neither
+   'wasm-eval' nor 'unsafe-eval'…script-src 'self'"). The tesseract core
+   aborts INSIDE its worker, so the page-level promise never rejects —
+   it HANGS (no console error at the call site; only worker console
+   errors). Fix: manifest `content_security_policy.extension_pages:
+   "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"` — the
+   MV3-sanctioned wasm keyword (Chrome 103+), no remote code.
+2. **tesseract.js spawns its worker via a blob URL that importScripts
+   the real path** — blob importScripts is blocked in extension context.
+   Fix: `workerBlobURL: false` (worker loads directly from the
+   extension URL).
+3. **chrome.runtime.sendMessage STRUCTURED-CLONES and DROPS File
+   objects** — the engine page received an empty "/input" (tesseract:
+   "Image file /input cannot be read"). Fix: the SW packs inputs as
+   base64 strings (`packOne` in fs-engine.js), outputs come back as
+   base64 too (`__writeFile.b64`), written through the guarded write
+   path (snapshot-first + rate breaker + audit) in the SW.
+
+Also found: **`epMovedRead` was CALLED BUT NEVER DEFINED** (lost in the
+session-#8 file split; node --check cannot catch undefined identifiers —
+same class as the const-reassign bug). /docx_read & friends returned
+status 0 "adapter error". Now implemented with app-parity validation
+(resolveGuarded + getFileFor inside try/catch → 404/403 before the 501
+moved+recipe reply). Static-check lesson: before CWS submit, run an
+undefined-identifier scan (acorn/lint), not just node --check.
+
+P1b negatives (tests/stage3/negatives_test.py) — 11 cells + disk
+evidence PASS: evil-destination 400, foreign url/port fields dropped,
+PUT refused, path-outside-roots refused, sensitive floor 403×3,
+zip-slip 400 (whole-archive abort, nothing extracted), snapshot-on-disk
+(real copy under .ofb-snapshots/<ts>/), readonly-root 403 (host flips
+the IDB root row), moved-endpoint 501+moved, /convert 501, rate breaker
+429 at ~19 writes. Test-order lesson: alphabetically-sorted cells put
+the rate-breaker BEFORE later write cells — name it zz_* so it runs
+last (the breaker poisons the write budget for the whole SW lifetime).
+
+P2b CWS pass: manifest storage-only + wasm-unsafe-eval CSP verified,
+all referenced pages/scripts exist (guide.html + guide.js added — the
+/guide endpoint pointed at a page that did not exist), du 52MB / zip
+26.4MB / 58 files, all required entries verified inside the zip
+(dist-stage3/, gitignored — regenerate with zip -qr from extension/).
+
+Skill 3.0-EXT (skill/open-file-bridge/SKILL-EXT.md): extension IS the
+backend (no app/token), permission_needed → Reconnect → "Allow on every
+visit" = persistent (steer users there explicitly), engine_needed →
+open engine tab, OCR all-caps diacritic caveat, moved-endpoint Pyodide
+recipes with bundled wheels, /convert user-message wording, writes
+immediate + snapshot-first.

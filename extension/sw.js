@@ -77,6 +77,12 @@ async function handleOfbRequest(msg) {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg !== "object") return;
+  // engine-host page heartbeat (P3/P4): mark engines alive
+  if (msg.ofbEngineHello === true) {
+    if (typeof fsEngineSetAlive === "function") fsEngineSetAlive(true);
+    sendResponse({ ok: true });
+    return;
+  }
   // narrow pipe: only the exact OFB request shape
   if (msg.ofb !== true || msg.id === undefined) return; // not ours: ignore
   handleOfbRequest(msg).then(sendResponse);
