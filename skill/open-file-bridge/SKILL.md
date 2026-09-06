@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through Open File Bridge. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v2.11.1
+# Local File Bridge — skill v2.11.2
 
 > Requires bridge ≥ **2.11** (checked at bootstrap below; newer bridges are
 > always fine — the API is backward-compatible).
@@ -24,6 +24,10 @@ Access files in **the user's own computer** through their local Open File Bridge
 | `/write_b64` | POST | Write **binary** file `{"path","b64"}` — existing targets are snapshotted first |
 | `/versions/list` | POST | `{"path":""}` — metadata of pre-write snapshots (ts/path/size) |
 | `/versions/restore` | POST | `{"path","ts"}` — restore a snapshotted version (current file is snapshotted first) |
+| `/trash/list` | POST | `{"path":""}` — metadata of trashed files (ts/path/size) |
+| `/trash/restore` | POST | `{"path","ts"}` — restore a trashed file (ts from `/trash/list`) |
+| `/delete` | POST | `{"path":"x"}` — delete = **trash-move**, recoverable via `/trash/restore` (never the HTTP `DELETE` verb) |
+| `/write_many` | POST | `{"items":[{"path","content"},…]} (1–50)` — batch text writes; every replaced target snapshotted first; per-item `results` |
 | `/pdf_text?path=X&pages=1-3,5` | GET | **Extract text layer** from PDF (addon: pymupdf) |
 | `/pdf_text?path=X&mode=images&max_pages=100` | GET | **Vision mode**: pages as PNG data URLs (144 dpi, pypdfium2 addon) — for vision models |
 | `/ocr?path=X&lang=swe+eng&max_pages=5` | GET | **OCR** scanned PDF/image (tesseract) |
@@ -57,11 +61,14 @@ Access files in **the user's own computer** through their local Open File Bridge
 
 **Method rules (P0):** the Method column is part of the contract — GET
 endpoints take query-string params, POST endpoints take a JSON body via
-`bridge_post`. Plain `pyfetch(url)` sends a GET, so a POST endpoint
-reached that way answers 404 `unknown endpoint`: that means WRONG
-METHOD, not an unsupported endpoint. Retry once via `bridge_post`;
-never tell the user the bridge lacks an endpoint that is in this table
-(seen in real chats on `/versions/list` and `/trash/list`).
+`bridge_post`; the API speaks GET and POST only (never PUT/DELETE
+verbs). Plain `pyfetch(url)` sends a GET, so a POST endpoint reached
+that way answers 404 `unknown endpoint` — and a POST sent to a GET
+endpoint answers the same. That 404 means the path isn't served for the
+METHOD you used, not that the endpoint is missing: check the table,
+retry once the correct way, and never tell the user the bridge lacks an
+endpoint that is in this table (seen in real chats on `/versions/list`
+and `/trash/list`).
 
 **Caching (P2):** `/pdf_text` and `/ocr` results are cached per
 (sha256(file), params) — a repeat call returns the same answer instantly
@@ -456,7 +463,7 @@ d = await bridge_get("/image_b64", {"path": "charts/monthly-sales.png",
 ```
 
 Excel: `/xlsx_read` returns the grid as JSON (`data: [[...]]`, first row =
-headers when `header_row=1`) — `pd.DataFrame(d["data"][1:], columns=d["data"][0])`.
+headers) — `pd.DataFrame(d["data"][1:], columns=d["data"][0])`.
 For WRITING Excel with formatting, stay on openpyxl from the bridge's local
 wheels (see Office files section) — pandas `to_excel` also uses openpyxl,
 installed from the same local wheels.
@@ -524,8 +531,8 @@ For a folder: name + [📂 Show in folder](reveal_url) only.
    round trips. Safety comes from the bridge itself: every write to an existing
    file snapshots the prior version first (listed via POST
    `/versions/list`, restorable via POST `/versions/restore`), deletions
-   are trash-moves (POST `/trash/list`, POST `/trash/restore`) — nothing
-   is unrecoverable. When the user
+   are trash-moves (POST `/delete`; listed/restorable via POST
+   `/trash/list`, `/trash/restore`) — nothing is unrecoverable. When the user
    asks for a change, just do it; when a write REPLACES a file the user
    clearly cares about, MENTION in your answer that the previous version is
    snapshotted and can be restored. Never invent approval prompts, tokens,

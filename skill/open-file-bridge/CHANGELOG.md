@@ -2,6 +2,28 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.11.2 — 2026-09-06
+
+Endpoint-table audit against the bridge source (every do_GET/do_POST
+route) plus live wrong-method probes. Real gaps fixed — the standard
+table now teaches `/trash/list` and `/trash/restore` (they existed only
+in workflow prose), `/delete` (the ONLY way to delete: a trash-move;
+the HTTP `DELETE` verb is not part of this API and answers 501), and
+`/write_many` (1–50 batch text writes, snapshot-first, per-item
+results). The strict variants gained `/delete` in Rule 6 + Recipe B
+(`/write_many` deliberately left out there: weak models + 50-item
+batches is the accident class the fixed recipes exist to avoid — loop
+`/write` instead). The Method rules note is now two-directional: the
+bare 404 `unknown endpoint` also fires when POSTing to a GET endpoint,
+so it ALWAYS means wrong method, never a missing endpoint; and the note
+states the API speaks GET and POST only. Also removed an invented
+`/xlsx_read?header_row=1` param (real params: sheet/range/max_rows;
+unknown query keys are silently ignored, so it misled rather than
+errored). Internal routes (`/state`, `/guide`, `/version`, `/api/*`)
+stay deliberately untaught — `/health` carries everything a model
+needs — and trash purge remains a settings-page action (403 by design).
+No API changes — minimum bridge stays 2.11.
+
 ## 2.11.1 — 2026-09-06
 
 Method-explicitness fix from a real chat: asked how many versions a

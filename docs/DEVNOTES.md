@@ -1174,3 +1174,33 @@ API table already said POST for both; the model never used
   fallback detect paths routed in do_POST and answer 405 with a
   "use POST" hint, teaching ANY client in one round trip. Not done in
   2.11.1 (skill-only scope per request).
+
+## Skill 2.11.2 — endpoint-table audit (2026-09-06, follow-up to 2.11.1)
+
+Audited every do_GET/do_POST route in src/file_bridge.py against the
+skill tables, then probed the wrong-method matrix live on the running
+bridge. Findings:
+
+- MISSING from the standard table: `/delete` (the only delete path —
+  a trash-move; rule 3 said "deleting … execute immediately" but no
+  endpoint was ever taught, so a model asked to delete had nothing to
+  call), `/trash/list` + `/trash/restore` (prose only), `/write_many`
+  (1–50 batch text writes). All four now tabled; rule 3 names
+  POST /delete as the deletion path.
+- Wrong-method 404 is SYMMETRIC: POST /stat and POST /list also answer
+  the bare 404 "unknown endpoint" (do_POST has the same fallback), and
+  the HTTP DELETE verb answers 501 (BaseHTTPRequestHandler default —
+  the API is GET+POST only). The 2.11.1 method note covered only the
+  GET-on-POST direction; 2.11.2 makes it two-directional.
+- Invented param in the skill: /xlsx_read never had `header_row` (real
+  params: sheet/range/max_rows; unknown query keys are silently
+  ignored, so it misled rather than errored). Parenthetical corrected.
+- Deliberately still untaught: /state /guide /version /api/* (picker/
+  admin surfaces; /health carries everything a model needs) and
+  /trash/purge (403 by design — settings-page action).
+- Strict variants: /delete added to Rule 6 + Recipe B; /write_many
+  intentionally NOT added — weak models + 50-item batches is the
+  accident class the strict recipes exist to avoid; loop /write.
+- Verified live before teaching: /write_many (2 files, per-item
+  results), /delete → /trash/list → /trash/restore round trip on a
+  scratch file, plus contract test PASS. No bridge changes.

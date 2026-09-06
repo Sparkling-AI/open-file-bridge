@@ -3,7 +3,7 @@ name: open-file-bridge-strict
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through Open File Bridge. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — STRICT variant — skill v2.11.1
+# Local File Bridge — STRICT variant — skill v2.11.2
 
 Built for models that need guardrails: fixed recipes, bridge-only writes,
 verify-after-write. (Stronger models: use the standard "Local File
@@ -32,8 +32,9 @@ the folder the user shared from their computer through Open File Bridge.
    `/read` a binary file (Office/PDF/image) — the error response tells
    you the right endpoint; follow its `hint`.
 6. To write: ALWAYS a bridge POST endpoint (`/write`, `/write_b64`,
-   `/edit`, `/xlsx_append`, `/pdf_from_text`, `/docx_merge`).
-   NEVER local file APIs (Rule 2).
+   `/edit`, `/xlsx_append`, `/pdf_from_text`, `/docx_merge`; to delete:
+   `/delete`). NEVER local file APIs (Rule 2), and NEVER the HTTP
+   `DELETE` verb — deletion is POST `/delete` (a trash-move, recoverable).
 7. Writes execute immediately — the BRIDGE provides the safety net,
    not a chat round trip. Every write to an existing file snapshots the
    prior version first (POST `/versions/list`, POST `/versions/restore`);
@@ -138,6 +139,7 @@ lists — a missing file may be excluded on purpose; say so).
 | new PDF | `/pdf_from_text {"out":"x.pdf","blocks":[…]}` |
 | Excel rows (create or append) | `/xlsx_append {"path":"x.xlsx","rows":[[…]],"header":[…]}` |
 | fill a .docx template | `/docx_merge {"path","out","values":{…}}` |
+| delete a file | `POST /delete {"path":"x"}` — trash-move, recoverable via `/trash/restore`; NEVER the HTTP `DELETE` verb |
 
 3. POST it (an existing target is snapshotted automatically
    + token).
