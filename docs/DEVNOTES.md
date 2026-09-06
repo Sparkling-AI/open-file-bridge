@@ -1254,3 +1254,31 @@ AX route (open_panel window + Select/Cancel buttons) is the reliable
 picker probe on this Mac. node --check cannot catch this bug class
 (DOM timing, not syntax) — head <script> pages MUST wire DOM in
 DOMContentLoaded or use defer. dist-stage3 zip rebuilt after the fix.
+
+Local OWUI test wiring (2026-09-06): the owui-test stack (127.0.0.1:8788)
+is plain HTTP, which "matches": ["https://*/*"] never injects into — the
+relay was silently absent on local OWUI. manifest.json content_scripts
+now also match http://127.0.0.1/* and http://localhost/* (match patterns
+carry no port, so every local port is covered; this changes only WHERE
+the relay injects — no new permissions, the SW stays the boundary).
+OPEN PRODUCT QUESTION for the CWS manifest: the LAN topology in the
+store listing is presumably plain http too — does the shipped manifest
+need broader http matching? Left for Dandan.
+
+SKILL-EXT 3.0 staged surgically into owui-test's webui.db (skill row id
+'open-file-bridge', content replaced 28444 -> 9449 chars, updated_at
+unix int; replaced the app-era 2.11.2 token variant). Extension-mode
+needs no token, so no runtime embedding this time.
+
+Pipe verified in Chrome-for-Testing on http://127.0.0.1: sandboxed
+srcdoc iframe postMessage /health -> relay -> SW -> fsRoute -> back:
+HTTP 200 {"version":"3.0.0-EXT","addons":{"pdf":true,"ocr":true},
+"hint":"no folder chosen yet"} — the expected no-grant answer. Relay
+injection on http worked after the manifest change (content-script
+isolated world: main-world evaluate CANNOT see __ofbRelayInstalled —
+probe the pipe, not the flag).
+
+Harness gotcha that burned 30 min: srcdoc assigned as an ELEMENT
+PROPERTY must close its script with a literal </script> — the "<\/script>"
+escape (correct inside a JS template literal) leaves the tag unclosed,
+the script never runs, and the symptom is a silent pipe timeout.
