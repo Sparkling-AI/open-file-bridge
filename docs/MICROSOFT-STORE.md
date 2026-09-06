@@ -108,6 +108,14 @@ Listing checklist:
 - Versioned `.msix` upload from the Windows CI artifact
 - Notes explaining the loopback service and how reviewers can test it
 
+**Where to get the `.msix`:** every release's
+`OpenFileBridge-windows-x64.zip` carries it at the zip ROOT alongside
+the `OpenFileBridge/` folder (convention since **v2.10.0**; v2.11.0
+accidentally shipped the zip without it — restored in v2.11.2). When
+assembling release assets, download the Windows CI artifact and zip BOTH
+`OpenFileBridge/` and `OpenFileBridge-windows-x64.msix` (~146 MB zip);
+a ~73 MB zip means the msix was dropped.
+
 ## 6. Submit and release gradually
 
 Upload the MSIX to the product submission, complete every validation section,
