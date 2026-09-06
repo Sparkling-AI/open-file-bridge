@@ -68,23 +68,26 @@ async function loadAudit() {
   }
 }
 
-document.getElementById("save").onclick = async () => {
-  const w = parseInt(document.getElementById("rate_writes").value, 10);
-  const mb = parseInt(document.getElementById("rate_mb").value, 10);
-  const lang = document.getElementById("ocr_lang").value.trim();
-  if (Number.isFinite(w) && w >= 1) await OFBIDB.put("kv", w, "rate_max_writes");
-  if (Number.isFinite(mb) && mb >= 1) await OFBIDB.put("kv", mb, "rate_max_mb");
-  if (lang) await OFBIDB.put("kv", lang, "ocr_lang");
-  const s = document.getElementById("saved");
-  s.hidden = false;
-  setTimeout(() => { s.hidden = true; }, 1500);
-};
-
-document.getElementById("setup").onclick = () => {
-  chrome.tabs ? chrome.tabs.create({ url: "setup.html" }) : window.open("setup.html");
-};
-
+// The script loads from <head> — same hazard setup.js documents: DOM
+// wiring must happen on DOMContentLoaded (module-level getElementById
+// returns null before it, which killed this script and left #setup dead).
 window.addEventListener("DOMContentLoaded", () => {
+  document.getElementById("save").onclick = async () => {
+    const w = parseInt(document.getElementById("rate_writes").value, 10);
+    const mb = parseInt(document.getElementById("rate_mb").value, 10);
+    const lang = document.getElementById("ocr_lang").value.trim();
+    if (Number.isFinite(w) && w >= 1) await OFBIDB.put("kv", w, "rate_max_writes");
+    if (Number.isFinite(mb) && mb >= 1) await OFBIDB.put("kv", mb, "rate_max_mb");
+    if (lang) await OFBIDB.put("kv", lang, "ocr_lang");
+    const s = document.getElementById("saved");
+    s.hidden = false;
+    setTimeout(() => { s.hidden = true; }, 1500);
+  };
+
+  document.getElementById("setup").onclick = () => {
+    chrome.tabs ? chrome.tabs.create({ url: "setup.html" }) : window.open("setup.html");
+  };
+
   loadSettings();
   loadRoots();
   loadAudit();

@@ -75,6 +75,12 @@ async function handleOfbRequest(msg) {
   }
 }
 
+// Toolbar icon (manifest action title says "choose folder"): open the
+// grant page. No popup is declared, so this listener is the only wiring.
+chrome.action.onClicked.addListener(() => {
+  chrome.tabs.create({ url: "setup.html" });
+});
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (!msg || typeof msg !== "object") return;
   // engine-host page heartbeat (P3/P4): mark engines alive

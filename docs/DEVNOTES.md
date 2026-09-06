@@ -1217,3 +1217,40 @@ visit" = persistent (steer users there explicitly), engine_needed →
 open engine tab, OCR all-caps diacritic caveat, moved-endpoint Pyodide
 recipes with bundled wheels, /convert user-message wording, writes
 immediate + snapshot-first.
+
+macOS first-manual-load bug (2026-09-06, Dandan's real Chrome 152):
+"Choose / manage folders…" on options.html was a dead click — no tab, no
+picker. Root cause: **options.js wired #save/#setup at module level
+while loading from <head>** (classic script, body not parsed yet) →
+`null.onclick` TypeError killed the whole script before its
+DOMContentLoaded handlers registered → #setup never wired AND the page
+never loaded settings (on-screen proof: #auditrows stuck at "…", inputs
+empty). Platform-independent — Linux was equally broken; the stage3
+suites never click the options page (they drive setup.html directly),
+which is why the green runs missed it. setup.js documents this exact
+hazard in a comment; options.js was the one page that missed the
+pattern. Fix: both onclick assignments moved inside the page's existing
+DOMContentLoaded listener (grep-audit: setup/guide/open/engine-host
+were already correct).
+
+Same session, second dead end fixed: the toolbar action is titled
+"Open File Bridge — choose folder" but the manifest declares no popup
+and sw.js had no chrome.action.onClicked — the icon did nothing.
+sw.js now opens setup.html on click.
+
+Verification (Dandan's browser, in place, extension reloaded via
+chrome://extensions): options page now loads (20/50/eng defaults,
+"No folder connected yet", "no activity yet"), #setup opens
+setup.html, #pick opens the native macOS open panel ("Select where
+this site can save changes"); cancelled — folder choice left to
+Dandan. Independently confirmed in Playwright "Chrome for Testing"
+1208 on macOS: picker opens from the extension page, cancel resolves
+as AbortError and the page shows "Folder selection cancelled."
+
+Automation lessons: branded Chrome 152 ignores --load-extension (load
+via the chrome://extensions UI, or use Chromium/Chrome-for-Testing
+builds); osascript System Events needs assistive access — the
+AX route (open_panel window + Select/Cancel buttons) is the reliable
+picker probe on this Mac. node --check cannot catch this bug class
+(DOM timing, not syntax) — head <script> pages MUST wire DOM in
+DOMContentLoaded or use defer. dist-stage3 zip rebuilt after the fix.
