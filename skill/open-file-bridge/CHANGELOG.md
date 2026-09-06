@@ -2,6 +2,24 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.11 — 2026-09-06
+
+The chat-side approval round trip is REMOVED. Real usage showed models losing
+the pending approval between turns ("approval window wasn't preserved") or
+regenerating the payload after approval (burning it as `payload_changed`) —
+the flow caused more failures than it prevented. Writes now execute
+immediately; safety is enforced by the BRIDGE, not chat choreography: every
+write to an existing file snapshots the prior version first
+(`/versions/list`, `/versions/restore`), deletions are trash-moves
+(`/trash/list`, `/trash/restore`), and the write-rate breaker still applies.
+The skill no longer defines `PENDING_BRIDGE_WRITE` or `bridge_commit_approved`
+and never asks the user to approve a write mid-flow. Also: `/pdf_from_text`
+and `/xlsx_append` now work on every install — the bridge auto-loads fpdf2
+and openpyxl from its bundled wheels when the host Python lacks them (PDF
+creation previously 501'd with "needs the fpdf2 add-on" on stock installs).
+Minimum compatible bridge: **2.11** (bridge and skill change together here —
+older bridges still 409).
+
 ## 2.10.1 — 2026-09-05
 
 Approval retries now preserve and resend the exact original payload through a

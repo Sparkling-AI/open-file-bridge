@@ -63,13 +63,13 @@ MAX_BINARY = 8_000_000  # bytes (base64 endpoints)
 #                  always fine (API is backward-compatible). Bump only
 #                  when the skill starts referencing an endpoint that
 #                  didn't exist in older bridges.
-VERSION = "2.10.1"
-SKILL_MIN = "2.5"
+VERSION = "2.11.0"
+SKILL_MIN = "2.11"
 
 
 # ------------------------------------------- risk classes (P3, openworker risk.py)
 # Every endpoint declares its INTRINSIC side-effect class — the substrate
-# future confirmation/audit gating reads (policy asks ENDPOINT_RISK[path],
+# audit gating reads (policy asks ENDPOINT_RISK[path],
 # never a hardcoded name list; pattern: openworker coworker/risk.py).
 #
 #   read        — no side effects: never mutates the workspace
@@ -452,6 +452,47 @@ def check_request(headers) -> tuple[bool, int | None, str]:
 
 # ------------------------------------------------------------- add-on setup
 
+# Optional wheel-backed add-ons. The bridge stays stdlib-only, but the same
+# PURE-PYTHON wheels it already serves to Pyodide (./wheels/, py3-none-any)
+# can be loaded into the bridge process itself via zipimport — so native
+# endpoints never 501 on a stock install just because nothing was pip'd.
+# (fpdf2 + openpyxl are pure-Python; python-docx/python-pptx need compiled
+# lxml and stay genuinely-optional add-ons.)
+
+_wheel_import_lock = threading.Lock()
+_wheel_sys_paths_added = False
+
+
+def _import_wheel_addon(name: str):
+    """Import `name` from the bundled wheels dir when the ambient Python
+    can't provide it. Returns the module or None. Safe to call per request:
+    after the first success the import system resolves it normally."""
+    try:
+        return __import__(name)
+    except ImportError:
+        pass
+    global _wheel_sys_paths_added
+    with _wheel_import_lock:
+        try:
+            return __import__(name)  # lost a race? re-check under lock
+        except ImportError:
+            pass
+        if not WHEELS_DIR.is_dir():
+            return None
+        added = False
+        for whl in sorted(WHEELS_DIR.glob("*.whl")):
+            p = str(whl)
+            if p not in sys.path:
+                sys.path.append(p)
+                added = True
+        if added:
+            _wheel_sys_paths_added = True
+        try:
+            return __import__(name)
+        except ImportError:
+            return None
+
+
 # Wheel hosting: serve pure-Python wheels bundled next to this file in ./wheels/
 # so Pyodide installs them from localhost instead of PyPI (fast + offline).
 # (WHEELS_DIR is set after _app_dir() is defined, for frozen-build support)
@@ -710,6 +751,12 @@ TESSERACT_BIN, TESSERACT_VER = _find_tesseract()
 # > <app>/tesseract/tessdata (bundled-engine layout) > tesseract default.
 _ad = _app_dir()
 WHEELS_DIR = _ad / "wheels"
+# recovery guide (settings page links here). Source checkout: docs/ next to
+# src/; frozen/packaged builds: docs/ shipped as a sibling of the binary
+# (packaging copies it next to wheels/, same layout rule).
+GUIDE_FILE = _ad.parent / "docs" / "recovery-guide.html"
+if not GUIDE_FILE.is_file():
+    GUIDE_FILE = _ad / "docs" / "recovery-guide.html"
 # user drop-in dir: extra .traineddata files (tessdata_fast) land here and
 # are picked up WITHOUT rebuilding the app — survives app updates too.
 USER_TESSDATA_DIR = STATE_DIR / "tessdata"
@@ -1012,14 +1059,8 @@ def _windowed_read(p: Path, start_line: int, max_lines: int) -> dict:
     return out
 
 
-# ------------------------------------------------- versions + confirmations
+# ------------------------------------------------- versions (snapshot store)
 
-CONFIRM_TTL_SECONDS = 10 * 60
-# Retain expired grants briefly so the API can report a genuine timeout
-# instead of conflating it with an unknown or already-consumed value.
-CONFIRM_EXPIRED_RETENTION_SECONDS = 10 * 60
-_CONFIRM_FILE = STATE_DIR / "pending-confirmations.json"
-_CONFIRM_LOCK = threading.Lock()
 
 # writes that hit an EXISTING target snapshot it first (P0/P0b: 'makes model
 # edits reversible'). Versions live OUTSIDE all roots — structurally
@@ -1122,91 +1163,10 @@ def version_restore(root: Path, rel: str, ts: str) -> tuple[bool, str]:
     return True, str(target)
 
 
-# ---- two-step confirmation tokens (pattern: openapi-servers filesystem) ----
-
-def _confirm_load(*, include_expired: bool = False) -> dict:
-    try:
-        data = json.loads(_CONFIRM_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        return {}
-    now = time.time()
-    cutoff = (now - CONFIRM_EXPIRED_RETENTION_SECONDS
-              if include_expired else now)
-    out = {}
-    for tok, det in data.items():
-        try:
-            if float(det["expiry"]) > cutoff:
-                out[tok] = det
-        except Exception:
-            continue
-    return out
-
-
-def _confirm_save(data: dict):
-    tmp = _CONFIRM_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(data), encoding="utf-8")
-    _restrict_to_user(tmp, is_dir=False)
-    os.replace(tmp, _CONFIRM_FILE)
-
-
-def confirmation_params(op: str, body: dict, **summary) -> dict:
-    """Bind an approval to the exact request payload.
-
-    The transport-only confirmation token is excluded so the first request and
-    approved retry hash identically.  Summary fields keep the on-disk record
-    diagnosable without storing the complete content being written.
-    """
-    payload = {k: v for k, v in body.items() if k != "confirmation_token"}
-    canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"),
-                           ensure_ascii=False, default=str)
-    return {"op": op, **summary,
-            "payload_sha256": hashlib.sha256(canonical.encode("utf-8")).hexdigest()}
-
-
-def confirmation_issue(params: dict) -> dict:
-    """Create a pending, single-use approval grant (10-minute lifetime)."""
-    with _CONFIRM_LOCK:
-        allc = _confirm_load(include_expired=True)
-        tok = _secrets.token_hex(8)  # transport detail; never shown to the user
-        allc[tok] = {"params": params, "expiry": time.time() + CONFIRM_TTL_SECONDS}
-        _confirm_save(allc)
-    return {"approval_error": "required",
-            "confirmation_token": tok,
-            "expires_in": CONFIRM_TTL_SECONDS}
-
-
-def confirmation_consume(tok: str, params: dict) -> tuple[bool, str, str | None]:
-    """Validate token + params match. The token is burned on ANY consume
-    attempt — mismatch included (stricter than the openapi-servers original,
-    which allowed retries: a mismatch means the model changed its request)."""
-    with _CONFIRM_LOCK:
-        # Load expired grants too so callers can distinguish a real timeout
-        # from an unknown/already-consumed value. Prune every other expired
-        # grant while this file is locked.
-        allc = _confirm_load(include_expired=True)
-        det = allc.pop(tok, None)
-        now = time.time()
-        cutoff = now - CONFIRM_EXPIRED_RETENTION_SECONDS
-        _confirm_save({key: value for key, value in allc.items()
-                       if float(value.get("expiry", 0)) > cutoff})
-        if not det:
-            return False, ("the approval is no longer valid — show the action "
-                           "again and ask the user to approve it"), "invalid"
-        if float(det.get("expiry", 0)) <= now:
-            return False, ("the approval window expired before the action was "
-                           "completed — show the action again and ask the user "
-                           "to approve it"), "expired"
-        if det["params"] != params:
-            return False, ("the requested action changed after approval — show the "
-                           "revised action and ask the user to approve it again"), \
-                          "payload_changed"
-        return True, "", None
-
-
 # ---- outcome links (v2.7): user-clickable open/reveal nonces ----
 # POST /link (token-authed, model-initiated) mints an open+reveal nonce PAIR
 # for one path; the model embeds /click/<nonce> URLs in its chat answer.
-# Unlike confirmation tokens these are MULTI-USE within the TTL: a chat link
+# Unlike auth headers these are MULTI-USE within the TTL: a chat link
 # must survive being clicked again minutes later. The nonce (128-bit random)
 # is the whole capability — one path, one desktop action, no file content
 # ever leaves through it — so /click needs no bridge token: a browser
@@ -1354,10 +1314,6 @@ def _attach_links(resp: dict, path_str: str) -> dict:
     return resp
 
 
-
-
-
-
 # -------------------------------------------------- result cache (P2)
 # /pdf_text + /ocr are the expensive endpoints (raster + tesseract ≈ 1s per
 # page). History replays and chat re-asks hit the same file+params over and
@@ -1475,7 +1431,7 @@ def zip_create(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
                  "note": "members stored FLAT (basename only) — directories recurse"}
 
 
-def zip_extract(root: Path, cfg: dict, body: dict, confirm_func=None) -> tuple[int, dict]:
+def zip_extract(root: Path, cfg: dict, body: dict) -> tuple[int, dict]:
     """Unzip <path> (.zip, root-relative) under <dest>/ (root-relative dir).
     Every member name is sanitized: no absolute, no .., no drive letters,
     no symlink attrs — then extracted under resolve_guarded(dest)."""
@@ -1528,12 +1484,6 @@ def zip_extract(root: Path, cfg: dict, body: dict, confirm_func=None) -> tuple[i
                     continue
                 targets.append((info, target))
             overwrite_count = sum(target.exists() for _info, target in targets)
-            if overwrite_count and confirm_func is not None:
-                code, resp = confirm_func({"dest": dest_rel,
-                                           "files": len(targets),
-                                           "overwrites": overwrite_count})
-                if code:
-                    return code, resp
             okr, err = rate_check(total)
             if not okr:
                 return 429, {"error": err, "rate_limited": True}
@@ -1614,7 +1564,7 @@ def directory_tree(p: Path, cfg: dict, q: dict) -> dict:
 # Scan → archive flow: rasterize pages, OCR each with tesseract's `pdf`
 # renderer (page image + INVISIBLE text layer), merge the parts into one
 # searchable PDF, write atomically. Result is a real file write → snapshot
-# + confirmation flow applies when the output already exists.
+# first when the output already exists.
 
 _OCR_PDF_MAX_PAGES = 50
 
@@ -2059,7 +2009,7 @@ def _pptx_read(path: Path, q: dict):
 # .docx template, and build a deck from a .potx/.pptx layout template.
 # These WRITE office files → they need the native libs (stdlib can't
 # author OOXML safely), get 501 without them, and run the standard
-# snapshot + confirmation + rate-breaker write pipeline.
+# snapshot-first + rate-breaker write pipeline.
 
 _PLACEHOLDER_RE = re.compile(r"\{\{\s*([A-Za-z0-9_.\-]+)\s*\}\}")
 
@@ -2209,15 +2159,12 @@ def pptx_from_template(src: Path, out: Path, out_root: Path, slides: list,
     return 200, resp
 
 
-
-
-
-
 # ---------------------- structured writes: pdf_from_text/docx_write/xlsx_append (P3)
-# Bridge-native document WRITES (roadmap P3). Optional add-on libs (fpdf2,
-# python-docx, openpyxl) — 501 when missing, same as the P2 office writes.
-# All three run the standard pipeline: validate-cheap-first → confirmation
-# (always, they write NEW files) → build → atomic write + snapshot + breaker.
+# Bridge-native document WRITES (roadmap P3). Add-on libs (fpdf2,
+# python-docx, openpyxl) — fpdf2/openpyxl load from the bundled wheels when
+# the ambient Python lacks them; lxml-bound ones stay 501 when missing.
+# All three run the standard pipeline: validate-cheap-first → build →
+# atomic write + snapshot + breaker.
 
 def _sanitize_pdf_text(s: str) -> str:
     """fpdf2 core fonts are latin-1: map the common Windows-1252 range and
@@ -2232,7 +2179,6 @@ def _sanitize_pdf_text(s: str) -> str:
 
 
 def _pdf_font_for(style: str):
-    from fpdf import FPDF
     return {"title": ("helvetica", "B", 20),
             "h1": ("helvetica", "B", 16),
             "h2": ("helvetica", "B", 13),
@@ -2241,15 +2187,14 @@ def _pdf_font_for(style: str):
 
 def pdf_from_text(out: Path, out_root: Path, title: str, blocks: list,
                   page_size: str) -> tuple[int, dict]:
-    try:
-        from fpdf import FPDF
-    except ImportError:
+    fpdf_mod = _import_wheel_addon("fpdf")
+    if fpdf_mod is None:
         return 501, {"error": "pdf_from_text needs the fpdf2 add-on "
                               "(pip install fpdf2)"}
     if not blocks:
         return 400, {"error": "no blocks given"}
     fmt = "A4" if page_size == "a4" else "letter"
-    pdf = FPDF(format=fmt)
+    pdf = fpdf_mod.FPDF(format=fmt)
     pdf.set_auto_page_break(True, margin=18)
     pdf.set_title(_sanitize_pdf_text(title)[:200] if title else "")
     used = 0
@@ -2343,10 +2288,10 @@ def docx_write(out: Path, out_root: Path, title: str, sections: list) -> tuple[i
 
 def xlsx_append(path: Path, rows: list, sheet: str | None, out_root: Path,
                 header: list | None) -> tuple[int, dict]:
-    """Append rows to an existing .xlsx (or create it). openpyxl add-on."""
-    try:
-        import openpyxl
-    except ImportError:
+    """Append rows to an existing .xlsx (or create it). openpyxl, loaded
+    from the bundled wheels when the ambient Python lacks it."""
+    openpyxl = _import_wheel_addon("openpyxl")
+    if openpyxl is None:
         return 501, {"error": "xlsx_append needs openpyxl (pip install openpyxl)"}
     if not rows:
         return 400, {"error": "no rows given"}
@@ -2793,10 +2738,10 @@ def _search(root: Path, cfg: dict, q: dict):
             "truncated": len(matches) >= max_matches}
 
 
-def _edit_file(root: Path, cfg: dict, body: dict, confirm_func):
+def _edit_file(root: Path, cfg: dict, body: dict):
     """Surgical replacements with dry-run unified diff (pattern:
     openapi-servers /edit_file). Applies via the standard write path
-    (snapshot + confirmation) — never a raw overwrite."""
+    (snapshot-first) — never a raw overwrite."""
     import difflib
     rel = body.get("path", "")
     if not rel:
@@ -2826,11 +2771,7 @@ def _edit_file(root: Path, cfg: dict, body: dict, confirm_func):
             fromfile=f"a/{rel}", tofile=f"b/{rel}"))
         return 200, {"dry_run": True, "diff": diff,
                      "changed": modified != original}
-    # real write: same guarded path as /write (confirmation + snapshot)
-    code, resp = confirm_func({"op": "edit", "path": rel,
-                               "bytes": len(modified)})
-    if code:
-        return code, resp
+    # real write: same guarded path as /write (snapshot-first)
     return 200, {"ok": True, "path": rel, "edited": modified != original}
 
 
@@ -2917,8 +2858,6 @@ def _csv_head_stats(path: Path, q: dict, want_stats: bool):
     return out
 
 
-
-
 # ------------------------------------------- trash + write guards (P0b)
 
 TRASH_DIR = STATE_DIR / "trash"
@@ -2927,15 +2866,54 @@ TRASH_PURGE_DAYS = 30
 # ---- rate circuit breaker: max writes per rolling window ----
 _WRITE_LOG_LOCK = threading.Lock()
 _WRITE_LOG: list = []          # (monotonic_ts, nbytes)
-RATE_MAX_WRITES = 20          # per 60 s window (env-tunable)
+RATE_MAX_WRITES = 20          # per 60 s window
 RATE_MAX_BYTES = 50 * 1024 * 1024
+# Env vars are deployment pins (they override any saved setting); the
+# settings-page Safety card writes the same numbers into state so users can
+# tune the brake without restarting. Range guards keep values sane either way.
+RATE_MIN_WRITES, RATE_MAX_WRITES_CAP = 1, 10000
+RATE_MIN_MB, RATE_MAX_MB_CAP = 1, 2048
 
 
 def _rate_limits():
     mw = os.environ.get("FILE_BRIDGE_MAX_WRITES")
     mb = os.environ.get("FILE_BRIDGE_MAX_WRITE_MB")
-    return (int(mw) if mw and mw.isdigit() else RATE_MAX_WRITES,
-            int(mb) * 1024 * 1024 if mb and mb.isdigit() else RATE_MAX_BYTES)
+    if mw and mw.isdigit():
+        w = max(RATE_MIN_WRITES, min(int(mw), RATE_MAX_WRITES_CAP))
+    else:
+        try:
+            v = int(_state_load().get("rate_max_writes") or 0)
+            w = v if RATE_MIN_WRITES <= v <= RATE_MAX_WRITES_CAP else RATE_MAX_WRITES
+        except Exception:
+            w = RATE_MAX_WRITES
+    if mb and mb.isdigit():
+        b = max(RATE_MIN_MB, min(int(mb), RATE_MAX_MB_CAP)) * 1024 * 1024
+    else:
+        try:
+            v = int(_state_load().get("rate_max_mb") or 0)
+            b = (v * 1024 * 1024 if RATE_MIN_MB <= v <= RATE_MAX_MB_CAP
+                 else RATE_MAX_BYTES)
+        except Exception:
+            b = RATE_MAX_BYTES
+    return w, b
+
+
+def _rate_limits_source() -> dict:
+    """For /state + the settings page: which knob wins per limit."""
+    w_env = bool(os.environ.get("FILE_BRIDGE_MAX_WRITES", "").strip())
+    b_env = bool(os.environ.get("FILE_BRIDGE_MAX_WRITE_MB", "").strip())
+    st = {}
+    try:
+        st = _state_load()
+    except Exception:
+        pass
+    out = {"max_writes": _rate_limits()[0],
+           "max_mb": _rate_limits()[1] // (1024 * 1024),
+           "writes_source": "env" if w_env else (
+               "setting" if st.get("rate_max_writes") else "default"),
+           "mb_source": "env" if b_env else (
+               "setting" if st.get("rate_max_mb") else "default")}
+    return out
 
 
 def rate_check(nbytes: int) -> tuple[bool, str]:
@@ -3072,7 +3050,6 @@ def trash_restore(root: Path, rel: str, ts: str) -> tuple[bool, str]:
             shutil.copy2(src, target)
             src.unlink()
     return True, str(target)
-
 
 
 # ------------------------------------------------------- multi-root (P0b)
@@ -3560,6 +3537,27 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                   {"max_entries": "500",
                                                    "max_depth": "6"}), cors=False)
 
+        if u.path == "/guide":
+            # Local recovery & safety guide (settings page links here).
+            # Loopback-bound server like the picker; reads the copy shipped
+            # with THIS app version so it can never drift from the binary.
+            try:
+                body = GUIDE_FILE.read_bytes()
+            except Exception:
+                body = ("<!doctype html><meta charset=\"utf-8\">"
+                        "<h1>Guide unavailable</h1>"
+                        "<p>The recovery guide file could not be read on this "
+                        "install. The latest version lives at "
+                        "<a href=\"https://github.com/Sparkling-AI/open-file-bridge/"
+                        "blob/master/docs/recovery-guide.html\">docs/recovery-guide.html "
+                        "on GitHub</a>.</p>").encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         if u.path == "/state":
             _ttl, _ttl_src = link_ttl_seconds()
             return self._json(200, {
@@ -3569,9 +3567,10 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 "allowed_origin": get_allowed_origin(),
                 "security": security_mode(),
                 "readonly": _is_readonly(),
+                "readonly_source": _readonly_source(),
                 "allow_reveal": bool(_state_load().get("allow_reveal")),
                 "ignore_global": _global_ignore(),
-                "rate_limits": _rate_limits(),
+                "rate_limits": _rate_limits_source(),
                 "link_ttl": _ttl, "link_ttl_source": _ttl_src,
                 "endpoint_risk": {k: ENDPOINT_RISK[k] for k in
                                   sorted(ENDPOINT_RISK)}})
@@ -4151,26 +4150,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if u.path == "/write":
                 p, root, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
                 content = body.get("content", "")
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "write", body, path=body.get("path", ""), bytes=len(content))
-                if p.exists() and p.is_file() and not confirm_token:
-                    # destructive overwrite → two-step confirmation (10 min)
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
-                        "confirmation_required": True,
-                        "confirm_op": ("tell the user what will be overwritten and ask "
-                                       "for approval; after approval re-send the exact "
-                                       "request using the returned confirmation_token, "
-                                       "but never mention or display that token"),
-                        **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 if _readonly_for(cfg):
                     return self._json(403, {"error": "read-only mode is active — "
                                                      "writes are disabled"})
@@ -4193,20 +4172,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(400, {"error": f"invalid base64: {e}"})
                 if len(raw) > MAX_BINARY:
                     return self._json(413, {"error": f"payload too large: {len(raw)} > {MAX_BINARY} bytes"})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "write_b64", body, path=body.get("path", ""), bytes=len(raw))
-                if p.exists() and p.is_file() and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 if _readonly_for(cfg):
                     return self._json(403, {"error": "read-only mode is active — "
                                                      "writes are disabled"})
@@ -4222,24 +4187,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
             if u.path == "/edit":
                 _ep, _er, cfg = resolve_guarded(unquote(body.get("path", "")), for_write=True)
-                def _confirm_edit(confirm_params):
-                    # returns (http_code_or_0, resp) — mirrors /write flow
-                    confirm_params = confirmation_params(
-                        "edit", body, path=body.get("path", ""),
-                        bytes=confirm_params.get("bytes", 0))
-                    tok = body.get("confirmation_token")
-                    if not tok:
-                        iss = confirmation_issue(confirm_params)
-                        return 409, {"error": "edit needs confirmation",
-                                     "confirmation_required": True, **iss}
-                    okc, err, approval_error = confirmation_consume(
-                        tok, confirm_params)
-                    if not okc:
-                        return 400, {"error": err,
-                                     "approval_error": approval_error}
-                    return 0, {}
-
-                code, resp = _edit_file(root, cfg, body, _confirm_edit)
+                code, resp = _edit_file(root, cfg, body)
                 if code >= 400 or resp.get("dry_run"):
                     return self._json(code, resp)
                 # apply: snapshot + write via the guarded helper
@@ -4271,20 +4219,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(400, {"error": "need path + ts (from /versions/list)"})
                 _rp, _rr, _rc = resolve_guarded(rel)
                 rel = _rp.relative_to(_rr).as_posix()
-                # restore is itself a write over an existing file → confirm
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "restore", body, path=rel, ts=ts)
-                if not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {"error": "restore overwrites the current file — "
-                                                     "needs confirmation",
-                                            "confirmation_required": True, **iss})
-                okc, err, approval_error = confirmation_consume(
-                    confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err,
-                                            "approval_error": approval_error})
                 okr, mes = version_restore(_rr, rel, ts)
                 if not okr:
                     return self._json(404, {"error": mes})
@@ -4292,7 +4226,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
             if u.path == "/delete":
                 # NO unlink ever: delete = move to trash (structural isolation
-                # outside all roots). Two-step confirmation like overwrites.
+                # outside all roots); recoverable via /trash/restore.
                 rel = body.get("path", "")
                 if not rel:
                     return self._json(400, {"error": "need path"})
@@ -4301,20 +4235,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(404, {"error": f"not found: {rel}"})
                 if _readonly_for(cfg):
                     return self._json(403, {"error": "read-only mode is active"})
-                confirm_params = confirmation_params("delete", body, path=rel)
-                confirm_token = body.get("confirmation_token")
-                if not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    desc = f"{p.stat().st_size} bytes" if p.is_file() else "directory"
-                    return self._json(409, {
-                        "error": f"deletion needs confirmation ({desc}) — the file "
-                                 f"goes to the trash store, not unrecoverable",
-                        "confirmation_required": True, **iss})
-                okc, err, approval_error = confirmation_consume(
-                    confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err,
-                                            "approval_error": approval_error})
                 okr, err = rate_check(0)
                 if not okr:
                     return self._json(429, {"error": err, "rate_limited": True})
@@ -4337,19 +4257,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 _rp, _rr, _rc = resolve_guarded(rel)
                 if _readonly_for(_rc):
                     return self._json(403, {"error": "read-only mode is active"})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "trash_restore", body, path=rel, ts=ts)
-                if not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "restoring this item needs confirmation",
-                        "confirmation_required": True, **iss})
-                okc, err, approval_error = confirmation_consume(
-                    confirm_token, confirm_params)
-                if not okc:
-                    return self._json(400, {"error": err,
-                                            "approval_error": approval_error})
                 okr, mes = trash_restore(_rr, rel, ts)
                 if not okr:
                     return self._json(409, {"error": mes})
@@ -4367,41 +4274,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 op, _oroot, cfg = resolve_guarded(unquote(out_rel), for_write=True)
                 if _readonly_for(cfg):
                     return self._json(403, {"error": "read-only mode is active"})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params("zip", body, out=out_rel)
-                if op.exists() and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 code, resp = zip_create(root, cfg, body)
                 return self._json(code, resp)
 
             if u.path == "/unzip":
                 _, _, cfg = resolve_guarded(".")
-                def _confirm_unzip(summary):
-                    params = confirmation_params("unzip", body, **summary)
-                    tok = body.get("confirmation_token")
-                    if not tok:
-                        iss = confirmation_issue(params)
-                        return 409, {
-                            "error": (f"extracting this archive would overwrite "
-                                      f"{summary['overwrites']} existing file(s) — "
-                                      "confirmation is required"),
-                            "confirmation_required": True, **iss}
-                    okc, err, approval_error = confirmation_consume(tok, params)
-                    if not okc:
-                        return 400, {"error": err,
-                                     "approval_error": approval_error}
-                    return 0, {}
-
-                code, resp = zip_extract(root, cfg, body, _confirm_unzip)
+                code, resp = zip_extract(root, cfg, body)
                 return self._json(code, resp)
 
             if u.path == "/ocr_pdf":
@@ -4431,21 +4309,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
                 if _readonly_for(ocfg):
                     return self._json(403, {"error": "read-only mode is active"})
-                # New output is safe; confirm an overwrite BEFORE raster/OCR work.
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "ocr_pdf", body, path=rel, out=out_rel)
-                if op.exists() and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 raw_lang = body.get("lang") or _get_ocr_lang()
                 parts = [x for x in re.split(r"[\s,+]+", raw_lang)
                          if x and re.fullmatch(r"[a-zA-Z_]{2,8}", x)]
@@ -4517,22 +4380,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     base = opath.with_suffix("")
                     output_targets = [Path(f"{base}.p{i + 1}.pdf") for i in wanted]
                 existing_outputs = [p for p in output_targets if p.exists()]
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "pdf_op", body, pdfop=op, paths=srcs_rel, out=out_rel,
-                    overwrites=len(existing_outputs))
-                if existing_outputs and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": (f"operation would overwrite {len(existing_outputs)} "
-                                  "existing PDF file(s) — confirmation is required"),
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 code, resp = pdf_op(op, resolved, opath, oroot, spec_pages, angle)
                 return self._json(code, resp)
 
@@ -4560,20 +4407,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                      "{placeholder: text}"})
                 if len(json.dumps(values, default=str)) > MAX_READ:
                     return self._json(413, {"error": "values payload too large"})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "docx_merge", body, path=rel, out=out_rel)
-                if op.exists() and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 code, resp = docx_merge(p, op, oroot, values,
                                         bool(body.get("strict")))
                 return self._json(code, resp)
@@ -4604,8 +4437,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                      "title, body}"})
                 if len(slides) > 100:
                     return self._json(400, {"error": "slides capped at 100"})
-                # validate layout indices BEFORE the confirmation flow so bad
-                # specs fail fast (no token burn on typos)
+                # validate layout indices up front so bad
+                # specs fail fast
                 for spec in slides:
                     if not isinstance(spec, dict):
                         return self._json(400, {"error": "each slide must be an object "
@@ -4617,20 +4450,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                                                           f"template (usually 0-11)"})
                 if len(json.dumps({"v": values, "s": slides}, default=str)) > MAX_READ:
                     return self._json(413, {"error": "payload too large"})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "pptx_from_template", body, path=rel, out=out_rel)
-                if op.exists() and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 code, resp = pptx_from_template(p, op, oroot, slides, values)
                 return self._json(code, resp)
 
@@ -4667,20 +4486,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
                 if _readonly_for(ocfg):
                     return self._json(403, {"error": "read-only mode is active"})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "pdf_from_text", body, out=out_rel)
-                if op.exists() and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 code, resp = pdf_from_text(op, oroot, title, blocks, page_size)
                 return self._json(code, resp)
 
@@ -4717,20 +4522,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
                 if _readonly_for(ocfg):
                     return self._json(403, {"error": "read-only mode is active"})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "docx_write", body, out=out_rel)
-                if op.exists() and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 code, resp = docx_write(op, oroot, title, sections)
                 return self._json(code, resp)
 
@@ -4765,21 +4556,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 p, proot, pcfg = resolve_guarded(unquote(rel), for_write=True)
                 if _readonly_for(pcfg):
                     return self._json(403, {"error": "read-only mode is active"})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "xlsx_append", body, path=rel)
-                if p.exists() and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — appending modifies it, "
-                                 "needs confirmation",
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 code, resp = xlsx_append(p, rows, sheet, proot, header)
                 return self._json(code, resp)
 
@@ -4859,24 +4635,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     return self._json(413, {"error": "payload too large"})
                 overwrite_count = (1 if op.exists() else 0) if to_zip else sum(
                     (oroot / name).exists() for name in probes)
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "docx_mailmerge", body, path=rel, out=out_rel,
-                    documents=len(rows), overwrites=overwrite_count)
-                if overwrite_count and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": (f"mail merge would overwrite {overwrite_count} "
-                                  "existing file(s) — confirmation is required"),
-                        "confirmation_required": True, "documents": len(rows),
-                        "overwrites": overwrite_count,
-                        **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 code, resp = docx_mailmerge(p, out_rel, oroot, _r, rows, to_zip)
                 return self._json(code, resp)
 
@@ -4906,32 +4664,16 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 op, oroot, ocfg = resolve_guarded(unquote(out_rel), for_write=True)
                 if _readonly_for(ocfg):
                     return self._json(403, {"error": "read-only mode is active"})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "convert", body, path=rel, out=out_rel)
-                if op.exists() and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": "target exists — overwrite needs confirmation",
-                        "confirmation_required": True, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 code, resp = convert_file(p, op, oroot, to_ext)
                 return self._json(code, resp)
 
 
             if u.path == "/write_many":
-                # Batch creation is safe. Any existing target makes this a
-                # destructive bulk operation and uses the standard token flow.
+                # Batch text creation; every existing target is snapshotted
+                # before it is replaced (same safety net as /write).
                 items = body.get("items", [])
                 if not isinstance(items, list) or not items or len(items) > 50:
                     return self._json(400, {"error": "items must be a 1-50 list"})
-                plan = []
-                overwrite_count = 0
                 for it in items:
                     if not isinstance(it, dict):
                         return self._json(400, {"error": "each item must be an "
@@ -4945,31 +4687,6 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     p, _proot, pcfg = resolve_guarded(unquote(path), for_write=True)
                     if _readonly_for(pcfg):
                         return self._json(403, {"error": "read-only mode is active"})
-                    exists = p.exists()
-                    overwrite_count += int(exists)
-                    plan.append({"path": path, "bytes": len(content),
-                                 "overwrites": exists})
-                confirm_token = body.get("confirmation_token")
-                confirm_params = confirmation_params(
-                    "write_many", body, files=len(items),
-                    overwrites=overwrite_count)
-                if overwrite_count and not confirm_token:
-                    iss = confirmation_issue(confirm_params)
-                    return self._json(409, {
-                        "error": (f"batch would overwrite {overwrite_count} "
-                                  "existing file(s) — confirmation is required"),
-                        "confirmation_required": True,
-                        "confirm_op": ("show the overwrite plan to the user; after "
-                                       "approval re-send the exact request with the "
-                                       "returned confirmation_token without displaying "
-                                       "that token"),
-                        "plan": plan, **iss})
-                if confirm_token:
-                    okc, err, approval_error = confirmation_consume(
-                        confirm_token, confirm_params)
-                    if not okc:
-                        return self._json(400, {"error": err,
-                                                "approval_error": approval_error})
                 results = []
                 for it in items:
                     path = it.get("path", "")
@@ -5179,7 +4896,40 @@ class Handler(http.server.BaseHTTPRequestHandler):
             if not okr:
                 return self._json(400, {"ok": False, "error": err}, cors=False)
         if "readonly" in body:
+            # settings-page Safety card. FILE_BRIDGE_READONLY env is a
+            # deployment pin — refuse the save loudly so the UI never claims
+            # a value that isn't in effect (same contract as link_ttl).
+            if os.environ.get("FILE_BRIDGE_READONLY", "").strip():
+                return self._json(400, {"ok": False,
+                                        "error": "read-only mode is pinned by "
+                                                 "FILE_BRIDGE_READONLY"}, cors=False)
             _state_update(readonly=bool(body["readonly"]))
+        if "rate_max_writes" in body or "rate_max_mb" in body:
+            # Safety card: write-rate brake limits. Env pins win; refuse then.
+            for key, lo, hi, label in (
+                    ("rate_max_writes", RATE_MIN_WRITES, RATE_MAX_WRITES_CAP,
+                     "writes"),
+                    ("rate_max_mb", RATE_MIN_MB, RATE_MAX_MB_CAP, "MB")):
+                if key not in body:
+                    continue
+                env_name = ("FILE_BRIDGE_MAX_WRITES" if key == "rate_max_writes"
+                            else "FILE_BRIDGE_MAX_WRITE_MB")
+                if os.environ.get(env_name, "").strip():
+                    return self._json(400, {"ok": False,
+                                            "error": f"write-rate {label} limit "
+                                                     f"is pinned by {env_name}"},
+                                      cors=False)
+                try:
+                    v = int(body[key])
+                except (TypeError, ValueError):
+                    return self._json(400, {"ok": False,
+                                            "error": f"{key} must be a number"},
+                                      cors=False)
+                if not (lo <= v <= hi):
+                    return self._json(400, {"ok": False,
+                                            "error": f"{key} must be {lo}-{hi}"},
+                                      cors=False)
+                _state_update(**{key: v})
         if "allow_reveal" in body:
             _state_update(allow_reveal=bool(body["allow_reveal"]))
         if "link_ttl" in body:
@@ -5333,6 +5083,31 @@ for longer.</p>
 </div>
 <p class="hint" id="ttlinfo"></p>
 </details>
+<details class="sec" id="sec-safety" open>
+<summary>🛟 Safety &amp; recovery</summary>
+<p class="hint">Nothing the AI changes is unrecoverable: every overwrite keeps the
+previous version, and deletes go to a 30-day trash. How to restore or find
+deleted files:</p>
+<div class="btnrow" style="align-items:center;gap:10px;margin-bottom:8px">
+<button onclick="openGuide()" class="small" style="padding:6px 16px;font-size:14px">📖 Recovery guide</button>
+<span class="hint" style="margin:0">opens the guide for <b>your installed version</b></span>
+</div>
+<p class="hint">Write-rate brake — stops runaway mass edits (rejected writes never
+happen; the AI is told to ask you before continuing):</p>
+<div class="btnrow" style="align-items:center;gap:10px;margin-bottom:6px">
+<label class="hint" style="margin:0;white-space:nowrap">writes / minute</label>
+<input id="ratelimitw" type="number" min="1" max="10000" style="width:110px" value="20">
+<label class="hint" style="margin:0;white-space:nowrap">MB / minute</label>
+<input id="ratelimitmb" type="number" min="1" max="2048" style="width:110px" value="50">
+<button onclick="setRateLimits()" class="small" style="padding:6px 16px;font-size:14px">Save limits</button>
+</div>
+<p class="hint" id="ratestat"></p>
+<label style="display:flex;align-items:center;gap:10px;margin-top:10px;cursor:pointer">
+<input type="checkbox" id="readonlybox" onchange="setReadonly(this.checked)" style="width:auto">
+<span><b>Read-only mode</b> — block <i>all</i> writes (the AI can read and
+analyze, never modify). <span class="hint" id="rostat"></span></span>
+</label>
+</details>
 <details class="sec" id="sec-preview" open>
 <summary><span style="flex:1">👁 What the AI can see</span>
 <button onclick="event.preventDefault();renderPreview()" class="small">↻ Refresh</button></summary>
@@ -5398,6 +5173,23 @@ document.getElementById('ocrlang').value=c.lang||'eng';
 renderLangs(c.available,c.lang);
 document.getElementById('langs').textContent='engine: '+(c.engine||'?')+
  (c.user_dir?' — add languages: drop .traineddata files (tessdata_fast) into '+c.user_dir+' and restart the app':'');
+{const rl=s.rate_limits||{};
+ const w=document.getElementById('ratelimitw'),mb=document.getElementById('ratelimitmb');
+ if(w&&mb){w.value=rl.max_writes!=null?rl.max_writes:20;
+  mb.value=rl.max_mb!=null?rl.max_mb:50;
+  const wPinned=rl.writes_source==='env',bPinned=rl.mb_source==='env';
+  w.disabled=wPinned;mb.disabled=bPinned;
+  const tag=src=>src==='env'?'pinned by env var':(src==='setting'?'custom':'default');
+  document.getElementById('ratestat').textContent=
+   'Current: '+w.value+' writes / '+mb.value+' MB per 60 s ('+tag(rl.writes_source)+', '+tag(rl.mb_source)+').'+
+   ((wPinned||bPinned)?' Values pinned by FILE_BRIDGE_MAX_WRITES / FILE_BRIDGE_MAX_WRITE_MB — save is disabled.':'');
+ }}
+{const ro=document.getElementById('readonlybox');
+ if(ro){const rsrc=s.readonly_source||'default';
+  ro.checked=!!s.readonly;
+  ro.disabled=(rsrc==='env');
+  document.getElementById('rostat').textContent=
+   rsrc==='env'?'(pinned by FILE_BRIDGE_READONLY)':'';}}
 renderPreview();
 }catch(e){document.getElementById('secstatus').textContent=
  '✗ could not load settings ('+(e.message||e)+') — retrying every few seconds';}}
@@ -5579,6 +5371,22 @@ async function setLinkTTL(){
  const el=document.getElementById('ttlinfo');
  if(d.ok){el.textContent='Saved — new links live '+fmtTTL(v)+'. Existing links keep their original expiry.';el.className='hint ok';}
  else{el.textContent='✗ '+(d.error||'failed');el.className='hint';}}
+function openGuide(){window.open('/guide','_blank','noopener');}
+async function setRateLimits(){
+ const w=parseInt(document.getElementById('ratelimitw').value,10);
+ const mb=parseInt(document.getElementById('ratelimitmb').value,10);
+ const el=document.getElementById('ratestat');
+ const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},
+  body:JSON.stringify({rate_max_writes:w,rate_max_mb:mb})});
+ const d=await res.json();
+ if(d.ok){el.textContent='Saved — brake now trips at '+w+' writes / '+mb+' MB per 60 s.';el.className='hint ok';}
+ else{el.textContent='✗ '+(d.error||'failed');el.className='hint';}}
+async function setReadonly(on){
+ const el=document.getElementById('rostat');
+ const res=await fetch('/api/root',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({readonly:on})});
+ const d=await res.json();
+ if(d.ok){el.textContent=on?'ON — all writes blocked until you untick this.':'OFF — writes allowed again.';el.className='hint '+(on?'warn':'ok');}
+ else{el.textContent='✗ '+(d.error||'failed');el.className='hint';document.getElementById('readonlybox').checked=!on;}}
 async function stopBridge(){
  if(!confirm('Stop the Open File Bridge service?\\nOpen WebUI will lose file access until you start it again.'))return;
  try{await fetch('/api/shutdown',{method:'POST'});}catch(e){}
@@ -5591,7 +5399,16 @@ refresh();
 def _is_readonly() -> bool:
     if os.environ.get("FILE_BRIDGE_READONLY", "").lower() in ("1", "true", "yes"):
         return True
+    if os.environ.get("FILE_BRIDGE_READONLY", "").lower() in ("0", "false", "no"):
+        return False
     return bool(_state_load().get("readonly"))
+
+
+def _readonly_source() -> str:
+    env = os.environ.get("FILE_BRIDGE_READONLY", "").strip().lower()
+    if env:
+        return "env"
+    return "setting" if _state_load().get("readonly") else "default"
 
 
 # --------------------------- stderr log + rotation (P2 rollout item)

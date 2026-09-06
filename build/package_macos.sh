@@ -41,6 +41,13 @@ for asset in wheels tessdata; do
   fi
 done
 
+# Recovery guide (settings page links to /guide, served from disk): same
+# Resources layout as the other data assets.
+if [ -f docs/recovery-guide.html ]; then
+  mkdir -p "$APP/Contents/Resources/docs"
+  cp docs/recovery-guide.html "$APP/Contents/Resources/docs/"
+fi
+
 # App icon (build/appicon.icns — see docs/BUILDING.md to regenerate)
 if [ -f build/appicon.icns ]; then
   cp build/appicon.icns "$APP/Contents/Resources/appicon.icns"

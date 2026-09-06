@@ -50,6 +50,8 @@ jobs:
         run: |
           Copy-Item -Recurse src\wheels dist\OpenFileBridge\wheels
           Copy-Item -Recurse src\tessdata dist\OpenFileBridge\tessdata
+          New-Item -ItemType Directory -Force dist\OpenFileBridge\docs | Out-Null
+          Copy-Item docs\recovery-guide.html dist\OpenFileBridge\docs\
 
       - name: Smoke test (Windows)
         if: runner.os == 'Windows'
@@ -244,6 +246,12 @@ jobs:
         if: runner.os == 'Linux'
         run: pyinstaller --onefile --name OpenFileBridge --noconfirm src/file_bridge.py
 
+      - name: Bundle frozen assets (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          mkdir -p dist/docs
+          cp docs/recovery-guide.html dist/docs/
+
       - name: Smoke test (Linux)
         if: runner.os == 'Linux'
         run: |
@@ -279,5 +287,7 @@ jobs:
         uses: actions/upload-artifact@v6
         with:
           name: ${{ matrix.artifact }}
-          path: dist/OpenFileBridge
+          path: |
+            dist/OpenFileBridge
+            dist/docs/
           if-no-files-found: error

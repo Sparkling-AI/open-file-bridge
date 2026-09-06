@@ -84,12 +84,14 @@ every layer below before touching a file:
 - **L3 Filesystem gate** — exactly ONE user-chosen folder; `../` traversal
   rejected, symlink components refused, credential-looking filenames
   (`id_rsa`, `.env`, `*.pem`…) blocked outright.
-- **L4 Operation semantics** — creating new files needs no confirmation;
-  overwrites, deletes, restores, and destructive bulk operations require a
-  409 approval round trip. Its internal token is single-use, valid for about
-  10 minutes, and bound to the exact request payload. Every overwrite
-  snapshots the prior version; deletes are trash-moves (purge is 403 by
-  design); JSONL audit log with secret scrubbing; optional read-only mode.
+- **L4 Operation semantics** — writes execute immediately; recovery is
+  structural, not prompt-based. Every overwrite snapshots the prior version
+  first; deletes are trash-moves (purge is 403 by design); restores are
+  themselves snapshotted. JSONL audit log with secret scrubbing; optional
+  read-only mode; write-rate breaker. Users can browse versions/trash via
+  chat and tune the brake + read-only mode on the settings page's
+  🛟 Safety card, which links a built-in recovery guide (`/guide`, shipped
+  per-version in every package).
 
 Current Open WebUI `:main` builds run Pyodide in a sandboxed iframe
 (`Origin: null`) — use tier-2 token mode there. Details, upgrade

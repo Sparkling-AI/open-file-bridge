@@ -1,11 +1,18 @@
 #!/usr/bin/env python3
-"""Static regression checks for the chat-side approval contract."""
+"""Static regression checks for the chat-side write contract (skill 2.11).
+
+Skill 2.11 removed the chat-side approval round trip entirely: writes are
+committed in the same turn, safety comes from bridge-side snapshots + trash.
+This suite pins that contract: no pending-write globals, no approval
+helpers, no token plumbing, deterministic-zip recipe intact, and the
+discovery description still carries the bridge-only safety invariant.
+"""
 
 import ast
 import io
-from pathlib import Path
 import re
 import zipfile
+from pathlib import Path
 
 
 REPO = Path(__file__).resolve().parents[1]
@@ -48,24 +55,45 @@ def main() -> None:
         assert "requests involving the user's local" in published_description
         assert "MUST-CALL before acting" in published_description
         assert "successful bridge response confirms" in published_description
-        assert "skill v2.10.1" in text, name
-        assert 'PENDING_BRIDGE_WRITE = globals().get("PENDING_BRIDGE_WRITE")' in text, name
-        assert "async def bridge_commit_approved():" in text, name
-        assert 'if k != "confirmation_token"' in text, name
-        assert "STOP and ask the user for approval" in text, name
-        assert "Only `approval_error: expired` means" in text or \
-               "`approval_error: expired`" in text, name
+        assert "skill v2.11" in text, name
+
+        # --- the removed approval machinery must STAY removed ---
+        assert "PENDING_BRIDGE_WRITE" not in text, name
+        assert "bridge_commit_approved" not in text, name
+        assert "confirmation_token" not in text, name
+        assert "approval_error" not in text, name
+        assert "STOP and ask the user for approval" not in text, name
+
+        # --- the new snapshot-based safety contract ---
+        assert "snapshot" in text, name
+        assert "/versions/restore" in text, name
+        assert "/trash/restore" in text, name
+
+        # --- every python block still parses ---
+        for i, block in enumerate(re.findall(
+                r"```python\n(.*?)```", text, re.DOTALL)):
+            lines = []
+            for line in block.splitlines():
+                # allow the documented pseudo-placeholder as a no-op body
+                if "<install block above>" in line:
+                    lines.append(line.replace("<install block above>", "pass"))
+                else:
+                    lines.append(line)
+            try:
+                ast.parse("\n".join(lines))
+            except SyntaxError as e:
+                raise AssertionError(f"{name} python block #{i}: {e}") from e
 
     for name in ("SKILL-STRICT.md", "SKILL-STRICT-TOKEN.md"):
         text = (SKILL_DIR / name).read_text(encoding="utf-8")
         assert "for name, data in sorted(parts.items()):" in text, name
         assert "zipfile.ZipInfo(name, (1980, 1, 1, 0, 0, 0))" in text, name
-        assert "Do not rebuild the document." in text, name
+        assert "build it ONCE and reuse the same bytes" in text, name
 
     parts = {"word/document.xml": "<doc>same</doc>", "_rels/.rels": "<rels/>"}
     assert build_deterministic_zip(parts) == build_deterministic_zip(parts)
 
-    print("skill approval contract: PASS")
+    print("skill write contract: PASS")
 
 
 if __name__ == "__main__":

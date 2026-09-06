@@ -32,7 +32,7 @@ Deep-dive notes: RESEARCH-openworker.md · RESEARCH-owui-ecosystem.md ·
 | RiskClass per endpoint (P3) | openworker | `coworker/risk.py` | enum + classify + override-floor mechanism |
 | Hash cache for /pdf_text,/ocr (P2) | openworker | `coworker/pdf_support.py` | `_cached(key=(sha256,op))` LRU pattern, replay rationale |
 | PDF mode=text\|images (P2) | openworker | `coworker/pdf_support.py` | pypdf extract vs pypdfium2 raster@2x, RASTER_MAX_PAGES=100 |
-| Confirmation tokens (P0) | owui openapi-servers | `servers/filesystem/main.py` L147-197, L392-491 | 60s token, .pending_confirmations.json, params match check |
+| ~~Confirmation tokens~~ (REMOVED 2.11 — replaced by snapshot-first writes; see DEVNOTES) | owui openapi-servers | `servers/filesystem/main.py` L147-197 | historical pattern only |
 | /edit dry-run diff (P1) | owui openapi-servers | `servers/filesystem/main.py` L254-301 | multi-replacement, dry_run, unified diff output |
 | /search params (P1) | owui openapi-servers | `servers/filesystem/main.py` L363-387, L563-596 | context lines, file pattern, exclusions, case-insensitive |
 | Preset two-switch config | owui | `src/lib/components/chat/Chat.svelte` L1075-1089 | capabilities.code_interpreter AND defaultFeatureIds — regression-test on upgrades |

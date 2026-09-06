@@ -265,60 +265,44 @@ check "peek on office zip"     'office'         "$(curl -s "$BRIDGE/peek?path=mo
 check "peek unknown kind"      '"kind": *"unknown"' "$(curl -s "$BRIDGE/peek?path=doc.dat" $T)"
 check "peek printable ratio"   'printable_ratio' "$(curl -s "$BRIDGE/peek?path=notes.txt" $T)"
 
-# ---------- snapshots + confirmation tokens (P0 #4) ----------
-# first write to a NEW file: no confirmation needed
+# ---------- snapshots (P0 #4; approval round trip removed in 2.11) ----------
+# first write to a NEW file
 check "write new file ok"     '"ok": *true'   "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v1"}')"
-# overwrite WITHOUT token → 409 + token
-OW=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
-check "overwrite demands confirm" 'confirmation_required' "$OW"
-check "approval window is 10 minutes" '"expires_in": *600' "$OW"
-check "approval required has machine code" '"approval_error": *"required"' "$OW"
-CT=$(echo "$OW" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-# overwrite with WRONG params (same content length) → exact-payload mismatch
-# token was consumed by the failed attempt → now invalid
-CPM=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v3\",\"confirmation_token\":\"$CT\"}")
-check "approval binds exact payload" 'requested action changed' "$CPM"
-check "changed approval has machine code" '"approval_error": *"payload_changed"' "$CPM"
-CPM2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT\"}")
-check "approval is one-shot" 'approval is no longer valid' "$CPM2"
-check "consumed approval has invalid code" '"approval_error": *"invalid"' "$CPM2"
-# Force one pending grant to expire without making the suite sleep 10 minutes.
-OW_EXP=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v4"}')
-CT_EXP=$(echo "$OW_EXP" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-python3 - "$STATEDIR/pending-confirmations.json" <<'PY'
-import json, pathlib, sys, time
-p = pathlib.Path(sys.argv[1])
-d = json.loads(p.read_text(encoding="utf-8"))
-for item in d.values():
-    item["expiry"] = time.time() - 1
-p.write_text(json.dumps(d), encoding="utf-8")
-PY
-# Issuing another grant must not erase the recent-expiry tombstone.
-curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v5"}' >/dev/null
-EXP=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v4\",\"confirmation_token\":\"$CT_EXP\"}")
-check "expired approval is explained plainly" 'approval window expired' "$EXP"
-check "expired approval has machine code" '"approval_error": *"expired"' "$EXP"
-if echo "$EXP" | grep -q 'confirmation token'; then echo "  FAIL: expired approval exposed token jargon"; fail=1; else echo "  PASS: expired approval hides token jargon"; fi
-OW2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
-CT2=$(echo "$OW2" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-W2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"content\":\"v2\",\"confirmation_token\":\"$CT2\"}")
-check "confirmed overwrite ok"  '"ok": *true'     "$W2"
+# overwrite executes IMMEDIATELY (no 409) and records a snapshot
+W2=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt","content":"v2"}')
+check "overwrite is immediate"  '"ok": *true'     "$W2"
 check "snapshot recorded"       '"snapshot": *{"ts"' "$W2"
+if echo "$W2" | grep -q 'confirmation_required'; then echo "  FAIL: 409 flow still present on /write"; fail=1; else echo "  PASS: no 409 on overwrite"; fi
+if echo "$W2" | grep -q 'confirmation_token'; then echo "  FAIL: token leaked into response"; fail=1; else echo "  PASS: no token in response"; fi
 check "v2 landed"               'v2'              "$(cat "$TESTDIR/snapme.txt")"
 # versions list shows metadata only
 VL=$(curl -s -X POST $BRIDGE/versions/list -H 'Content-Type: application/json' $T -d '{"path":"snapme.txt"}')
 check "versions list metadata"  '"path": *"snapme.txt"' "$VL"
 if echo "$VL" | grep -q '"content"'; then echo "  FAIL: version contents leaked"; fail=1; else echo "  PASS: versions are metadata-only"; fi
 VTS=$(echo "$VL" | python3 -c "import json,sys; print(json.load(sys.stdin)['versions'][0]['ts'])")
-# restore needs its own confirmation
-RV=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"ts\":\"$VTS\"}")
-check "restore demands confirm" 'confirmation_required' "$RV"
-RCT=$(echo "$RV" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-RCR=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"ts\":\"$VTS\",\"confirmation_token\":\"$RCT\"}")
-check "restore confirmed"       '"ok": *true' "$RCR"
+# restore executes immediately, snapshots current state first
+RCR=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"snapme.txt\",\"ts\":\"$VTS\"}")
+check "restore is immediate"    '"ok": *true' "$RCR"
 check "restore brought v1 back" 'v1'          "$(cat "$TESTDIR/snapme.txt")"
 # versions store is OUTSIDE the root
 if [ -d "$TESTDIR"/.fb-versions ]; then echo "  FAIL: versions inside root"; fail=1; else echo "  PASS: versions stored outside root"; fi
+
+# ---------- wheel-backed document writes (2.11 regression) ----------
+# The e2e bridge runs under plain python3 (pymupdf only): fpdf2/openpyxl are
+# NOT in the ambient interpreter. /pdf_from_text + /xlsx_append must still
+# work by loading the pure-Python wheels bundled in src/wheels/ (v2.10.1
+# 501'd here - "needs the fpdf2 add-on" - on every stock install).
+PF=$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' $T -d '{"out":"essay.pdf","title":"Curiosity","blocks":[{"style":"title","text":"An Essay on Curiosity"},{"style":"h1","text":"Introduction"},{"style":"body","text":"Curiosity is the engine of discovery. It asks why the sky is blue, why bread rises, why people act the way they do. Every answer opens a new question."}]}')
+check "pdf_from_text from bundled wheels" '"ok": *true' "$PF"
+head -c 5 "$TESTDIR/essay.pdf" | grep -q '%PDF-' && echo "  PASS: output is a real PDF" || { echo "  FAIL: not a PDF"; fail=1; }
+PF2=$(curl -s -X POST $BRIDGE/pdf_from_text -H 'Content-Type: application/json' $T -d '{"out":"essay.pdf","blocks":[{"style":"body","text":"second version"}]}')
+check "pdf_from_text overwrite immediate" '"ok": *true' "$PF2"
+check "pdf_from_text overwrite snapshot" '"snapshot": *{"ts"' "$PF2"
+if echo "$PF2" | grep -q 'fpdf2 add-on'; then echo "  FAIL: 501 add-on regression returned"; fail=1; else echo "  PASS: no 501 add-on error"; fi
+XA=$(curl -s -X POST $BRIDGE/xlsx_append -H 'Content-Type: application/json' $T -d '{"path":"wheel-log.xlsx","header":["when","event"],"rows":[["2026-09-06","created"]]}')
+check "xlsx_append from bundled wheels" '"ok": *true' "$XA"
+XR=$(curl -s "$BRIDGE/xlsx_read?path=wheel-log.xlsx" $T)
+check "xlsx_append output readable" 'created' "$XR"
 
 # ---------- multi-root + ignore lists + self-protection (P0b) ----------
 R2=$(mktemp -d); mkdir -p "$R2/other"
@@ -388,14 +372,12 @@ check "state-inside-root rejected" 'cannot\|error' "$SIR"
 curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d "{\"roots\":[{\"id\":\"main\",\"path\":\"$TESTDIR\",\"ignore\":[\".git/\",\"secrets/\",\"*.tmp\"]}]}" >/dev/null
 
 # ---------- trash + rate breaker + write_many + readonly (P0b) ----------
-# delete = trash-move with confirmation
+# delete = trash-move (immediate since 2.11)
 DEL=$(curl -s -X POST $BRIDGE/delete -H 'Content-Type: application/json' $T -d '{"path":"delme.txt"}' 2>/dev/null)
 echo "trash-me" > "$TESTDIR/delme.txt"
-DEL=$(curl -s -X POST $BRIDGE/delete -H 'Content-Type: application/json' $T -d '{"path":"delme.txt"}')
-check "delete demands confirm" 'confirmation_required' "$DEL"
-DT=$(echo "$DEL" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-DR=$(curl -s -X POST $BRIDGE/delete -H 'Content-Type: application/json' $T -d "{\"path\":\"delme.txt\",\"confirmation_token\":\"$DT\"}")
+DR=$(curl -s -X POST $BRIDGE/delete -H 'Content-Type: application/json' $T -d '{"path":"delme.txt"}')
 check "delete to trash ok"    '"trashed"'   "$DR"
+if echo "$DR" | grep -q 'confirmation_required'; then echo "  FAIL: 409 still present on delete"; fail=1; else echo "  PASS: delete is immediate"; fi
 if [ -e "$TESTDIR/delme.txt" ]; then echo "  FAIL: file not moved"; fail=1; else echo "  PASS: file gone from root"; fi
 if find "$STATEDIR/trash" -name delme.txt | grep -q delme; then echo "  PASS: in trash store"; else echo "  FAIL: not in trash store"; fail=1; fi
 # trash list metadata only + restore
@@ -403,27 +385,20 @@ TL=$(curl -s -X POST $BRIDGE/trash/list -H 'Content-Type: application/json' $T -
 check "trash lists entry"     '"path": *"delme.txt"' "$TL"
 TTS=$(echo "$TL" | python3 -c "import json,sys; print(json.load(sys.stdin)['trash'][0]['ts'])")
 TRS=$(curl -s -X POST $BRIDGE/trash/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"delme.txt\",\"ts\":\"$TTS\"}")
-check "trash restore needs approval" 'confirmation_required' "$TRS"
-TRT=$(echo "$TRS" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-TRS=$(curl -s -X POST $BRIDGE/trash/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"delme.txt\",\"ts\":\"$TTS\",\"confirmation_token\":\"$TRT\"}")
-check "trash restore approved" '"ok": *true' "$TRS"
+check "trash restore ok" '"ok": *true' "$TRS"
 check "trash restored content" 'trash-me'  "$(cat "$TESTDIR/delme.txt")"
 check "trash purge is local"  'settings-page' "$(curl -s -X POST $BRIDGE/trash/purge -H 'Content-Type: application/json' $T -d '{}')"
 
-# write_many small batch (≤5 → no confirmation)
+# write_many batch
 WM=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d '{"items":[{"path":"w1.txt","content":"a"},{"path":"w2.txt","content":"b"}]}')
 check "write_many small ok"   '"ok": *true' "$WM"
 check "write_many landed"     'a'           "$(cat "$TESTDIR/w1.txt")"
-# write_many all-new batch has no confirmation, regardless of batch size
 python3 -c "import json; print(json.dumps({'items':[{'path':f'b{i}.txt','content':'x'} for i in range(7)]}))" > /tmp/many.json
 WMB=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d @/tmp/many.json)
 check "write_many all-new batch ok" '"ok": *true' "$WMB"
-# Any existing target makes the batch destructive and requires approval.
-WMO=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d '{"items":[{"path":"w1.txt","content":"updated"},{"path":"w3.txt","content":"new"}]}')
-check "write_many overwrite needs approval" 'confirmation_required' "$WMO"
-WMT=$(echo "$WMO" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-WMOC=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d "{\"items\":[{\"path\":\"w1.txt\",\"content\":\"updated\"},{\"path\":\"w3.txt\",\"content\":\"new\"}],\"confirmation_token\":\"$WMT\"}")
-check "write_many overwrite approved" '"ok": *true' "$WMOC"
+# Mixed new+overwrite batch executes immediately; replaced files are snapshotted.
+WMOC=$(curl -s -X POST $BRIDGE/write_many -H 'Content-Type: application/json' $T -d '{"items":[{"path":"w1.txt","content":"updated"},{"path":"w3.txt","content":"new"}]}')
+check "write_many overwrite immediate" '"ok": *true' "$WMOC"
 check "write_many overwrite snapshot" '"snapshot": *{' "$WMOC"
 
 # readonly mode blocks writes
@@ -431,7 +406,35 @@ curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"reado
 check "readonly blocks write" 'read-only mode' "$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"ro.txt","content":"x"}')"
 check "readonly blocks delete" 'read-only mode' "$(curl -s -X POST $BRIDGE/delete -H 'Content-Type: application/json' $T -d '{"path":"delme.txt"}')"
 check "readonly allows read"  'test content'  "$(curl -s "$BRIDGE/read?path=notes.txt" $T)"
+check "readonly state source" '"readonly_source": *"setting"' "$(curl -s $BRIDGE/state)"
 curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"readonly":false}' >/dev/null
+
+# ---------- safety card (2.11): adjustable rate limits + guide ----------
+# NOTE: this suite's bridge runs with FILE_BRIDGE_MAX_WRITES=500 pinned (see
+# start), so the SETTING path is env-refused here — which is exactly what we
+# assert. The setting path itself is live-verified against a clean instance.
+check "rate env pin reported"  '"writes_source": *"env"' "$(curl -s $BRIDGE/state)"
+check "rate save refused under pin" 'pinned by FILE_BRIDGE_MAX_WRITES' "$(curl -s -X POST $BRIDGE/api/root -H 'Content-Type: application/json' -d '{"rate_max_writes":33}')"
+# clean instance: defaults -> setting persists; range + junk guards
+PORT2=$((PORT_NUM+1))
+STATEDIR2=$(mktemp -d); BRK2DIR=$(mktemp -d)
+FILE_BRIDGE_STATE_DIR="$STATEDIR2" FILE_BRIDGE_PORT="$PORT2" FILE_BRIDGE_NO_UI=1 $BRIDGE_CMD "$BRK2DIR" >/dev/null 2>&1 &
+B2=$!
+for _ in $(seq 1 40); do curl -sf -m 2 "http://127.0.0.1:$PORT2/health" >/dev/null 2>&1 && break; sleep 0.5; done
+B2URL="http://127.0.0.1:$PORT2"
+check "rate defaults reported"   '"writes_source": *"default"' "$(curl -s $B2URL/state)"
+RSET=$(curl -s -X POST $B2URL/api/root -H 'Content-Type: application/json' -d '{"rate_max_writes":33,"rate_max_mb":77}')
+check "rate limits saved"        '"ok": *true' "$RSET"
+RST=$(curl -s $B2URL/state)
+check "rate limit persisted"     '"max_writes": *33' "$RST"
+check "rate mb persisted"        '"max_mb": *77' "$RST"
+check "rate source setting"      '"writes_source": *"setting"' "$RST"
+check "rate junk refused"        'must be a number' "$(curl -s -X POST $B2URL/api/root -H 'Content-Type: application/json' -d '{"rate_max_writes":"lots"}')"
+check "rate range refused"       'must be 1-10000' "$(curl -s -X POST $B2URL/api/root -H 'Content-Type: application/json' -d '{"rate_max_writes":0}')"
+kill $B2 2>/dev/null
+# guide page served locally, version-matched
+check "guide served"         'Recovery &amp; Safety Guide' "$(curl -s $BRIDGE/guide)"
+check "guide is html"        'text/html' "$(curl -sI $BRIDGE/guide | tr -d '\r')"
 
 # rate circuit breaker: moved to END of script (needs its own low-limit
 # instance; see bottom).
@@ -521,11 +524,9 @@ ED=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"p
 check "edit dry-run diff"      'clause requires 30 days' "$(echo "$ED" | python3 -c "import json,sys; print(json.load(sys.stdin)['diff'])")"
 check "edit dry-run diff new"  'requires 60 days notice' "$(echo "$ED" | python3 -c "import json,sys; print(json.load(sys.stdin)['diff'])")"
 check "edit dry-run no write"  'termination clause requires 30 days notice' "$(cat "$TESTDIR/contract.txt")"
-ED2=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"30 days","new_text":"60 days"}]}')
-check "edit needs confirm"     'confirmation_required' "$ED2"
-ECT=$(echo "$ED2" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-ED3=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d "{\"path\":\"contract.txt\",\"edits\":[{\"old_text\":\"30 days\",\"new_text\":\"60 days\"}],\"confirmation_token\":\"$ECT\"}")
-check "edit applied"           '"ok": *true'   "$ED3"
+ED3=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"30 days","new_text":"60 days"}]}')
+check "edit applies immediately" '"ok": *true'   "$ED3"
+check "edit snapshot recorded"   '"snapshot": *{' "$ED3"
 check "edit landed"            '60 days'       "$(cat "$TESTDIR/contract.txt")"
 check "edit bad old_text"      'not found'     "$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"zzz-not-there","new_text":"x"}],"dry_run":true}')"
 
@@ -584,34 +585,26 @@ fi
 
 # ---------- atomic writes (P2): mode preserved, no tmp leftovers ----------
 chmod 640 "$TESTDIR/notes.txt" 2>/dev/null || true
-OWT=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"notes.txt","content":"v2 atomic"}')
-OCT=$(echo "$OWT" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
-OWM=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"content\":\"v2 atomic\",\"confirmation_token\":\"$OCT\"}")
-check "overwrite confirmed"  '"ok": *true' "$OWM"
+OWM=$(curl -s -X POST $BRIDGE/write -H 'Content-Type: application/json' $T -d '{"path":"notes.txt","content":"v2 atomic"}')
+check "overwrite immediate"  '"ok": *true' "$OWM"
 check "overwrite keeps mode" '600\|640' "$(stat_mode "$TESTDIR/notes.txt")"
 check "atomic write landed"  'v2 atomic'  "$(cat "$TESTDIR/notes.txt")"
 LEFT=$(find "$TESTDIR" -maxdepth 1 -name '.fb-tmp-*' -o -maxdepth 1 -name '.fb-restore-*' | wc -l | tr -d ' ')
 if [ "$LEFT" = "0" ]; then echo "  PASS: no temp files left behind"; else echo "  FAIL: $LEFT temp files left in root"; fail=1; fi
 # edit path also atomic + mode-preserving
 chmod 640 "$TESTDIR/contract.txt" 2>/dev/null || true
-EDM=$(curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"60 days","new_text":"90 days"}]}')
-ECT2=$(echo "$EDM" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
-curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d "{\"path\":\"contract.txt\",\"edits\":[{\"old_text\":\"60 days\",\"new_text\":\"90 days\"}],\"confirmation_token\":\"$ECT2\"}" >/dev/null
+curl -s -X POST $BRIDGE/edit -H 'Content-Type: application/json' $T -d '{"path":"contract.txt","edits":[{"old_text":"60 days","new_text":"90 days"}]}' >/dev/null
 if [ "$(stat_mode "$TESTDIR/contract.txt")" = "640" ]; then echo "  PASS: edit preserves mode"; else echo "  FAIL: edit changed mode to $(stat_mode "$TESTDIR/contract.txt")"; fail=1; fi
 check "edit atomic landed" '90 days' "$(cat "$TESTDIR/contract.txt")"
 # write_b64 preserves mode too
 chmod 640 "$TESTDIR/out.bin" 2>/dev/null || true
-OB=$(curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n x | base64)\"}")
-OBT=$(echo "$OB" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
-curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n x | base64)\",\"confirmation_token\":\"$OBT\"}" >/dev/null
+curl -s -X POST $BRIDGE/write_b64 -H 'Content-Type: application/json' $T -d "{\"path\":\"out.bin\",\"b64\":\"$(echo -n x | base64)\"}" >/dev/null
 if [ "$(stat_mode "$TESTDIR/out.bin")" = "640" ]; then echo "  PASS: write_b64 preserves mode"; else echo "  FAIL: write_b64 mode $(stat_mode "$TESTDIR/out.bin")"; fail=1; fi
 # versions/restore lands atomically with snapshot's mode
 VLN=$(curl -s -X POST $BRIDGE/versions/list -H 'Content-Type: application/json' $T -d '{"path":"notes.txt"}')
 VRT=$(echo "$VLN" | python3 -c "import json,sys; print(json.load(sys.stdin)['versions'][0]['ts'])")
-VRV=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"ts\":\"$VRT\"}")
-VRT2=$(echo "$VRV" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])" 2>/dev/null || echo "")
-RCR2=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"ts\":\"$VRT\",\"confirmation_token\":\"$VRT2\"}")
-check "restore confirmed (atomic)" '"ok": *true' "$RCR2"
+RCR2=$(curl -s -X POST $BRIDGE/versions/restore -H 'Content-Type: application/json' $T -d "{\"path\":\"notes.txt\",\"ts\":\"$VRT\"}")
+check "restore immediate (atomic)" '"ok": *true' "$RCR2"
 check "restore landed original" 'test content' "$(cat "$TESTDIR/notes.txt")"
 RPERM=$(stat_mode "$TESTDIR/notes.txt")
 if [ "$RPERM" = "640" ] || [ "$RPERM" = "600" ]; then echo "  PASS: restore preserves mode ($RPERM)"; else echo "  FAIL: restore mode $RPERM"; fail=1; fi
@@ -681,17 +674,12 @@ printf 'junk' > "$TESTDIR/pack/.DS_Store"   # must NOT reach any archive
 echo "loose" > "$TESTDIR/loose.txt"
 check "zip creates archive"   '"ok": *true'    "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack","loose.txt"],"out":"bundle.zip"}')"
 check "zip counts files"     '"files": *2'     "$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack"],"out":"p2.zip"}')"
-# Replacing an existing archive is an overwrite and needs approval.
-ZO=$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["loose.txt"],"out":"bundle.zip"}')
-check "zip overwrite needs approval" 'confirmation_required' "$ZO"
-ZOT=$(echo "$ZO" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-ZOC=$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d "{\"members\":[\"loose.txt\"],\"out\":\"bundle.zip\",\"confirmation_token\":\"$ZOT\"}")
-check "zip overwrite approved" '"ok": *true' "$ZOC"
+# Replacing an existing archive is immediate and snapshots the old one.
+ZOC=$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["loose.txt"],"out":"bundle.zip"}')
+check "zip overwrite immediate" '"ok": *true' "$ZOC"
 check "zip overwrite snapshot" '"snapshot": *{' "$ZOC"
 # Recreate the original multi-member archive for extraction checks.
-ZOR=$(curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack","loose.txt"],"out":"bundle.zip"}')
-ZORT=$(echo "$ZOR" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d "{\"members\":[\"pack\",\"loose.txt\"],\"out\":\"bundle.zip\",\"confirmation_token\":\"$ZORT\"}" >/dev/null
+curl -s -X POST $BRIDGE/zip -H 'Content-Type: application/json' $T -d '{"members":["pack","loose.txt"],"out":"bundle.zip"}' >/dev/null
 if command -v unzip >/dev/null; then
   check "zip readable"       'a.txt'  "$(unzip -l "$TESTDIR/bundle.zip" 2>/dev/null || echo NOMEMBER)"
 else
@@ -703,12 +691,9 @@ check "zip bad ext refused" 'must end in .zip' "$(curl -s -X POST $BRIDGE/zip -H
 check "unzip extracts"      '"files": *3'    "$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"bundle.zip","dest":"unpacked"}')"
 check "unzip file content"  'alpha'          "$(cat "$TESTDIR/unpacked/a.txt")"
 check "unzip dir member"    'beta'           "$(cat "$TESTDIR/unpacked/b.txt")"
-# Extracting again would overwrite files, so it needs approval and snapshots.
-UO=$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"bundle.zip","dest":"unpacked"}')
-check "unzip overwrite needs approval" 'confirmation_required' "$UO"
-UOT=$(echo "$UO" | python3 -c "import json,sys; print(json.load(sys.stdin)['confirmation_token'])")
-UOC=$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d "{\"path\":\"bundle.zip\",\"dest\":\"unpacked\",\"confirmation_token\":\"$UOT\"}")
-check "unzip overwrite approved" '"ok": *true' "$UOC"
+# Extracting again overwrites files — immediate, with snapshots.
+UOC=$(curl -s -X POST $BRIDGE/unzip -H 'Content-Type: application/json' $T -d '{"path":"bundle.zip","dest":"unpacked"}')
+check "unzip overwrite immediate" '"ok": *true' "$UOC"
 check "unzip overwrite snapshots" '"snapshots": *\[' "$UOC"
 # zip-slip: craft a malicious archive with ../ member
 python3 - "$TESTDIR/evil.zip" <<'PY'

@@ -101,9 +101,14 @@ python3 file_bridge.py ~/my-folder
 - Open File Bridge **only** exposes the **one folder** you selected. Nothing else.
   It's technically impossible for the AI to read outside it (path traversal is
   rejected server-side — tested).
-- Destructive operations are guarded: every overwrite/delete asks for
-  confirmation, snapshots previous versions first, and moves deleted files to
-  a trash folder instead of erasing them.
+- Nothing is silently lost: every overwrite snapshots the previous version
+  first, and deleted files move to a trash folder instead of being erased —
+  both restorable from the chat. Full instructions (with examples):
+  **🛟 Safety & recovery → 📖 Recovery guide** on the settings page, or
+  [docs/recovery-guide.html](recovery-guide.html) in the repo.
+- The settings page's **🛟 Safety & recovery** card also lets you tune the
+  write-rate brake (writes / MB per minute) and switch on **read-only mode**
+  to block all writes while keeping reads.
 - The service binds to `127.0.0.1` only — not reachable from your network or
   the internet, only from your own browser.
 - Every request is logged to a local audit file in the bridge's state folder.

@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open File Bridge — Recovery & Safety Guide</title>
+<style>
+:root{color-scheme:light}
+body{font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;max-width:760px;margin:0 auto;padding:28px 22px 60px;color:#1c2430;line-height:1.55}
+h1{font-size:1.65em;margin:.2em 0 .3em}
+h2{font-size:1.25em;margin-top:2em;border-bottom:2px solid #e8ecf1;padding-bottom:6px}
+h3{font-size:1.05em;margin:1.4em 0 .4em}
+p{margin:.6em 0}
+code{background:#eef1f5;padding:2px 6px;border-radius:4px;font-size:.92em;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace}
+pre{background:#f6f8fa;border:1px solid #e2e7ee;border-radius:8px;padding:12px 14px;overflow-x:auto;font-size:.86em;line-height:1.45}
+pre code{background:none;padding:0}
+blockquote{border-left:4px solid #2f6fed;background:#f2f6ff;margin:1em 0;padding:10px 16px;border-radius:0 8px 8px 0}
+blockquote p{margin:.3em 0}
+.badge{display:inline-block;background:#0a7d32;color:#fff;border-radius:20px;padding:2px 12px;font-size:.8em;font-weight:600;vertical-align:2px}
+.warn{border-left-color:#c2500d;background:#fdf4ec}
+table{border-collapse:collapse;width:100%;margin:1em 0;font-size:.94em}
+th,td{border:1px solid #dde3ea;padding:8px 10px;text-align:left;vertical-align:top}
+th{background:#f4f6f8}
+.hint{color:#5a6675;font-size:.92em}
+ul{margin:.5em 0 .9em;padding-left:1.4em}
+li{margin:.3em 0}
+.toc{background:#f4f6f8;border-radius:8px;padding:14px 20px;margin:1.2em 0}
+.toc a{color:#2456c4;text-decoration:none}
+.toc a:hover{text-decoration:underline}
+a{color:#2456c4}
+.answer{color:#0a7d32;font-weight:600}
+kbd{background:#fff;border:1px solid #c9d2dc;border-bottom-width:2px;border-radius:5px;padding:1px 7px;font-size:.85em;font-family:ui-monospace,monospace}
+</style>
+</head>
+<body>
+
+<h1>🛟 Open File Bridge — Recovery &amp; Safety Guide</h1>
+<p class="hint">What to do when the AI changed something you didn't want — every write in
+Open File Bridge is recoverable. This guide works for <b>v2.11 and newer</b>.</p>
+
+<div class="toc">
+<b>Contents</b>
+<ol>
+<li><a href="#how-it-works">How your files are protected</a></li>
+<li><a href="#restore-snapshot">Restore an older version of a file</a></li>
+<li><a href="#find-deleted">Find a deleted file (trash)</a></li>
+<li><a href="#ai-messed-up">“The AI messed up my file!” — full walkthrough</a></li>
+<li><a href="#regret-batch">“I regret the whole edit” — many files</a></li>
+<li><a href="#rate-breaker">The write-rate brake (why writes suddenly stop)</a></li>
+<li><a href="#safety-settings">Safety settings on the settings page</a></li>
+<li><a href="#storage">Where snapshots &amp; trash live, and their limits</a></li>
+<li><a href="#faq">FAQ</a></li>
+</ol>
+</div>
+
+<h2 id="how-it-works">1. How your files are protected</h2>
+
+<p>Every change the AI makes goes through the same three safety nets — <b>no
+change is ever unrecoverable</b>:</p>
+
+<table>
+<tr><th>What the AI does</th><th>What the bridge does first</th><th>How you undo it</th></tr>
+<tr><td>Overwrite / edit a file</td><td>Copies the current version to the <b>version history</b> (a “snapshot”)</td><td><code>Restore an older version</code> below</td></tr>
+<tr><td>Delete a file or folder</td><td>Moves it to the <b>trash</b> — nothing is erased</td><td><code>Find a deleted file</code> below</td></tr>
+<tr><td>Restore an old version</td><td>Snapshots the <i>current</i> version first (so restoring is itself undoable)</td><td>Same as a restore — just pick a newer timestamp</td></tr>
+<tr><td>Mass-edit many files</td><td>Each file is snapshotted individually + the <b>write-rate brake</b> caps the pace</td><td>Restore each file, or use your own backup for bulk reverts</td></tr>
+</table>
+
+<blockquote>
+<p><b>The one-liner to remember:</b> in chat, just say —</p>
+<p><i>“Show me the previous versions of <code>&lt;file&gt;</code> and restore the one from
+before the AI's edit.”</i></p>
+</blockquote>
+
+<h2 id="restore-snapshot">2. Restore an older version of a file</h2>
+
+<p>Every overwrite keeps the previous content. Two ways to get it back:</p>
+
+<h3>Option A — in chat (easiest)</h3>
+<p>Ask your assistant directly:</p>
+<pre><code>List the saved versions of reports/summary.docx.
+</code></pre>
+<p>It will call <code>/versions/list</code> and show you something like:</p>
+<pre><code>20260906-143205-a1b2   reports/summary.docx   14 KB   (2 hours ago)
+20260906-091511-c3d4   reports/summary.docx   11 KB   (today, morning)
+</code></pre>
+<p>Pick the one you want and say:</p>
+<pre><code>Restore 20260906-091511-c3d4 of reports/summary.docx
+</code></pre>
+<p><span class="answer">That's it.</span> The bridge restores it and — importantly —
+<b>snapshots the current content first</b>, so even the restore can be undone the
+same way.</p>
+
+<h3>Option B — with curl (no chat needed)</h3>
+<pre><code># 1) list snapshots (metadata only)
+curl -s -X POST http://127.0.0.1:8765/versions/list \
+  -H "Content-Type: application/json" \
+  -H "X-Bridge-Token: &lt;your token, if set&gt;" \
+  -d '{"path":"reports/summary.docx"}'
+
+# 2) restore the one you want (ts = timestamp from the list above)
+curl -s -X POST http://127.0.0.1:8765/versions/restore \
+  -H "Content-Type: application/json" \
+  -H "X-Bridge-Token: &lt;your token, if set&gt;" \
+  -d '{"path":"reports/summary.docx","ts":"20260906-091511-c3d4"}'
+</code></pre>
+<p class="hint">Paths are relative to your shared folder. Your bridge port is
+8765 unless you changed it.</p>
+
+<h2 id="find-deleted">3. Find a deleted file (trash)</h2>
+
+<p>“Delete” in Open File Bridge <b>never erases</b> — it moves the file to a trash
+store that lives outside your shared folder. Entries are kept for
+<b>30 days</b>, then cleaned up automatically.</p>
+
+<h3>Option A — in chat</h3>
+<pre><code>What's in the trash? I'm looking for a file I deleted yesterday.
+</code></pre>
+<p>then</p>
+<pre><code>Restore the trash entry 20260905-180033-77aa of notes/old-draft.md
+</code></pre>
+
+<h3>Option B — with curl</h3>
+<pre><code># 1) list trash entries
+curl -s -X POST http://127.0.0.1:8765/trash/list \
+  -H "Content-Type: application/json" -H "X-Bridge-Token: …" -d '{}'
+
+# 2) restore one (path + ts both come from the list)
+curl -s -X POST http://127.0.0.1:8765/trash/restore \
+  -H "Content-Type: application/json" -H "X-Bridge-Token: …" \
+  -d '{"path":"notes/old-draft.md","ts":"20260905-180033-77aa"}'
+</code></pre>
+
+<blockquote class="warn">
+<p><b>Two small rules:</b></p>
+<p>• Trash-restore <b>refuses</b> if a file with that name already exists again
+(“delete or rename it first”) — it will never itself overwrite something.</p>
+<p>• The trash is for AI/chat deletions. If <i>you</i> delete a file in Finder /
+Explorer, that's outside the bridge — use your OS trash as usual.</p>
+</blockquote>
+
+<h2 id="ai-messed-up">4. “The AI messed up my file!” — full walkthrough</h2>
+
+<p>The AI rewrote <code>reports/summary.docx</code> and you want yesterday's
+content back:</p>
+<ol>
+<li><b>Don't panic-edit the file</b> — the old content is already safe in the
+version history (the bridge snapshotted it <i>before</i> the AI's write landed).</li>
+<li>In chat: <i>“Show me the saved versions of reports/summary.docx.”</i></li>
+<li>Compare sizes/timestamps and pick the snapshot from <b>before</b> the edit.</li>
+<li><i>“Restore that one.”</i> The current (messed-up) content is snapshotted
+on the way in — so if you change your mind, the AI's version is also
+recoverable.</li>
+<li>Optional: <i>“Open the folder so I can check.”</i> — the 📂 <b>Show in
+folder</b> link in chat opens it with the file selected.</li>
+</ol>
+
+<h2 id="regret-batch">5. “I regret the whole edit” — many files</h2>
+<p>When a task touched many files (a rename sweep, a mail-merge, a batch
+rewrite), each file still has its own snapshot. In chat:</p>
+<pre><code>The last task rewrote several files. For each of:
+  contracts/acme.md, contracts/beta.md, reports/q3.docx
+list the versions and restore each one to the version from before today's task.
+</code></pre>
+<p class="hint">The bridge snapshots every overwrite individually, so “batch
+regret” is just N single-file restores. For very large batches (or when in
+doubt), your own folder backup is still the gold standard — the version
+history is a safety net, not a backup product.</p>
+
+<h2 id="rate-breaker">6. The write-rate brake (why writes suddenly stop)</h2>
+
+<p>If the AI starts writing unusually fast (typically a stuck loop), the bridge
+<b>refuses further writes for up to a minute</b> instead of hammering your
+folder. You'll see an error in chat like:</p>
+
+<blockquote><p><i>write-rate circuit breaker: 21 writes / 130 KiB in the last 60 s
+(limits 20 / 50 MiB). STOP and ask the user to confirm the mass edit before
+continuing.</i></p></blockquote>
+
+<p><b>What to do:</b> nothing is broken and nothing was half-written. Either…</p>
+<ul>
+<li>reply in chat to <b>confirm you want the mass edit</b> and let it continue
+(it resumes automatically as the 60-second window slides), or</li>
+<li>tell the AI to stop, and review what was written so far (each write is
+snapshotted anyway), or</li>
+<li>raise the limits for this session in the app's settings page →
+<a href="#safety-settings">Safety section</a>.</li>
+</ul>
+
+<h2 id="safety-settings">7. Safety settings (settings page)</h2>
+
+<p>Open the Open File Bridge app (or <code>http://127.0.0.1:8765</code>) →
+<b>🛟 Safety</b> card:</p>
+<ul>
+<li><b>Write limit per minute</b> — how many writes the AI may do per rolling
+60&nbsp;s before the brake engages (default 20).</li>
+<li><b>Write volume per minute</b> — the same brake, measured in MB (default 50).</li>
+<li><b>Read-only mode</b> — a master switch that blocks <i>every</i> write
+(including yours-via-chat). Handy when you want the AI to analyze but never
+modify.</li>
+</ul>
+<p>Values set by environment variables (<code>FILE_BRIDGE_MAX_WRITES</code>,
+<code>FILE_BRIDGE_MAX_WRITE_MB</code>, <code>FILE_BRIDGE_READONLY</code>) are
+fixed for the session and cannot be overridden from the page — the page will
+say so instead of pretending.</p>
+
+<h2 id="storage">8. Where snapshots &amp; trash live, and their limits</h2>
+
+<ul>
+<li><b>Location</b> — outside every shared folder, in the bridge's own state
+folder: <code>~/.local/state/open-file-bridge/</code> (Linux),
+<code>~/Library/Application Support/open-file-bridge/</code> (macOS),
+<code>%APPDATA%\open-file-bridge\</code> (Windows). The file API can never read
+old versions back into the chat — that's deliberate.</li>
+<li><b>Per-file cap</b> — files over 8&nbsp;MB are not snapshotted (the write
+still happens; the response says <code>skipped: too_large</code>).</li>
+<li><b>Total cap</b> — the version store keeps the most recent ~512&nbsp;MB of
+snapshots; the oldest are pruned first. Trash entries expire after 30 days.</li>
+</ul>
+
+<h2 id="faq">9. FAQ</h2>
+
+<h3>The AI overwrote a 20 MB file — where's my snapshot?</h3>
+<p>Above the 8 MB per-file cap, the write succeeds but is not snapshotted.
+That's the documented behavior of the safety net; keep large files out of the
+shared folder or rely on your own backup for them.</p>
+
+<h3>Can the AI restore versions by itself?</h3>
+<p>Only when you ask. Restores are normal bridge calls, so the model can list
+versions and restore one as part of your conversation — the skill tells it to
+confirm which file+timestamp you mean before overwriting anything.</p>
+
+<h3>Is the version history a backup?</h3>
+<p>No. It lives on the same disk, is capped (512 MB store, 8 MB/file), and
+prunes oldest-first. It's an undo net for AI edits — pair it with a real
+backup for irreplaceable data.</p>
+
+<h3>I stopped the bridge — are my snapshots gone?</h3>
+<p>No. Snapshots and trash live on disk in the state folder and survive
+restarts and app updates.</p>
+
+<h3>Someone else's chat connected to my bridge — can they restore my files?</h3>
+<p>Restores use the same bridge endpoints as any write, so the same security
+applies: origin lock and (recommended) bridge token. See the admin guide.</p>
+
+<hr>
+<p class="hint">Open File Bridge — recovery guide for v2.11+. Latest version:
+<a href="https://github.com/Sparkling-AI/open-file-bridge/blob/master/docs/recovery-guide.html">docs/recovery-guide.html on GitHub</a>.
+Your app always serves the copy matching <b>your installed version</b> at
+<code>http://127.0.0.1:8765/guide</code>.</p>
+
+</body>
+</html>

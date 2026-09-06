@@ -23,20 +23,17 @@ Add every new gotcha here, not to memory.
 
 ## Bridge runtime quirks (learned the hard way)
 
-- **Approval grants (bridge 2.10.1 / skill 2.10.1):** new targets are written
-  immediately. Only overwrites, edits, deletes, restores, and bulk requests
-  that replace existing files use the 409 approval round trip. The internal
-  grant is single-use, bound to a SHA-256 digest of the exact JSON payload
-  (excluding only `confirmation_token`), and expires after 10 minutes. A
-  mismatch burns the grant. Responses carry a machine-readable
-  `approval_error` (`required`, `expired`, `invalid`, or `payload_changed`),
-  and only `expired` may be described as a timeout. The skill caches the exact
-  payload after a 409 and commits it only in a later user-approved turn; it
-  must never regenerate a binary payload or issue and consume a grant in one
-  execution. Keep token terminology and the token itself out of user-visible
-  output.
-  Overwrite paths, including ZIP extraction, must snapshot every existing
-  target before writing.
+- **Approval round trip REMOVED (bridge 2.11 / skill 2.11, 2026-09-06):** the
+  409 confirmation-token flow (single-use grant, payload digest, 10-min TTL,
+  later-turn commit) is gone. Real chats broke it two ways: models lost the
+  pending grant between turns ("approval window wasn't preserved") and models
+  regenerated the payload after approval (burning it as `payload_changed`)
+  — the mechanism failed more writes than it protected. Writes now execute
+  immediately; safety is structural and verified on every path: snapshot
+  BEFORE overwrite (all 20 write sites incl. ZIP extraction), trash-move
+  deletes, snapshot-on-restore, rate breaker, read-only mode. Never
+  reintroduce a chat-mediated approval step without a new user decision.
+  (`pending-confirmations.json` is no longer read or written.)
 - **Port 8765 conflicts**: `tests/e2e_test.sh` refuses to run if something
   already listens (it starts its OWN bridge on a temp dir). Kill strays:
   `pkill -f file_bridge` — then VERIFY with `ss -tln | grep 8765`, because
