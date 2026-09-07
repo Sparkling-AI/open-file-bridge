@@ -599,7 +599,10 @@ def main():
             ctx.close(); return 1
         roots_len = picker_flow(drv, page, pick_win_id)
         time.sleep(1.0)
-        status_text = page.locator("#status").text_content() if page.locator("#status").count() else ""
+        # options.html (unified settings page, 758a834) names the folder
+        # status element #folderstatus — the old setup.html #status is gone.
+        status_text = (page.locator("#folderstatus").text_content()
+                       if page.locator("#folderstatus").count() else "")
         print("setup status:", status_text)
         print("roots in IDB:", roots_len)
         verdicts["picker+idb"] = roots_len == 1
@@ -627,6 +630,43 @@ def main():
 
         # --- 4. PASS C: Reconnect "Allow on every visit" → pipe restored
         # AND persistent (survives the reconnect tab closing) ---
+        def read_status_js(pg):
+            # #folderstatus on the unified options.html page (758a834).
+            # Careful with the check: "Permission not granted" also contains
+            # "granted" — test the positive phrases explicitly.
+            return pg.evaluate(
+                "((document.getElementById('folderstatus')||{}).textContent)||''")
+
+        def allow_bubble(pg, name):
+            """Click whichever Chrome permission bubble is up.
+
+            Bubble taxonomy DRIFS between sessions (2026-09-07 rerun): the
+            in-session post-decay reconnect can raise EITHER the simple
+            bubble ("Allow this site to edit files?", Allow ≈ (790,254))
+            OR the 3-option variant ("Allow this time" ≈ (421,333) /
+            "Allow on every visit" ≈ (421,381)). A miss DISMISSES the
+            bubble, so each candidate gets a fresh raise (re-click
+            Reconnect) before its click.
+            """
+            st = ""
+            for attempt, (ax, ay) in enumerate([
+                (790, 254), (421, 381), (421, 333),
+            ]):
+                if attempt > 0:  # re-raise: the last click dismissed it
+                    try:
+                        pg.click("button:has-text('Reconnect')", timeout=3000)
+                    except Exception:
+                        pass
+                    time.sleep(1.5)
+                drv.click(ax, ay)
+                time.sleep(1.2)
+                st = read_status_js(pg)
+                if ("permission granted" in st.lower()
+                        or "folder connected" in st.lower()
+                        or st.lower().startswith("permission already")):
+                    return True, st
+            return False, st
+
         rec = ctx.new_page()
         rec.goto(ext_origin + "/options.html")
         rec.wait_for_selector("#pick")
@@ -638,19 +678,7 @@ def main():
             drv.screenshot("spike-no-reconnect")
         time.sleep(1.8)
         drv.screenshot("spike-reconnect-bubble")
-        persistent = False
-        st = ""
-        # post-decay in-session bubble = SIMPLE variant (Allow ≈ 790,254 —
-        # vision-verified); the 3-option "every visit" bubble appears after
-        # a browser RESTART (probe8/9) and is clicked in PASS D.
-        for ax, ay in [(790, 254), (740, 254), (700, 254)]:
-            drv.click(ax, ay)
-            time.sleep(1.2)
-            st = rec.evaluate(
-                "((document.getElementById('status')||{}).textContent)||''")
-            if "granted" in st.lower():
-                persistent = True
-                break
+        persistent, st = allow_bubble(rec, "C")
         print("reconnect status:", st if persistent else "MISSED")
         rec.close()
         time.sleep(2.5)   # session grant dies with the tab — that's fine;
@@ -704,7 +732,8 @@ def main():
         print("PASS D ext origin:", ext_origin)
 
         # Reconnect on the fresh session → the RESTART bubble offers
-        # "Allow on every visit" (~420,381; vision-verified probe8/9)
+        # "Allow on every visit"; both variants are fanned (taxonomy
+        # drifted 2026-09-07 — see allow_bubble).
         rec2 = ctx.new_page()
         rec2.goto(ext_origin + "/options.html")
         rec2.wait_for_selector("#pick")
@@ -713,12 +742,21 @@ def main():
         time.sleep(1.8)
         drv.screenshot("spike-everyvisit-bubble")
         every_visit = False
-        for ax, ay in [(420, 381), (420, 385), (420, 377), (420, 334), (790, 254)]:
+        for attempt, (ax, ay) in enumerate([
+            (421, 381), (421, 333), (790, 254),
+        ]):
+            if attempt > 0:  # re-raise: the last click dismissed the bubble
+                try:
+                    rec2.click("button:has-text('Reconnect')", timeout=3000)
+                except Exception:
+                    pass
+                time.sleep(1.5)
             drv.click(ax, ay)
             time.sleep(1.2)
-            st = rec2.evaluate(
-                "((document.getElementById('status')||{}).textContent)||''")
-            if "granted" in st.lower():
+            st = read_status_js(rec2)
+            if ("permission granted" in st.lower()
+                    or "folder connected" in st.lower()
+                    or st.lower().startswith("permission already")):
                 every_visit = True
                 break
         print("every-visit status:", st if every_visit else "MISSED")

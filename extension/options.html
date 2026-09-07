@@ -2,18 +2,39 @@
 <html>
 <head><meta charset="utf-8"><title>Open File Bridge — settings</title>
 <style>
-body { font-family: system-ui, sans-serif; max-width: 680px; margin: 50px auto;
+:root { --accent: #4a5fc1; --line: #c9cdd6; --control: 36px; }
+body { font-family: system-ui, sans-serif; max-width: 680px; margin: 40px auto;
        padding: 0 20px; color: #222; }
-input:not([type=checkbox]), textarea { width: 100%; padding: 10px; font-size: 16px;
-       box-sizing: border-box; }
-textarea { font-family: ui-monospace, monospace; }
-#langbox label { white-space: nowrap; cursor: pointer; }
+h2 { margin: 0 0 4px; }
+/* one control height for buttons, inputs and selects — rows line up flush */
+button { height: var(--control); padding: 0 18px; font-size: 14px; cursor: pointer;
+         border-radius: 8px; border: 1px solid var(--accent); background: var(--accent);
+         color: #fff; white-space: nowrap; }
+button:hover { filter: brightness(1.06); }
+button.secondary { background: #fff; color: var(--accent); }
+button.small { height: 30px; padding: 0 12px; font-size: 13px; border-radius: 7px; }
+input:not([type=checkbox]), select { height: var(--control); padding: 0 10px;
+       font-size: 14px; box-sizing: border-box; border: 1px solid var(--line);
+       border-radius: 8px; background: #fff; color: inherit; }
+input:not([type=checkbox]):focus, select:focus, textarea:focus {
+       outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+/* inputs sized to their content, not the card width */
+#ocrlang { width: 170px; }
+#linkttl { width: 150px; }
+#ratelimitw, #ratelimitmb { width: 100px; }
+textarea { width: 100%; max-width: 440px; min-height: 104px; padding: 8px 10px;
+       font-size: 13px; line-height: 1.5; font-family: ui-monospace, monospace;
+       box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px;
+       background: #fff; }
+/* one row pattern: [label] [control] [Save] — uniform gap, centered */
+.btnrow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.btnrow .hint { margin: 0; }
+/* checkbox list as an aligned grid, not a ragged flex-wrap */
+#langbox { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+           gap: 8px 14px; align-items: center; font-size: 15px; }
+#langbox label { white-space: nowrap; cursor: pointer; overflow: hidden;
+                 text-overflow: ellipsis; }
 #langbox input[type=checkbox] { width: auto; margin: 0 6px 0 0; vertical-align: middle; }
-button { padding: 10px 22px; font-size: 16px; margin-top: 12px; cursor: pointer;
-         border-radius: 8px; border: 1px solid #b9b9c9; background: #4a5fc1; color: #fff; }
-button.small { margin-top: 0; padding: 4px 12px; font-size: 13px; }
-button.secondary { background: #fff; color: #4a5fc1; }
-.btnrow { display: flex; gap: 8px; align-items: stretch; }
 .ok { color: #0a7d32; font-weight: bold; }
 .hint { color: #666; font-size: 14px; }
 .warn { color: #b00; font-weight: bold; }
@@ -31,7 +52,7 @@ details.sec[open] > *:not(summary) { animation: secopen .18s ease; }
                      to { opacity: 1; transform: none; } }
 .panel { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; }
 code { background: #eee; padding: 2px 6px; border-radius: 4px; }
-.root-row { display: flex; gap: 6px; align-items: center; padding: 8px 10px;
+.root-row { display: flex; gap: 8px; align-items: center; padding: 8px 12px;
             border: 1px solid #ddd; border-radius: 8px; margin-top: 8px;
             background: #fff; flex-wrap: wrap; }
 .root-row .name { flex: 1; min-width: 12em; }
@@ -53,7 +74,9 @@ folder grant lives in this browser and is re-checked before every operation.</p>
 <p class="hint">Only these folders are exposed — nothing else on this computer.
 After a browser restart the assistant may report <code>permission-needed</code>
 — press Reconnect (the folder is not re-picked).</p>
+<div class="btnrow">
 <button id="pick" class="secondary">Choose folder…</button>
+</div>
 <p class="ok" id="folderstatus"></p>
 <div id="roots"></div>
 </details>
@@ -73,19 +96,21 @@ every overwrite keeps the previous version; deletes go to a 30-day trash.</p>
 <details class="sec" id="sec-ocr" open>
 <summary>🔤 OCR language</summary>
 <p class="hint" id="engstat"></p>
-<div class="btnrow" style="align-items:center;gap:10px;margin-bottom:8px">
-<button id="engbtn" class="small" style="padding:6px 16px;font-size:14px">Open engine tab</button>
-<span class="hint" style="margin:0">PDF &amp; OCR run in that tab — keep it open
+<div class="btnrow">
+<button id="engbtn">Open engine tab</button>
+<span class="hint">PDF &amp; OCR run in that tab — keep it open
 while the assistant works with PDFs or scanned files.</span>
 </div>
 <p class="hint">For reading scanned PDFs / photos — tick one or more:</p>
-<div id="langbox" class="panel" style="font-size:15px;display:flex;flex-wrap:wrap;gap:8px 22px;align-items:center"></div>
+<div id="langbox" class="panel"></div>
 <p class="hint">Ticks combine automatically in tesseract syntax (e.g.
 <code>eng+swe</code> — mixing languages fixes special letters and digits).
 Only the bundled languages above are available offline; typing others is
 possible but the engine will fail to load them.</p>
-<input id="ocrlang" placeholder="eng+swe" style="max-width:200px">
-<button id="savelang" class="small">Save language</button>
+<div class="btnrow">
+<input id="ocrlang" placeholder="eng+swe">
+<button id="savelang">Save language</button>
+</div>
 <p class="hint" id="langs"></p>
 </details>
 
@@ -97,9 +122,9 @@ line, gitignore-style: <code>*.zip</code>, <code>secrets/</code> (that folder,
 anywhere), <code>/build</code> (top level only); bare names match at any
 depth. The preview below updates within seconds of saving.</p>
 <textarea id="ignorepats" rows="4" placeholder="*.zip&#10;.secrets&#10;node_modules/"></textarea>
-<div class="btnrow" style="align-items:center;gap:10px;margin-top:6px">
-<button id="saveignore" class="small" style="padding:6px 16px;font-size:14px">Save patterns</button>
-<span class="hint" id="ignstat" style="margin:0"></span>
+<div class="btnrow">
+<button id="saveignore">Save patterns</button>
+<span class="hint" id="ignstat"></span>
 </div>
 <p class="hint">Always ignored (built in, not editable):
 <b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b> ·
@@ -111,8 +136,8 @@ depth. The preview below updates within seconds of saving.</p>
 <p class="hint">How long the chat-answer file links keep working after the
 assistant posts them. The clock starts when the link is created; a longer
 lifetime means old chat answers stay clickable for longer.</p>
-<div class="btnrow" style="align-items:center">
-<select id="linkttl" style="flex:1;padding:10px;font-size:16px">
+<div class="btnrow">
+<select id="linkttl">
 <option value="3600">1 hour</option>
 <option value="86400">1 day</option>
 <option value="604800">7 days</option>
@@ -120,9 +145,9 @@ lifetime means old chat answers stay clickable for longer.</p>
 <option value="7776000">90 days</option>
 <option value="31536000">1 year</option>
 </select>
-<button id="savettl" class="small">Save</button>
+<button id="savettl">Save</button>
+<span class="hint" id="ttlinfo"></span>
 </div>
-<p class="hint" id="ttlinfo"></p>
 </details>
 
 <details class="sec" id="sec-safety" open>
@@ -130,18 +155,18 @@ lifetime means old chat answers stay clickable for longer.</p>
 <p class="hint">Nothing the AI changes is unrecoverable: every overwrite keeps the
 previous version, and deletes go to a 30-day trash. How to restore or find
 deleted files:</p>
-<div class="btnrow" style="align-items:center;gap:10px;margin-bottom:8px">
-<button id="openguide" class="small" style="padding:6px 16px;font-size:14px">📖 Recovery guide</button>
-<span class="hint" style="margin:0">opens the guide for <b>your installed version</b></span>
+<div class="btnrow">
+<button id="openguide">📖 Recovery guide</button>
+<span class="hint">opens the guide for <b>your installed version</b></span>
 </div>
 <p class="hint">Write-rate brake — stops runaway mass edits (rejected writes never
 happen; the AI is told to ask you before continuing):</p>
-<div class="btnrow" style="align-items:center;gap:10px;margin-bottom:6px;flex-wrap:wrap">
-<label class="hint" style="margin:0;white-space:nowrap">writes / minute</label>
-<input id="ratelimitw" type="number" min="1" max="10000" style="width:110px" value="20">
-<label class="hint" style="margin:0;white-space:nowrap">MiB / minute</label>
-<input id="ratelimitmb" type="number" min="1" max="2048" style="width:110px" value="50">
-<button id="saverate" class="small" style="padding:6px 16px;font-size:14px">Save limits</button>
+<div class="btnrow">
+<label class="hint" for="ratelimitw">writes / minute</label>
+<input id="ratelimitw" type="number" min="1" max="10000" value="20">
+<label class="hint" for="ratelimitmb">MiB / minute</label>
+<input id="ratelimitmb" type="number" min="1" max="2048" value="50">
+<button id="saverate">Save limits</button>
 </div>
 <p class="hint" id="ratestat"></p>
 <label style="display:flex;align-items:center;gap:10px;margin-top:10px;cursor:pointer">
