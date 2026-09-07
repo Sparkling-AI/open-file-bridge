@@ -1382,3 +1382,18 @@ readonly true, ocr lang swe+eng); fold persistence works; GLM-4.6V
 render review: 9 sections in order, no layout defects. Picker-driven
 paths (grant → tree preview, reconnect) still need the Linux suites —
 next run there should confirm n1-n12 + engines 13/13 unchanged.
+
+## Stage-3 session #6b: extension icon = the app's brand icon (2026-09-07)
+
+Dandan's ask: same icon as the app, or a similar one. Answer: the same —
+the extension had NO icon declared (Chrome showed the generic puzzle
+placeholder). Generated extension/icons/icon-{16,32,48,128,256}.png from
+docs/brand/icon-512.png (the approved C-folder + B-badge final, also the
+.ico/.icns source; `sips --resampleHeightWidth`), wired into manifest
+`icons` (incl. 256 for the CWS listing) + `action.default_icon` (16/32/
+48/128). GLM-4.6V legibility review on light+dark toolbar strips: folder
+recognizable at 16px, no downscale halos, badge detail shrinks but
+identity holds — same tradeoff the app's own 16px .ico entry makes, so
+brand-consistent; no simplified 16px variant needed. Extension still
+loads clean in Chrome-for-Testing with the icons present; zip rebuilt
+(63 entries incl. the 5 PNGs + icons/ dir).
