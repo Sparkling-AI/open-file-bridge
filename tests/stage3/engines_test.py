@@ -187,6 +187,18 @@ assert d["status"] == 409 and b.get("engine_needed") is True, _r + " raw: " + st
 print(_r); RESULT = _r
 '''
 
+# auto-open ON (the default since 2026-09-07): with the engine tab closed,
+# the SW must open it itself (background tab) and the op must SUCCEED.
+ENGINE_AUTO_OPEN_CELL = '''
+d = (await ofb_fetch("GET", "/pdf_text?path={F}/inv.pdf")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+t = " ".join(str(p.get("text", "")) for p in b.get("pages", []))
+_r = "e13 auto-open status=" + str(d["status"]) + " probe=" + str("E2E INVOICE 997" in t)
+_r += " detail=" + str(b.get("detail"))[:200]
+assert d["status"] == 200 and "E2E INVOICE 997" in t, _r + " raw: " + str(d)[:800]
+print(_r); RESULT = _r
+'''
+
 
 def build_harness_engines(scratch, cells_sel=None):
     """spike1's build_harness with OUR cells — monkeypatch spike1's module-level
@@ -408,7 +420,8 @@ def main():
         pg, ok = run_cells(ctx, base, "main", harness)
         pg.close()
 
-        # e12: engine tab closed -> 409
+        # e12: engine tab closed -> 409  (auto-open OFF — the legacy contract)
+        eng.evaluate("OFBIDB.put('kv', false, 'engine_auto_open')")
         eng.close()
         time.sleep(1.5)
         cells12 = {"e12_engine_closed": ENGINE_TAB_CLOSED_CELL.replace("{F}", FIXREL).replace("{{", "{").replace("}}", "}")}
@@ -416,6 +429,21 @@ def main():
         h12.write_text(assemble_harness_page(spike1.OWUI, spike1_cells_python(), cells12))
         pg12, ok12 = run_cells(ctx, base, "e12", h12, timeout=120)
         pg12.close()
+
+        # e13: engine tab closed + auto-open ON (default) -> SW opens the
+        # tab itself and the op succeeds (2026-09-07 toggle)
+        cells13 = {"e13_auto_open": ENGINE_AUTO_OPEN_CELL.replace("{F}", FIXREL).replace("{{", "{").replace("}}", "}")}
+        h13 = SCRATCH / "harness-e13.html"
+        h13.write_text(assemble_harness_page(spike1.OWUI, spike1_cells_python(), cells13))
+        # kv write needs an EXTENSION page context (options.html) — the
+        # harness page runs on the OWUI origin and has no OFBIDB.
+        opt = ctx.new_page()
+        opt.goto(ext_origin + "/options.html")
+        opt.wait_for_selector("#engauto")
+        opt.evaluate("OFBIDB.put('kv', true, 'engine_auto_open')")
+        opt.close()
+        pg13, ok13 = run_cells(ctx, base, "e13", h13, timeout=180)
+        pg13.close()
 
         ctx.close()
 
@@ -425,7 +453,7 @@ def main():
         f = FIX / name
         print(f"{name}: {'OK ' + str(f.stat().st_size) + 'B' if f.exists() else 'MISSING'}")
 
-    verdict = "PASS" if (ok and ok12) else "FAIL"
+    verdict = "PASS" if (ok and ok12 and ok13) else "FAIL"
     print(f"\nENGINES P3+P4 VERDICT: {verdict}")
     return 0 if verdict == "PASS" else 1
 

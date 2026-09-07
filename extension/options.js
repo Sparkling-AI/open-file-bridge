@@ -131,6 +131,8 @@ async function refresh() {
     document.getElementById("ratestat").textContent =
       "Current: " + rl.max_writes + " writes / " + rl.max_mb + " MiB per 60 s.";
     document.getElementById("readonlybox").checked = !!s.readonly;
+    document.getElementById("engauto").checked =
+      s.engine_auto_open === undefined ? true : !!s.engine_auto_open;
     renderRoots();
     renderAudit();
     renderPreview();
@@ -396,6 +398,12 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("readonlybox").onchange = async (ev) => {
     await OFBIDB.put("kv", ev.target.checked, "readonly_global");
     document.getElementById("rostat").textContent = ev.target.checked ? "— active" : "";
+  };
+
+  document.getElementById("engauto").onchange = async (ev) => {
+    await OFBIDB.put("kv", ev.target.checked, "engine_auto_open");
+    document.getElementById("engautostat").textContent =
+      ev.target.checked ? "— active" : "";
   };
 
   document.getElementById("openguide").onclick = () => {

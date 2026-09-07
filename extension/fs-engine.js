@@ -32,9 +32,30 @@ async function fsEngineRoute(method, path, q, body) {
 }
 
 /** Forward an op to the engine page; resolve the input(s) here in the SW
- *  (the page never touches the FS). Files cross the RPC as base64 bytes —
- *  chrome.runtime.sendMessage structured-clones and DROPS File/Blob
- *  instances (found 2026-09-06: "Image file /input cannot be read"). */
+ * (the page never touches the FS). Files cross the RPC as base64 bytes —
+ * chrome.runtime.sendMessage structured-clones and DROPS File/Blob
+ * instances (found 2026-09-06: "Image file /input cannot be read"). */
+
+/** Setting gate for auto-open (kv "engine_auto_open", default ON since
+ * 2026-09-07: opening OUR OWN extension page in a background tab is not
+ * navigation and keeps the visible-tab consent story — the settings page
+ * documents it and can turn it off; 409 remains the fallback).
+ * Read fresh on every engine op (no cache): ops take seconds, an IDB read
+ * is noise, and the toggle must take effect on the very next request. */
+async function engineAutoOpen() {
+  return await kvGet("engine_auto_open", true);
+}
+
+async function engineEnsureTab(extraDetail) {
+  if (!chrome.tabs || !chrome.tabs.create) return extraDetail || null;
+  try {
+    await chrome.tabs.create({ url: "engine-host.html", active: false });
+    return "engine tab auto-opened (background) — retrying";
+  } catch (e) {
+    return (extraDetail || "") + " | auto-open failed: " + (e.message || e);
+  }
+}
+
 async function engineCall(op, params) {
   const payload = Object.assign({}, params);
   try {
@@ -83,24 +104,72 @@ async function engineCall(op, params) {
   let reply;
   try {
     reply = await new Promise((resolve, reject) => {
-      if (!FS_ENGINE_ALIVE && !enginePageMaybeOpen()) {
-        reject(new OpFail(409, engineNeededBody()));
-        return;
-      }
-      let settled = false;
-      const timer = setTimeout(() => {
-        if (!settled) { settled = true; resolve({ ok: false, error: "engine timeout" }); }
-      }, FS_ENGINE_TIMEOUT_MS);
-      chrome.runtime.sendMessage({ ofbEngine: true, op: op, payload: payload }, (resp) => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        if (chrome.runtime.lastError) {
-          reject(new Error("engine page not reachable: " + chrome.runtime.lastError.message));
-          return;
+      (async () => {
+        if (!FS_ENGINE_ALIVE && !enginePageMaybeOpen()) {
+          // auto-open path (kv "engine_auto_open", default ON): open our own
+          // engine page in a background tab, wait for its hello, then run
+          // the op; 409 engine_needed remains the fallback (setting off or
+          // open failed / timed out).
+          if (await engineAutoOpen()) {
+            const detail = await engineEnsureTab();
+            const t0 = Date.now();
+            while (!FS_ENGINE_ALIVE && Date.now() - t0 < 15000) {
+              await new Promise((r) => setTimeout(r, 300));
+            }
+            if (!FS_ENGINE_ALIVE) {
+              reject(new OpFail(409, engineNeededBody(
+                "auto-open: engine page did not come up within 15s" +
+                (detail ? " (" + detail + ")" : ""))));
+              return;
+            }
+          } else {
+            reject(new OpFail(409, engineNeededBody()));
+            return;
+          }
         }
-        resolve(resp || { ok: false, error: "engine page returned nothing" });
-      });
+        const sendOnce = () => new Promise((res2, rej2) => {
+          let settled = false;
+          const timer = setTimeout(() => {
+            if (!settled) { settled = true; res2({ ok: false, error: "engine timeout" }); }
+          }, FS_ENGINE_TIMEOUT_MS);
+          chrome.runtime.sendMessage({ ofbEngine: true, op: op, payload: payload }, (resp) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(timer);
+            if (chrome.runtime.lastError) {
+              rej2(new Error("engine page not reachable: " + chrome.runtime.lastError.message));
+              return;
+            }
+            res2(resp || { ok: false, error: "engine page returned nothing" });
+          });
+        });
+        try {
+          resolve(await sendOnce());
+        } catch (e1) {
+          // STALE HEARTBEAT: the page pinged once and later died — the
+          // heartbeat has no dead-man reset, so FS_ENGINE_ALIVE can lie.
+          // Correct it and retry ONCE through the auto-open path.
+          fsEngineSetAlive(false);
+          if (await engineAutoOpen()) {
+            try {
+              await engineEnsureTab();
+              const t0 = Date.now();
+              while (!FS_ENGINE_ALIVE && Date.now() - t0 < 15000) {
+                await new Promise((r) => setTimeout(r, 300));
+              }
+            } catch (e2) { /* fall through to the honest 409 */ }
+            if (FS_ENGINE_ALIVE) {
+              try { resolve(await sendOnce()); }
+              catch (e3) {
+                reject(new Error("engine page not reachable after retry: " +
+                  (e3.message || e3)));
+              }
+              return;
+            }
+          }
+          reject(e1);
+        }
+      })(); // async IIFE inside the Promise executor
     });
   } catch (e) {
     if (e instanceof OpFail) return opFailToResp(e);

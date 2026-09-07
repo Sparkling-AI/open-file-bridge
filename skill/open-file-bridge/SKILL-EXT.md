@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.3-EXT (extension backend)
+# Local File Bridge — skill v3.0.4-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -41,9 +41,11 @@ recipe from the standard skill works with the exceptions below.
   (asks never again); "Allow this time" works but repeats after every
   restart. The folder is NOT re-picked.
 - **Engine endpoints (HTTP 409 `engine_needed: true`)** — PDF text/PDF
-  ops/OCR run in the extension's engine tab. Tell the user: click the
-  toolbar icon → open the engine tab → keep it open while we work with
-  PDFs or scanned files.
+  ops/OCR run in the extension's engine tab. With the default
+  **auto-open** setting the extension opens that tab itself and retries —
+  you only see 409 if auto-open is off (or failed): then tell the user:
+  click the toolbar icon → open the engine tab → keep it open while we
+  work with PDFs or scanned files.
 - `/pdf_text`, `/pdf_op`, `/ocr`, `/ocr_pdf`, `/image_info`, `/image_b64`,
   `/csv_head`, `/csv_stats` — same request/response shapes as the app.
 - **Moved endpoints** (501 with a recipe): `/docx_read /docx_write
@@ -171,7 +173,8 @@ resets `perm` to `prompt`; every read/write would fail with 403
 
 **Errors are JSON** — read them, don't blind-retry. The three
 user-actionable shapes: 403 `permission_needed` (Reconnect → Allow on
-every visit), 409 `engine_needed` (open the engine tab), 503 no-folder
+every visit), 409 `engine_needed` (usually self-heals via auto-open;
+if it persists, open the engine tab), 503 no-folder
 (pick a folder). Never repeat a failed request unchanged.
 
 **Diagnostics: ONE `print(json.dumps(...))` per cell — never several

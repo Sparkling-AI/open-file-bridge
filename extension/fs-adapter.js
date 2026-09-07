@@ -83,6 +83,7 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       rate_limits: { max_writes: lim.w, max_mb: Math.floor(lim.b / 1024 / 1024),
         writes_source: "setting", mb_source: "setting" },
       link_ttl: await kvGet("link_ttl", 604800), link_ttl_source: "setting",
+      engine_auto_open: await kvGet("engine_auto_open", true),
     });
   }
 

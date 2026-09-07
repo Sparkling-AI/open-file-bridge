@@ -101,6 +101,14 @@ every overwrite keeps the previous version; deletes go to a 30-day trash.</p>
 <span class="hint">PDF &amp; OCR run in that tab — keep it open
 while the assistant works with PDFs or scanned files.</span>
 </div>
+<label style="display:flex;align-items:flex-start;gap:10px;margin:6px 0 2px;cursor:pointer">
+<input type="checkbox" id="engauto" style="width:auto;margin-top:3px">
+<span><b>Auto-open the engine tab when needed</b> — if the assistant asks
+for a PDF/OCR operation while the tab is closed, the extension opens it
+automatically in a background tab and retries (no action needed). When
+off, the assistant is told to ask you to open it.
+<span class="hint" id="engautostat"></span></span>
+</label>
 <p class="hint">For reading scanned PDFs / photos — tick one or more:</p>
 <div id="langbox" class="panel"></div>
 <p class="hint">Ticks combine automatically in tesseract syntax (e.g.
