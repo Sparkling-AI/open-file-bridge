@@ -167,6 +167,17 @@ async function epWriteB64Chunk(body) {
   rec.lastSeq = body.seq;
   await OFBIDB.put("transfers", rec);
   if (body.last) {
+    // confirmation gate (fs-confirm): finalize OVERWRITES the target —
+    // a fresh-tid chunk stream can arrive here without an initiating
+    // gated /write_b64, so check here too (the model-facing ask is the
+    // same single popup; grants are path-keyed, not endpoint-keyed)
+    const gate = await confirmGate("POST", "/write_b64_chunk",
+      JSON.stringify({ path: rg.relInRoot, __finalizing: true }), null);
+    if (gate) {
+      return fsFail(403, Object.assign(gate, {
+        note: "chunked finalize gated — approve and resend the last chunk",
+      }));
+    }
     const rc = await rateCheck(rec.received);
     if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
     const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts);

@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.4-EXT (extension backend)
+# Local File Bridge — skill v3.0.5-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -184,12 +184,24 @@ from the transcript, and the session went guessing nonexistent
 endpoints). To show several results, collect them into one dict and
 print it once.
 
-Writes are IMMEDIATE and snapshot-first (extension inherits the 2.11
-no-approval contract): every overwrite keeps a copy under
-`.ofb-snapshots/`, deletes under `.ofb-trash/` — recovery via
+Writes are IMMEDIATE and snapshot-first: every overwrite keeps a copy
+under `.ofb-snapshots/`, deletes under `.ofb-trash/` — recovery via
 `/versions/list` + `/versions/restore`, `/trash/list` + `/trash/restore`.
 Writes >1 MB chunk automatically inside the pipe (model code never
 chunks manually).
+
+**Out-of-chat confirmations (default on).** Deletes and overwrites of
+EXISTING files answer `403 {confirmation_required: true, confirm_id,
+op, detail}` — the USER sees an Approve/Deny popup in the chat page
+(the extension renders it). Your loop: (1) tell the user once, plainly
+("a confirmation popup appeared — Approve or Deny"); (2) WAIT; (3) after
+they Approve, RE-SEND the exact same request once — the retry executes
+(approval is single-use, 5 min). If the retry 403s again with
+`confirmation_required`, the user hasn't clicked yet — wait, do not
+spam. `denied: true` means the user refused: do not retry; ask in chat
+what they want instead. Creating a NEW file never asks. (Admins can
+change the scope in the extension settings; `confirmation_required`
+only appears when a confirmation is actually required.)
 
 ## Office files in extension mode (the moved endpoints)
 

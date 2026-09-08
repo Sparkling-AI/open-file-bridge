@@ -210,6 +210,14 @@ def main():
             ctx.close()
             return 1
 
+        # The out-of-chat confirmation gate (2026-09-08) is OFF for this
+        # suite: with the default scope "all", /unzip ALWAYS asks (n6's
+        # zip-slip 400 would surface as 403 confirmation_required) and
+        # n7's overwrite would gate. The gate itself has a dedicated
+        # suite (confirm_test.py); this one tests the FS-backend guards.
+        setup.evaluate("OFBIDB.put('kv', 'off', 'confirm_scope')")
+        time.sleep(0.3)
+
         # main negative cells (grant live: setup tab open)
         cells = build_cells()
         hpath = SCRATCH / "harness-neg.html"

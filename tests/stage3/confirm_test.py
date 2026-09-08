@@ -1,0 +1,323 @@
+#!/usr/bin/env python3
+"""Stage-3 out-of-band confirmation e2e (2026-09-07).
+
+Real browser, real extension, real pipe (sandbox iframe → relay → SW →
+fs-confirm gate). confirm.js loads in the harness page (content script);
+its popup card is closed-shadow so the host cannot click it — verdicts
+are delivered through the SAME code path the popup uses
+(confirmVerdict in the SW), and the card's rendering is verified
+separately by the UI screenshot pass.
+
+Cells:
+  A (SW-context, Worker evaluate):
+     scope default "all"; gate raises 403+confirm_id for /delete
+  B (real pipe, Pyodide):
+     c1 delete → 403 confirmation_required (+confirm_id captured)
+     c2 overwrite gated / brand-new file NOT gated
+     c3 approve(c1) → retry delete → 200 + trash path
+     c4 grant is single-use → new delete re-asks
+     c5 denied shape: raise, deny, retry → 403 denied=true
+     c6 scope=off → overwrite sails through
+     c7 confirm.js loaded in page (window.__ofbConfirmHost)
+"""
+import json
+import os
+import re
+import sys
+import threading
+import time
+from http.server import HTTPServer, SimpleHTTPRequestHandler
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent))
+import spike1  # noqa: E402
+import engines_test  # assemble_harness_page + spike1_cells_python
+from spike1 import build_test_extension, ensure_bookmark  # noqa: E402
+
+GRANT = spike1.GRANT_DIR
+SCRATCH = Path("/tmp/ofb-s3/confirm")
+RUN = time.strftime("%H%M%S")
+FIXREL = f"conf-{RUN}"
+FIX = GRANT / FIXREL
+
+CELLS = {
+  "c1_delete_gated": '''
+d = (await ofb_fetch("POST", "/delete", json.dumps({{"path": "{F}/delme.txt"}}))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "c1 status=" + str(d["status"]) + " conf=" + str(b.get("confirmation_required")) + " id=" + str(b.get("confirm_id"))
+assert d["status"] == 403 and b.get("confirmation_required") is True and b.get("confirm_id"), _r + " raw: " + str(d)[:400]
+print(_r); RESULT = _r
+''',
+  "c2_overwrite_vs_new": '''
+d1 = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/target.txt", "content": "v2"}}))).to_py()
+d2 = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/brandnew-{R}.txt", "content": "new"}}))).to_py()
+b1 = json.loads(d1.get("body") or "{{}}")
+_r = "c2 overwrite=" + str(d1["status"]) + "/" + str(b1.get("confirmation_required")) + " newfile=" + str(d2["status"])
+assert d1["status"] == 403 and b1.get("confirmation_required") is True, _r + " raw1: " + str(d1)[:300]
+assert d2["status"] == 200, _r + " raw2: " + str(d2)[:300]
+print(_r); RESULT = _r
+''',
+  "c3_retry_after_approve": '''
+d = (await ofb_fetch("POST", "/delete", json.dumps({{"path": "{F}/delme.txt"}}))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+t = b.get("trash") or ""
+_r = "c3 status=" + str(d["status"]) + " deleted=" + str(b.get("deleted")) + " trash=" + str(bool(t))
+assert d["status"] == 200 and b.get("deleted") and t, _r + " raw: " + str(d)[:300]
+print(_r); RESULT = _r
+''',
+  "c4_single_use": '''
+d = (await ofb_fetch("POST", "/delete", json.dumps({{"path": "{F}/target.txt"}}))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "c4 status=" + str(d["status"]) + " conf=" + str(b.get("confirmation_required")) + " id=" + str(b.get("confirm_id"))
+assert d["status"] == 403 and b.get("confirmation_required") is True, _r + " raw: " + str(d)[:300]
+print(_r); RESULT = _r
+''',
+  "c5_denied": '''
+d = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/target.txt", "content": "nope"}}))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "c5 status=" + str(d["status"]) + " denied=" + str(b.get("denied"))
+assert d["status"] == 403 and b.get("denied") is True, _r + " raw: " + str(d)[:300]
+print(_r); RESULT = _r
+''',
+  "c6_scope_off": '''
+d = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/target.txt", "content": "v3"}}))).to_py()
+_r = "c6 status=" + str(d["status"])
+assert d["status"] == 200, _r + " raw: " + str(d)[:300]
+print(_r); RESULT = _r
+''',
+}
+
+
+def prep():
+    FIX.mkdir(parents=True, exist_ok=True)
+    (FIX / "target.txt").write_text("v1 original\n")
+    (FIX / "delme.txt").write_text("delete me\n")
+    print("fixtures at", FIX)
+
+
+def main():
+    prep()
+    SCRATCH.mkdir(parents=True, exist_ok=True)
+    os.chdir(SCRATCH)
+
+    class H(SimpleHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+    httpd = HTTPServer(("127.0.0.1", 0), H)
+    port = httpd.server_address[1]
+    base = f"http://127.0.0.1:{port}"
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+    from playwright.sync_api import sync_playwright
+    ext = build_test_extension(SCRATCH)
+    profile = SCRATCH / "profile"
+    if profile.exists():
+        import shutil
+        shutil.rmtree(profile)  # fresh every run (stale roots confuse gate paths)
+
+    with sync_playwright() as p:
+        ctx = p.chromium.launch_persistent_context(
+            str(profile), executable_path=spike1.CHROME, headless=False,
+            args=[f"--disable-extensions-except={ext}", f"--load-extension={ext}",
+                  "--no-first-run", "--no-default-browser-check",
+                  "--window-size=1000,700", "--window-position=140,60"],
+            env={**os.environ, "DISPLAY": spike1.XDISPLAY}, no_viewport=True)
+
+        ext_origin = None
+        deadline = time.time() + 20
+        while time.time() < deadline and ext_origin is None:
+            for worker in ctx.service_workers:
+                if worker.url.startswith("chrome-extension://"):
+                    ext_origin = "chrome-extension://" + worker.url.split("//")[1].split("/")[0]
+                    break
+            if not ext_origin:
+                try:
+                    pg0 = ctx.pages[0] if ctx.pages else ctx.new_page()
+                    pg0.goto("about:blank")
+                    cdp = ctx.new_cdp_session(pg0)
+                    for t in cdp.send("Target.getTargets")["targetInfos"]:
+                        if t["type"] == "service_worker" and t["url"].startswith("chrome-extension://"):
+                            ext_origin = "chrome-extension://" + t["url"].split("//")[1].split("/")[0]
+                    cdp.detach()
+                except Exception:
+                    pass
+            time.sleep(0.5)
+        assert ext_origin, "no SW"
+        print("SW:", ext_origin)
+        sw = None
+        for _ in range(24):
+            for worker in ctx.service_workers:
+                if worker.url.startswith("chrome-extension://"):
+                    sw = worker
+                    break
+            if sw:
+                break
+            try:
+                (ctx.pages[0] if ctx.pages else ctx.new_page()).goto(ext_origin + "/options.html")
+            except Exception:
+                pass
+            time.sleep(0.5)
+        assert sw, "no SW worker handle"
+
+        # grant via the proven picker flow
+        drv = spike1.XDriver()
+        ensure_bookmark()
+        opt = ctx.new_page()
+        opt.goto(ext_origin + "/options.html")
+        opt.wait_for_selector("#pick")
+        before = {w.id for w in drv.mapped_toplevels()}
+        opt.click("#pick", timeout=5000)
+        time.sleep(1.2)
+        new = [w for w in drv.mapped_toplevels() if w.id not in before]
+        assert new, "picker did not open"
+        roots_len = spike1.picker_flow(drv, opt, new[-1].id)
+        print("roots:", roots_len)
+        assert roots_len >= 1
+        time.sleep(1.0)
+
+        # clean slate: scope "all" (the default)
+        opt.evaluate("OFBIDB.put('kv', 'all', 'confirm_scope')")
+        time.sleep(0.3)
+
+        verdicts = {}
+
+        # ---- A. SW-context unit checks ----
+        a1 = sw.evaluate("() => confirmScope().then(s => s)")
+        verdicts["A_scope_default_all"] = a1 == "all"
+        a2 = sw.evaluate(
+            "() => confirmGate('POST','/delete', JSON.stringify({path:'%s/delme.txt'}), null)"
+            ".then(g => g ? g.confirmation_required === true : false)" % FIXREL)
+        verdicts["A_gate_raises"] = bool(a2)
+
+        # ---- B. real-pipe cells ----
+        def cell(name):
+            return CELLS[name].replace("{F}", FIXREL).replace("{R}", RUN) \
+                              .replace("{{", "{").replace("}}", "}")
+
+        def run_cell_page(tag, src, keep_open=False):
+            hp = SCRATCH / f"harness-{tag}.html"
+            hp.write_text(engines_test.assemble_harness_page(
+                spike1.OWUI, engines_test.spike1_cells_python(), {tag: src}))
+            pg = ctx.new_page()
+            pg.goto(base + f"/harness-{tag}.html")
+            t0 = time.time()
+            txt = ""
+            while time.time() - t0 < 120:
+                try:
+                    txt = pg.evaluate(
+                        "document.getElementById('log').textContent") or ""
+                except Exception:
+                    txt = ""
+                if "ALL-SANDBOX-TESTS-DONE" in txt or "HARNESS-ERROR" in txt:
+                    break
+                time.sleep(1)
+            print(f"--- harness ({tag}) ---")
+            print(txt.strip()[:700])
+            if keep_open:
+                return pg, txt
+            pg.close()
+            return None, txt
+
+        _pg1, txt1 = run_cell_page("c1", cell("c1_delete_gated"), keep_open=True)
+        verdicts["B_c1_delete_gated"] = ("c1 status=403" in txt1
+                                         and "HARNESS-ERROR" not in txt1)
+        cid = None
+        m = re.search(r"c1 status=403[^\n]*id=([a-f0-9]+)", txt1)
+        if m:
+            cid = m.group(1)
+        print("confirm_id:", cid)
+
+        txt2 = run_cell_page("c2", cell("c2_overwrite_vs_new"))[1]
+        verdicts["B_c2_overwrite_gated_new_not"] = (
+            "overwrite=403/True" in txt2 and "newfile=200" in txt2
+            and "HARNESS-ERROR" not in txt2)
+
+        if cid:
+            vr = sw.evaluate(
+                f"() => JSON.stringify(confirmVerdict('{cid}', 'approved'))")
+            print("verdict resp:", vr)
+            verdicts["B_verdict_ok"] = '"ok":true' in vr
+        else:
+            verdicts["B_verdict_ok"] = False
+
+        txt3 = run_cell_page("c3", cell("c3_retry_after_approve"))[1]
+        verdicts["B_c3_retry_deletes"] = ("c3 status=200" in txt3
+                                          and "HARNESS-ERROR" not in txt3)
+
+        txt4 = run_cell_page("c4", cell("c4_single_use"))[1]
+        verdicts["B_c4_single_use"] = ("c4 status=403" in txt4
+                                       and "HARNESS-ERROR" not in txt4)
+
+        # c5: raise an overwrite ask via SW (direct), deny it, then cell
+        sw.evaluate(
+            "() => confirmGate('POST','/write', JSON.stringify({path:'%s/target.txt', content:'x'}), null)"
+            % FIXREL)
+        time.sleep(0.4)
+        pend = sw.evaluate(
+            "() => JSON.stringify(Array.from(CONFIRM_PENDING.entries())"
+            ".map(e => [e[0], e[1].verdict, e[1].pathKey]))")
+        print("pending:", pend)
+        deny_id = None
+        try:
+            for eid, v, pk in json.loads(pend):
+                if v is None and "target.txt" in pk:
+                    deny_id = eid
+        except Exception as e:
+            print("parse err", e)
+        if deny_id:
+            sw.evaluate(
+                f"() => JSON.stringify(confirmVerdict('{deny_id}', 'denied'))")
+        txt5 = run_cell_page("c5", cell("c5_denied"))[1]
+        verdicts["B_c5_denied_shape"] = ("c5 status=403 denied=True" in txt5
+                                         and "HARNESS-ERROR" not in txt5)
+
+        opt.evaluate("OFBIDB.put('kv', 'off', 'confirm_scope')")
+        time.sleep(0.3)
+        txt6 = run_cell_page("c6", cell("c6_scope_off"))[1]
+        verdicts["B_c6_scope_off"] = ("c6 status=200" in txt6
+                                      and "HARNESS-ERROR" not in txt6)
+
+        # confirm.js check on the LIVE c1 page: the content-script world
+        # is isolated (window.__ofbConfirmHost invisible to evaluate) —
+        # check the DOM host element it creates (DOM is shared) + that a
+        # card is present inside it (childElementCount > 0).
+        dom_ok = False
+        card_ok = False
+        try:
+            for _ in range(10):
+                dom_ok = _pg1.evaluate(
+                    "() => !!document.getElementById('ofb-confirm-root')")
+                card_ok = dom_ok and bool(_pg1.evaluate(
+                    "() => { const h = document.getElementById('ofb-confirm-root');"
+                    " if (!h) return false;"
+                    " const c = h.getAttribute('data-ofb-cards');"
+                    " return c ? parseInt(c, 10) > 0 : false; }"))
+                if card_ok:
+                    break
+                time.sleep(0.6)
+            print("card check: dom_ok=", dom_ok, "card_ok=", card_ok)
+        except Exception as e:
+            print("probe err", e)
+        verdicts["B_confirmjs_loaded"] = bool(dom_ok)
+        verdicts["B_popup_card_rendered"] = bool(card_ok)
+        try:
+            _pg1.screenshot(path=str(SCRATCH / "confirm-popup.png"))
+        except Exception:
+            pass
+        _pg1.close()
+
+        ctx.close()
+    httpd.shutdown()
+
+    print("\nverdicts:")
+    allok = True
+    for k, v in verdicts.items():
+        print(f"  {k}: {'PASS' if v else 'FAIL'}")
+        allok = allok and v
+    print("\nCONFIRM E2E VERDICT:", "PASS" if allok else "FAIL")
+    return 0 if allok else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -11,7 +11,7 @@
 //  - Payload caps and concurrency caps mirror the page relay.
 
 importScripts("fs-idb.js", "fs-core.js", "fs-adapter.js", "fs-writes.js",
-  "fs-links.js", "fs-engine.js");
+  "fs-links.js", "fs-engine.js", "fs-confirm.js");
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB request payload cap
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024; // 64 MB response cap
@@ -23,7 +23,7 @@ function swFail(id, error, status = 0) {
   return { ofb: true, id, ok: false, status, error: String(error) };
 }
 
-async function handleOfbRequest(msg) {
+async function handleOfbRequest(msg, senderTabId) {
   const id = msg.id;
   const method = String(msg.method || "GET").toUpperCase();
   const path = String(msg.path || "");
@@ -51,6 +51,12 @@ async function handleOfbRequest(msg) {
 
   inflight++;
   try {
+    // out-of-band confirmation gate (destructive ops) — BEFORE the
+    // adapter; passes the requesting tab so the popup lands there
+    const gate = await confirmGate(method, path, bodyText, senderTabId);
+    if (gate) {
+      return { ofb: true, id, ok: false, status: 403, body: JSON.stringify(gate) };
+    }
     const resp = await fsRoute(method, path, bodyText);
     if (wantB64 && resp.bodyB64 !== undefined) {
       if (resp.bodyB64.length > MAX_RESPONSE_BYTES) {
@@ -93,6 +99,14 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   // narrow pipe: only the exact OFB request shape
   if (msg.ofb !== true || msg.id === undefined) return; // not ours: ignore
-  handleOfbRequest(msg).then(sendResponse);
+  handleOfbRequest(msg, sender && sender.tab ? sender.tab.id : null).then(sendResponse);
   return true; // async sendResponse
+});
+
+// confirmation popup verdicts (content script confirm.js → SW)
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.ofbConfirmVerdict === true && msg.id) {
+    sendResponse(confirmVerdict(String(msg.id), String(msg.verdict || "")));
+    return;
+  }
 });

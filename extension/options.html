@@ -91,6 +91,20 @@ code-interpreter sandbox can reach the bridge — nothing else can send requests
 (<code>.env</code>, <code>id_rsa</code>, <code>*.pem</code>, …) are refused;
 every overwrite keeps the previous version; deletes go to a 30-day trash.</p>
 <p class="hint" id="secstatus"></p>
+<div class="btnrow" style="margin-top:4px">
+<label class="hint" for="confirmscope" style="white-space:nowrap">Confirm before</label>
+<select id="confirmscope">
+<option value="all">delete &amp; overwrite</option>
+<option value="destructive">delete only</option>
+<option value="off">nothing (no confirmations)</option>
+</select>
+<span class="hint" id="confirmstat"></span>
+</div>
+<p class="hint" style="margin-top:2px">Destructive requests pop up an
+Approve/Deny card <b>inside the chat page</b> — the assistant retries
+automatically after you click Approve (single-use, 5 min). Every
+overwrite still keeps the previous version; deletes go to the 30-day
+trash.</p>
 </details>
 
 <details class="sec" id="sec-ocr" open>

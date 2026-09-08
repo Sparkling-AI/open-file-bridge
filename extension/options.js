@@ -133,6 +133,10 @@ async function refresh() {
     document.getElementById("readonlybox").checked = !!s.readonly;
     document.getElementById("engauto").checked =
       s.engine_auto_open === undefined ? true : !!s.engine_auto_open;
+    const cs = document.getElementById("confirmscope");
+    cs.value = ["off", "destructive", "all"].includes(s.confirm_scope)
+      ? s.confirm_scope : "all";
+    document.getElementById("confirmstat").textContent = "✓";
     renderRoots();
     renderAudit();
     renderPreview();
@@ -404,6 +408,13 @@ window.addEventListener("DOMContentLoaded", async () => {
     await OFBIDB.put("kv", ev.target.checked, "engine_auto_open");
     document.getElementById("engautostat").textContent =
       ev.target.checked ? "— active" : "";
+  };
+
+  document.getElementById("confirmscope").onchange = async (ev) => {
+    await OFBIDB.put("kv", ev.target.value, "confirm_scope");
+    document.getElementById("confirmstat").textContent =
+      "✓ " + (ev.target.value === "all" ? "delete + overwrite"
+        : ev.target.value === "destructive" ? "delete only" : "off");
   };
 
   document.getElementById("openguide").onclick = () => {
