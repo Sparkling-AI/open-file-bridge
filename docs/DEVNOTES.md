@@ -1661,3 +1661,39 @@ expressions only (cost a debugging cycle in the A/B script).
 
 ext 3.0.5 / skill 3.0.10-EXT; OWUI rows restaged; e14 extended (POST
 /image_info + GET /link 405 asserts); zip rebuilt.
+
+## Stage-3 session #12: confirmation/recovery UX from Dandan's tests 1+2 (2026-09-09)
+
+Two asks from live testing of the confirm + recovery flows:
+
+1. **Expired popups no longer squat in the corner.** A timed-out card
+   used to sit there with dead buttons (and a late Approve lingered
+   with "can retry" text). confirm.js's countdown tick now flips the
+   card at zero to "approval window closed — nothing was changed; ask
+   again in chat" and removes it after 1.6 s. Late-click semantics
+   change with it: there is no late click anymore — the assistant's
+   one retry raises a FRESH ask, which is the cleaner flow (new popup,
+   full 20 s window). The SW-side late-grant path stays (harmless).
+2. **Restores say restore.** /versions/restore + /trash/restore get
+   their own op tag "restore" (same gating as overwrite, scope "all"):
+   popup header "Restore previous version — approval needed", summary
+   "restore old version of notes.md (<ts>)" / "restore deleted gone.txt"
+   — no more "overwrite notes.md" for a restore.
+3. **POST /versions/read {path, ts}** — read a snapshot WITHOUT
+   restoring (Dandan's model restored just to read the old version;
+   the restore then asked to overwrite). ts is validated against the
+   snapshot-stamp shape (^YYYYMMDD-HHMMSS-xx$, traversal-proof), the
+   snapshot tree is walked by handle like epRestore (it is
+   ignore-listed so resolveGuarded can't address it), text by default
+   (MAX_READ cap + truncated flag) or "b64": true (MAX_BINARY cap).
+   Reads never ask for approval. Registered in ROUTE_POST; taught in
+   skill 3.0.11-EXT ("do NOT restore just to read").
+
+Tests: confirm_test A4 (restore tag + wording units), c7
+(versions/read end-to-end: approved overwrite → snapshot → read old
+content, live file untouched), c8 (card lifecycle: present mid-wait,
+data-ofb-cards back to 0 after expiry — the old B_popup_card_rendered
+relied on the lingering card and would now fail, so it moved onto c8's
+fresh ask). Headless: label units + versions/read contract matrix
+(400/400/400-traversal/503) + settings smoke clean. ext 3.0.6-EXT;
+OWUI rows restaged; zip rebuilt.

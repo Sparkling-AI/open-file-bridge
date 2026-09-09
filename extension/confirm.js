@@ -84,6 +84,7 @@
         chrome.runtime.getURL("icons/icon-48.png") + '">' +
       'Open File Bridge</div>' +
       '<div class="op">' + (ask.op === "delete" ? "Delete file" :
+        ask.op === "restore" ? "Restore previous version" :
         ask.op === "bulk" ? "Bulk operation" : "Overwrite file") +
       ' — approval needed</div>' +
       '<div class="what"><code>' + whatHtml.replace(/^(delete|overwrite|create archive|extract|write \d+ files) /, "$1</code> <code>") + "</code></div>" +
@@ -97,13 +98,26 @@
     // live countdown for the interactive window (the request itself
     // returns a timeout-flavored 403 when this hits zero)
     const cd = card.querySelector(".countdown");
+    const t0 = Date.now();
     const tick = setInterval(() => {
       if (!card.isConnected) { clearInterval(tick); return; }
       const left = waitSec - Math.round((Date.now() - t0) / 1000);
       cd.textContent = String(Math.max(0, left));
-      if (left <= 0) clearInterval(tick);
+      if (left <= 0) {
+        clearInterval(tick);
+        // window over → no dead buttons lingering (Dandan 2026-09-09:
+        // the expired card used to squat in the corner). The SW already
+        // answered timed_out; the assistant's retry raises a FRESH ask
+        // if the user still wants the operation.
+        if (!card.classList.contains("resolved")) {
+          card.classList.add("resolved", "expired");
+          const v = card.querySelector(".verdict");
+          if (v) v.textContent =
+            "⏱ approval window closed — nothing was changed; ask again in chat";
+          setTimeout(() => { try { card.remove(); } catch (e) {} syncCount(); }, 1600);
+        }
+      }
     }, 500);
-    const t0 = Date.now();
 
     const settle = (verdict) => {
       clearInterval(tick);

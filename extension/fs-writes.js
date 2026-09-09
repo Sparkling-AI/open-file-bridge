@@ -354,6 +354,49 @@ async function epTrashList(body) {
   return fsOk({ items: items });
 }
 
+/** Read a snapshot WITHOUT restoring it (Dandan 2026-09-09: the model
+ * restored a version just to READ it — reading must never touch the live
+ * file or ask for approval). ts is validated against the snapshot-stamp
+ * shape; the snapshot tree is ignore-listed, so handles are walked
+ * directly, exactly like epRestore. */
+async function epVersionsRead(body) {
+  const rel = unquoteComp(body.path || "");
+  const ts = String(body.ts || "");
+  if (!rel || !ts) return fsFail(400, { error: "missing path/ts" });
+  if (!/^\d{8}-\d{6}-[0-9a-f]{2}$/.test(ts)) {
+    return fsFail(400, { error: "bad ts — use one from /versions/list" });
+  }
+  const rg = await resolveGuarded(rel);
+  let fh;
+  try {
+    let src = rg.rootRec.handle;
+    for (const seg of [SNAP_DIR, ts].concat(rg.parts.slice(0, -1))) {
+      src = await src.getDirectoryHandle(seg);
+    }
+    fh = await src.getFileHandle(rg.parts[rg.parts.length - 1]);
+  } catch (e) {
+    return fsFail(404, { error: "no version entry: " + ts + " for " + rel });
+  }
+  const file = await fh.getFile();
+  if (body.b64 === true) {
+    if (file.size > MAX_BINARY) {
+      return fsFail(413, { error: "version too large: " + file.size + " > " + MAX_BINARY });
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    await auditRow({ endpoint: "/versions/read", method: "POST", path: rg.relInRoot, status: 200, size: bytes.length });
+    return fsOk({ path: rg.relInRoot, ts: ts, size: file.size, b64: b64enc(bytes) });
+  }
+  // text mode: byte-cap then decode (approximation like /read — multibyte
+  // tails may cut; truncated flags it)
+  const cap = MAX_READ * 4;
+  const sliced = file.size > cap ? await file.slice(0, cap).arrayBuffer() : await file.arrayBuffer();
+  const content = new TextDecoder("utf-8", { fatal: false })
+    .decode(new Uint8Array(sliced)).slice(0, MAX_READ);
+  await auditRow({ endpoint: "/versions/read", method: "POST", path: rg.relInRoot, status: 200, size: file.size });
+  return fsOk({ path: rg.relInRoot, ts: ts, size: file.size, content: content,
+    truncated: file.size > cap || undefined });
+}
+
 async function epRestore(kind, body) {
   const rel = unquoteComp(body.path || "");
   const ts = String(body.ts || "");

@@ -131,8 +131,11 @@ async function confirmRequiredFor(method, path, body) {
       ? "overwrite" : null;
   }
   if (path === "/versions/restore" || path === "/trash/restore") {
-    // restores: `path` IS the write target
-    return (await confirmTargetExists(b.path || "")) ? "overwrite" : null;
+    // restores: `path` IS the write target. Distinct op tag "restore" so
+    // the popup can say what's actually happening (Dandan 2026-09-09:
+    // "overwrite notes.md" for a restore was misleading) — gating is
+    // identical to overwrite (scope "all").
+    return (await confirmTargetExists(b.path || "")) ? "restore" : null;
   }
   if (path === "/pdf_op" || path === "/ocr_pdf") {
     // engine WRITE ops: the only write target is `out` — `path` is the
@@ -250,6 +253,14 @@ function describeOp(op, path, body) {
   try {
     const b = typeof body === "string" ? JSON.parse(body || "{}") : (body || {});
     if (op === "delete") return "delete " + (b.path || "?");
+    if (op === "restore") {
+      // say RESTORE, not overwrite (Dandan 2026-09-09) — the live file is
+      // replaced by the old version, but that's the POINT of the request
+      return path === "/trash/restore"
+        ? "restore deleted " + (b.path || "?")
+        : "restore old version of " + (b.path || "?") +
+          (b.ts ? " (" + b.ts + ")" : "");
+    }
     if (op === "bulk") {
       if (path === "/zip") return "create archive " + (b.out || "?") +
         " from " + (Array.isArray(b.members) ? b.members.length : "?") + " files";

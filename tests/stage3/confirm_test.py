@@ -94,6 +94,35 @@ _r = "c6 status=" + str(d["status"])
 assert d["status"] == 200, _r + " raw: " + str(d)[:300]
 print(_r); RESULT = _r
 ''',
+  # c7 (2026-09-09): /versions/read returns the OLD content without a
+  # popup and without touching the live file (the driver approves the
+  # overwrite mid-wait so a snapshot exists).
+  "c7_versions_read": '''
+f = "{F}/vread-{R}.txt"
+w1 = (await ofb_fetch("POST", "/write", json.dumps({{"path": f, "content": "ver1-original"}}))).to_py()
+w2 = (await ofb_fetch("POST", "/write", json.dumps({{"path": f, "content": "ver2-later"}}))).to_py()
+v = (await ofb_fetch("POST", "/versions/list", json.dumps({{"path": f}}))).to_py()
+vb = json.loads(v["body"]) if v.get("body") else {{}}
+ts = (vb.get("versions") or [{{}}])[0].get("ts", "")
+r = (await ofb_fetch("POST", "/versions/read", json.dumps({{"path": f, "ts": ts}}))).to_py()
+rb = json.loads(r["body"]) if r.get("body") else {{}}
+cur = (await ofb_fetch("GET", "/read?path=" + f)).to_py()
+cb = json.loads(cur["body"]) if cur.get("body") else {{}}
+_r = "c7 w1=" + str(w1["status"]) + " w2=" + str(w2["status"]) + " ts=" + str(ts) + " read=" + str(rb.get("content")) + " live=" + str(cb.get("content"))
+assert w1["status"] == 200 and w2["status"] == 200, _r
+assert ts and r["status"] == 200 and rb.get("content") == "ver1-original", _r + " raw: " + str(r)[:300]
+assert cb.get("content") == "ver2-later", _r + " live file must be untouched by /versions/read"
+print(_r); RESULT = _r
+''',
+  # c8 (2026-09-09): a timed-out ask must NOT leave a dead card behind —
+  # the driver checks data-ofb-cards mid-wait (>0) and after expiry (0).
+  "c8_card_lifecycle": '''
+d = (await ofb_fetch("POST", "/delete", json.dumps({{"path": "{F}/delme2.txt"}}))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "c8 status=" + str(d["status"]) + " timed_out=" + str(b.get("timed_out"))
+assert d["status"] == 403 and b.get("timed_out") is True, _r + " raw: " + str(d)[:300]
+print(_r); RESULT = _r
+''',
 }
 
 
@@ -101,6 +130,7 @@ def prep():
     FIX.mkdir(parents=True, exist_ok=True)
     (FIX / "target.txt").write_text("v1 original\n")
     (FIX / "delme.txt").write_text("delete me\n")
+    (FIX / "delme2.txt").write_text("delete me too\n")
     print("fixtures at", FIX)
 
 
@@ -218,6 +248,21 @@ def main():
         verdicts["A_ocrpdf_no_out_no_ask"] = a3["noOut"] is None
         verdicts["A_ocrpdf_out_asks_overwrite"] = a3["withOut"] == "overwrite"
         verdicts["A_ocrpdf_asks_out_not_input"] = a3["asked"] == "out.pdf"
+        # A4 (2026-09-09): restores get their own op tag + wording — the
+        # popup must say RESTORE, not "overwrite notes.md"
+        a4 = sw.evaluate("""() => {
+            const real = confirmTargetExists;
+            globalThis.confirmTargetExists = async () => true;
+            return confirmRequiredFor('POST', '/versions/restore',
+                JSON.stringify({path: 'notes.md', ts: '20260909-101010-aa'}))
+              .then((op) => {
+                  globalThis.confirmTargetExists = real;
+                  return { op: op, summary: describeOp(op, '/versions/restore',
+                      JSON.stringify({path: 'notes.md', ts: '20260909-101010-aa'})) };
+              });
+        }""")
+        verdicts["A_restore_op_tag"] = a4["op"] == "restore"
+        verdicts["A_restore_wording"] = ("restore old version of notes.md" in a4["summary"])
 
         # ---- B. real-pipe cells ----
         def cell(name):
@@ -291,7 +336,7 @@ def main():
         verdicts["B_c0_blocking_approve_same_call"] = ("c0 status=200" in txt0
                                                        and "HARNESS-ERROR" not in txt0)
 
-        _pg1, txt1 = run_cell_page("c1", cell("c1_delete_gated"), keep_open=True)
+        _txt1, txt1 = run_cell_page("c1", cell("c1_delete_gated"))
         verdicts["B_c1_delete_gated"] = ("c1 status=403" in txt1
                                          and "HARNESS-ERROR" not in txt1)
         cid = None
@@ -369,35 +414,115 @@ def main():
         txt6 = run_cell_page("c6", cell("c6_scope_off"))[1]
         verdicts["B_c6_scope_off"] = ("c6 status=200" in txt6
                                       and "HARNESS-ERROR" not in txt6)
+        opt.evaluate("OFBIDB.put('kv', 'all', 'confirm_scope')")
+        time.sleep(0.3)
 
-        # confirm.js check on the LIVE c1 page: the content-script world
-        # is isolated (window.__ofbConfirmHost invisible to evaluate) —
-        # check the DOM host element it creates (DOM is shared) + that a
-        # card is present inside it (childElementCount > 0).
+        # c7 (2026-09-09): /versions/read — the w2 overwrite ASKS (scope
+        # back to "all"), approve it mid-wait like c0 so a snapshot exists;
+        # then the cell proves reading the old version needs no approval
+        # and leaves the live file untouched.
+        hp7 = SCRATCH / "harness-c7.html"
+        hp7.write_text(engines_test.assemble_harness_page(
+            spike1.OWUI, engines_test.spike1_cells_python(),
+            {"c7": cell("c7_versions_read")}))
+        pg7 = ctx.new_page()
+        pg7.goto(base + "/harness-c7.html")
+        appr7 = None
+        t0 = time.time()
+        vname = f"vread-{RUN}"
+        while time.time() - t0 < 25 and not appr7:
+            pend = sw.evaluate(
+                "() => JSON.stringify(Array.from(CONFIRM_PENDING.entries())"
+                ".map(e => [e[0], e[1].verdict, e[1].pathKey]))")
+            try:
+                for eid, v, pk in json.loads(pend):
+                    if v is None and vname in pk:
+                        appr7 = eid
+            except Exception as e:
+                print("parse err", e)
+            if not appr7:
+                time.sleep(0.5)
+        print("c7 approve target:", appr7)
+        if appr7:
+            sw.evaluate(f"() => JSON.stringify(confirmVerdict('{appr7}', 'approved'))")
+        txt7 = ""
+        t0 = time.time()
+        while time.time() - t0 < 120:
+            try:
+                txt7 = pg7.evaluate(
+                    "document.getElementById('log').textContent") or ""
+            except Exception:
+                txt7 = ""
+            if "ALL-SANDBOX-TESTS-DONE" in txt7 or "HARNESS-ERROR" in txt7:
+                break
+            time.sleep(1)
+        print("--- harness (c7) ---")
+        print(txt7.strip()[:700])
+        pg7.close()
+        verdicts["B_c7_versions_read"] = ("read=ver1-original" in txt7
+                                         and "live=ver2-later" in txt7
+                                         and "HARNESS-ERROR" not in txt7)
+
+        # c8 (2026-09-09): card lifecycle — present mid-wait, AUTO-CLOSED
+        # after expiry (no dead buttons squatting in the corner). The
+        # content-script world is isolated; the DOM host element + its
+        # data-ofb-cards attribute are the observable surface.
+        hp8 = SCRATCH / "harness-c8.html"
+        hp8.write_text(engines_test.assemble_harness_page(
+            spike1.OWUI, engines_test.spike1_cells_python,
+            {"c8": cell("c8_card_lifecycle")}))
+        pg8 = ctx.new_page()
+        pg8.goto(base + "/harness-c8.html")
         dom_ok = False
         card_ok = False
-        try:
-            for _ in range(10):
-                dom_ok = _pg1.evaluate(
-                    "() => !!document.getElementById('ofb-confirm-root')")
-                card_ok = dom_ok and bool(_pg1.evaluate(
+        t0 = time.time()
+        while time.time() - t0 < 15 and not card_ok:
+            try:
+                dom_ok = bool(pg8.evaluate(
+                    "() => !!document.getElementById('ofb-confirm-root')"))
+                card_ok = dom_ok and bool(pg8.evaluate(
                     "() => { const h = document.getElementById('ofb-confirm-root');"
                     " if (!h) return false;"
                     " const c = h.getAttribute('data-ofb-cards');"
                     " return c ? parseInt(c, 10) > 0 : false; }"))
-                if card_ok:
-                    break
+            except Exception as e:
+                print("probe err", e)
+            if not card_ok:
                 time.sleep(0.6)
-            print("card check: dom_ok=", dom_ok, "card_ok=", card_ok)
-        except Exception as e:
-            print("probe err", e)
-        verdicts["B_confirmjs_loaded"] = bool(dom_ok)
-        verdicts["B_popup_card_rendered"] = bool(card_ok)
+        print("card check: dom_ok=", dom_ok, "card_ok=", card_ok)
         try:
-            _pg1.screenshot(path=str(SCRATCH / "confirm-popup.png"))
+            pg8.screenshot(path=str(SCRATCH / "confirm-popup.png"))
         except Exception:
             pass
-        _pg1.close()
+        # wait out the 20 s window + the 1.6 s auto-close grace
+        txt8 = ""
+        t0 = time.time()
+        while time.time() - t0 < 60:
+            try:
+                txt8 = pg8.evaluate(
+                    "document.getElementById('log').textContent") or ""
+            except Exception:
+                txt8 = ""
+            if "ALL-SANDBOX-TESTS-DONE" in txt8 or "HARNESS-ERROR" in txt8:
+                break
+            time.sleep(1)
+        time.sleep(3.5)
+        autoclosed = False
+        try:
+            autoclosed = bool(pg8.evaluate(
+                "() => { const h = document.getElementById('ofb-confirm-root');"
+                " if (!h) return false;"
+                " const c = h.getAttribute('data-ofb-cards');"
+                " return c ? parseInt(c, 10) === 0 : false; }"))
+        except Exception as e:
+            print("probe err", e)
+        print("autoclose check:", autoclosed, "| harness:", txt8.strip()[:120])
+        pg8.close()
+        verdicts["B_confirmjs_loaded"] = bool(dom_ok)
+        verdicts["B_popup_card_rendered"] = bool(card_ok)
+        verdicts["B_popup_autoclose_after_expiry"] = bool(autoclosed)
+        verdicts["B_c8_timed_out_shape"] = ("c8 status=403 timed_out=True" in txt8
+                                            and "HARNESS-ERROR" not in txt8)
 
         ctx.close()
     httpd.shutdown()

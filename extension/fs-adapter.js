@@ -191,6 +191,7 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     if (method === "POST" && path === "/edit") return await epEdit(body);
     if (method === "POST" && path === "/delete") return await epDelete(body);
     if (method === "POST" && path === "/versions/list") return await epVersionsList(body);
+    if (method === "POST" && path === "/versions/read") return await epVersionsRead(body);
     if (method === "POST" && path === "/versions/restore") return await epRestore("versions", body);
     if (method === "POST" && path === "/trash/list") return await epTrashList(body);
     if (method === "POST" && path === "/trash/restore") return await epRestore("trash", body);
@@ -240,7 +241,8 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     "/pdf_text", "/ocr"].concat([...MOVED_READ_ENDPOINTS]));
   const ROUTE_POST = new Set(["/ocr/lang", "/write", "/write_b64",
     "/write_b64_chunk", "/write_many", "/edit", "/delete",
-    "/versions/list", "/versions/restore", "/trash/list", "/trash/restore",
+    "/versions/list", "/versions/read", "/versions/restore",
+    "/trash/list", "/trash/restore",
     "/zip", "/unzip", "/link", "/ocr_pdf", "/pdf_op"]
     .concat([...MOVED_WRITE_ENDPOINTS]));
   if (ROUTE_GET.has(path)) {

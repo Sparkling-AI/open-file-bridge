@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.10-EXT (extension backend)
+# Local File Bridge — skill v3.0.11-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -29,7 +29,7 @@ description: "MUST-CALL before ANY file task. User's real files are reachable ON
 > elected relay's tab was closed mid-session — retry once (the
 > bootstrap re-elects automatically on the next call).
 
-Requires extension ≥ **3.0.1** (`/version` reports `3.0.5-EXT` on
+Requires extension ≥ **3.0.1** (`/version` reports `3.0.6-EXT` on
 current builds; `skill_min` 2.5). ≥ **3.0.3** = invisible engine
 auto-start (offscreen); on 3.0.1–3.0.2 engines still auto-start but in a
 background tab. The endpoint surface mirrors bridge app 2.11 — every
@@ -276,8 +276,12 @@ ONCE at the end.
 Writes are IMMEDIATE and snapshot-first: every overwrite keeps a copy
 under `.ofb-snapshots/`, deletes under `.ofb-trash/` — recovery via
 `/versions/list` + `/versions/restore`, `/trash/list` + `/trash/restore`.
-Writes >1 MB chunk automatically inside the pipe (model code never
-chunks manually).
+To READ an old version WITHOUT changing the live file, use
+`POST /versions/read {"path": …, "ts": …}` (text by default,
+`"b64": true` for binary) — do NOT restore just to read. Restoring IS
+a write (it replaces the live file) and asks for approval worded as a
+restore. Writes >1 MB chunk automatically inside the pipe (model code
+never chunks manually).
 
 **Out-of-chat confirmations (default on).** Deletes and overwrites of
 EXISTING files push an Approve/Deny popup into the chat page (the
