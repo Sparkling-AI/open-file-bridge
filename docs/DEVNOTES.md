@@ -1716,3 +1716,34 @@ The two permission paths are now BOTH live-verified:
   "prompt" → skill preflight stops → Reconnect → "Allow on every
   visit" (verified 2026-09-07 + 2026-09-09). Expect one reconnect
   after every extension update Dandan loads in place.
+
+## Stage-3 session #14: recovery guide at app parity + 30-day-claim fix (2026-09-10)
+
+Dandan: the extension's guide.html was a stub next to the app's
+docs/recovery-guide.html (which documents storage locations and the
+chat workflows for listing/restoring versions). Rewrote it at full
+parity — same 10-section structure (protection table, restore version,
+trash, messed-up walkthrough, batch regret, rate brake, safety
+settings, storage limits, troubleshooting, FAQ) with EXTENSION-TRUE
+facts where the models differ:
+
+- Snapshots/trash live INSIDE each shared folder (.ofb-snapshots/,
+  .ofb-trash/, .ofb-chunks/), hidden from the AI by the ignore floor —
+  so the guide teaches the Finder/Explorer manual recovery path
+  (copy the file out of .ofb-snapshots/<ts>/ yourself), which the app
+  deliberately can't offer (its store is outside the folder).
+- The approval cards are documented as the extra safety net the app
+  doesn't have (creates never ask; restores worded as restores).
+- Reading an old version without restoring (POST /versions/read) is
+  the documented "peek" step in the walkthrough.
+- Storage limits: 8 MB/file snapshot cap (same as app), but NO
+  auto-expiry/pruning exists in the extension — guide says "kept until
+  you delete them; the AI can't (those folders are invisible to it)".
+
+That last point exposed an inherited-wording bug: options.html claimed
+a "30-day trash" in three places (app-true, extension-false — no
+expiry code exists). All three fixed to honest wording. Bumped ext
+3.0.7 (guide ships in the zip). Render-verified headless: 10 sections,
+version stamp 3.0.7-EXT, zero console errors; GLM-4.6V review clean
+(no breakage; density matches the app guide by design). Skill
+untouched (its trash wording was already claim-free) — no restage.

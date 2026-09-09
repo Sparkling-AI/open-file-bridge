@@ -89,7 +89,7 @@ folder grant stored in this browser, and only the Open WebUI page's own
 code-interpreter sandbox can reach the bridge — nothing else can send requests.</p>
 <p class="hint">Always on, not configurable: credential-looking files
 (<code>.env</code>, <code>id_rsa</code>, <code>*.pem</code>, …) are refused;
-every overwrite keeps the previous version; deletes go to a 30-day trash.</p>
+every overwrite keeps the previous version; deletes go to the trash.</p>
 <p class="hint" id="secstatus"></p>
 <div class="btnrow" style="margin-top:4px">
 <label class="hint" for="confirmscope" style="white-space:nowrap">Confirm before</label>
@@ -103,8 +103,7 @@ every overwrite keeps the previous version; deletes go to a 30-day trash.</p>
 <p class="hint" style="margin-top:2px">Destructive requests pop up an
 Approve/Deny card <b>inside the chat page</b> — the assistant retries
 automatically after you click Approve (single-use, 5 min). Every
-overwrite still keeps the previous version; deletes go to the 30-day
-trash.</p>
+overwrite still keeps the previous version; deletes go to the trash.</p>
 </details>
 
 <details class="sec" id="sec-ocr" open>
@@ -175,7 +174,8 @@ lifetime means old chat answers stay clickable for longer.</p>
 <details class="sec" id="sec-safety" open>
 <summary>🛟 Safety &amp; recovery</summary>
 <p class="hint">Nothing the AI changes is unrecoverable: every overwrite keeps the
-previous version, and deletes go to a 30-day trash. How to restore or find
+previous version, and deletes go to the trash (kept inside your folder
+until you empty it — see the recovery guide). How to restore or find
 deleted files:</p>
 <div class="btnrow">
 <button id="openguide">📖 Recovery guide</button>
