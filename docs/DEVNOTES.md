@@ -1517,3 +1517,62 @@ the SAME execute_code returned {"ok": true, "written":
 model confirmed the append. No retry round trip. Side observation:
 the closed-shadow card DOES expose its Approve/Deny buttons to macOS
 accessibility. OWUI rows restaged to 3.0.7-EXT.
+
+## Stage-3 session #9: invisible engines (offscreen) + the engine_alive misread fix (2026-09-09)
+
+Trigger: Dandan's OCR test — the model found the parking image, then asked
+him to open the engine tab WITHOUT ever calling /ocr. Root cause chain:
+(1) auto-open already existed (34fe464, default ON, background tab), so
+the extension was fine; (2) the SKILL documents /health fields but not
+engine_alive (added session #6 for the settings page) — the model saw the
+undocumented "engine_alive": false next to "addons": {pdf:true,ocr:true}
+and concluded OCR was unavailable; (3) the skill's only engine guidance
+was the 409 fallback wording, which the model mirrored verbatim. His ask:
+skip asking the user entirely — run OCR invisibly.
+
+Why not ON the OWUI page (his first idea): page CSP governs content-script
+wasm/blob-workers (the Stage-3 gotchas that forced extension pages);
+engine files would need web_accessible_resources; the engine page also
+holds the folder-grant session alive. Right mechanism: OFFSCREEN DOCUMENT
+(chrome.offscreen, MV3's built-in hidden background page):
+
+- extension/engine-offscreen.html — loads the SAME fs-idb/fs-core/
+  engine-host.js chain (engine-host.js guards every getElementById, so it
+  runs with no DOM). engine-host.html tab stays as manual fallback.
+- fs-engine.js: engineEnsureTab → engineEnsureHost — offscreen-first
+  (reasons ["BLOBS"], justification names the wasm engines; single-
+  document error treated as success), tab fallback if the API is absent.
+  Both the cold path and the stale-heartbeat retry now use it.
+  engineNeededBody wording: auto-start normally handles it — retry once;
+  user opens the engine tab from settings only if it persists.
+- manifest: + "offscreen" permission, minimum_chrome_version "109",
+  version 3.0.3. fs-core FS_VERSION 3.0.3-EXT.
+- /health gains engine_alive_hint ("false is NORMAL before the first
+  engine call — engines auto-start (invisibly)…") so even a model that
+  never read the skill cannot misread the field.
+- SKILL-EXT 3.0.8-EXT: "Engines start themselves — never ask the user":
+  engines lazy-start on the first engine call, engine_alive:false is the
+  normal resting state and NOT a blocker, 409 → retry once then settings
+  fallback; /health field list documents engine_alive explicitly;
+  requires-extension note now explains 3.0.1–3.0.2 = tab auto-start vs
+  ≥3.0.3 = invisible.
+- options page: toggle renamed "Auto-start the engines when needed"
+  (#engauto id kept — engines_test waits on it), engstat idle text now
+  "auto-starts on the first PDF/OCR call (nothing to open)"; guide.html
+  engine section rewritten (auto-start is the norm, tab is fallback).
+- engines_test e13 upgraded: after the auto-start cell the driver asserts
+  NO engine-host tab exists in the context — a tab means the offscreen
+  path failed and fell back; verdict fails with an explicit note.
+
+Verified headless Chrome-for-Testing 1208: engineEnsureHost() called IN
+the service worker creates the offscreen doc; its hello flips
+/health engine_alive to true within seconds; an ofbEngine RPC for
+'no.such.op' is answered "engine not loaded" (listener live) while
+'pdf.text' answers a payload error (engine-impl.js IMPORTED + handler
+registered in the offscreen doc); zero engine-host tabs; settings-page
+smoke clean (3.0.3-EXT, new engstat, no console errors). Linux suites
+still pending (as with all picker-driven paths); the full wasm op path
+is covered there by e13. Live check for Dandan after reload: the OWUI
+chat should now just DO the OCR (first call ~5–15 s slower); also watch
+that the offscreen host keeps the folder-grant session alive the way the
+tab did (untested headless — no grant in the smoke).

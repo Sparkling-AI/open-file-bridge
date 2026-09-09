@@ -50,7 +50,11 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       : { ok: false, hint: "no folder chosen yet", roots: [], version: FS_VERSION };
     if (ros.length) info.root = ros[0].path;
     info.addons = { pdf: FS_ENGINES.pdf, ocr: FS_ENGINES.ocr };
-    info.engine_alive = FS_ENGINE_ALIVE; // engine tab heartbeat (fs-engine)
+    info.engine_alive = FS_ENGINE_ALIVE; // engine host heartbeat (fs-engine)
+    // undocumented-field guard (2026-09-09): a model reading /health saw
+    // engine_alive:false and told the user OCR was unavailable WITHOUT
+    // calling the endpoint — make the field self-explanatory
+    info.engine_alive_hint = "false is NORMAL before the first engine call — engines auto-start (invisibly) when /pdf_text /ocr /ocr_pdf /pdf_op is called";
     info.ocr_lang = await kvGet("ocr_lang", "eng");
     info.ocr_langs_available = FS_ENGINES.ocr ? FS_OCR_LANGS : [];
     info.wheels = FS_WHEELS.length;

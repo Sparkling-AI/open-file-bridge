@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.7-EXT (extension backend)
+# Local File Bridge — skill v3.0.8-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -29,8 +29,10 @@ description: "MUST-CALL before ANY file task. User's real files are reachable ON
 > elected relay's tab was closed mid-session — retry once (the
 > bootstrap re-elects automatically on the next call).
 
-Requires extension ≥ **3.0.1** (`/version` reports `3.0.1-EXT`;
-`skill_min` 2.5). The endpoint surface mirrors bridge app 2.11 — every
+Requires extension ≥ **3.0.1** (`/version` reports `3.0.3-EXT` on
+current builds; `skill_min` 2.5). ≥ **3.0.3** = invisible engine
+auto-start (offscreen); on 3.0.1–3.0.2 engines still auto-start but in a
+background tab. The endpoint surface mirrors bridge app 2.11 — every
 recipe from the standard skill works with the exceptions below.
 
 ## What is different from the app-backed skill
@@ -45,12 +47,16 @@ recipe from the standard skill works with the exceptions below.
   browser's bubble, **"Allow on every visit" is the persistent choice**
   (asks never again); "Allow this time" works but repeats after every
   restart. The folder is NOT re-picked.
-- **Engine endpoints (HTTP 409 `engine_needed: true`)** — PDF text/PDF
-  ops/OCR run in the extension's engine tab. With the default
-  **auto-open** setting the extension opens that tab itself and retries —
-  you only see 409 if auto-open is off (or failed): then tell the user:
-  click the toolbar icon → open the engine tab → keep it open while we
-  work with PDFs or scanned files.
+- **Engines start themselves — never ask the user to open anything.**
+  PDF text/PDF ops/OCR run in a hidden engine document that the extension
+  starts automatically the FIRST time you call `/pdf_text`, `/pdf_op`,
+  `/ocr`, or `/ocr_pdf` (the first call takes a few extra seconds).
+  `"engine_alive": false` on `/health` is the NORMAL resting state, NOT
+  a blocker and NOT a reason to ask the user — just call the endpoint.
+  You should never see 409 `engine_needed`; if one appears anyway,
+  retry ONCE, and only if it persists tell the user: toolbar icon →
+  settings → OCR card → check "Auto-start the engines" and press
+  "Open engine tab" (manual fallback).
 - `/pdf_text`, `/pdf_op`, `/ocr`, `/ocr_pdf`, `/image_info`, `/image_b64`,
   `/csv_head`, `/csv_stats` — same request/response shapes as the app.
 - **Moved endpoints** (501 with a recipe): `/docx_read /docx_write
@@ -209,8 +215,11 @@ async def write_binary(path, data: bytes):
 ```
 
 **First call:** `h = await bridge_get("/health")` — one call answers
-everything: extension alive, `version` (`3.0.2-EXT`), `addons`
-(`{pdf: true, ocr: true}`), `roots` (granted folders; empty = the user
+everything: extension alive, `version` (`3.0.3-EXT`), `addons`
+(`{pdf: true, ocr: true}` — bundled capability), `engine_alive`
+(false is NORMAL — engines are lazy; they auto-start the moment you
+call an engine endpoint, so do NOT treat it as unavailable), `roots`
+(granted folders; empty = the user
 has not picked one yet → tell them to click the toolbar icon and choose
 a folder). "no relay answered" or "extension not present" means no
 extension on this page; a 503 "no shared folder" means no folder picked
@@ -231,8 +240,9 @@ resets `perm` to `prompt`; every read/write would fail with 403
 
 **Errors are JSON** — read them, don't blind-retry. The three
 user-actionable shapes: 403 `permission_needed` (Reconnect → Allow on
-every visit), 409 `engine_needed` (usually self-heals via auto-open;
-if it persists, open the engine tab), 503 no-folder
+every visit), 409 `engine_needed` (auto-start usually handles it —
+retry once; only if it persists, the user opens the engine tab from
+settings), 503 no-folder
 (pick a folder). Never repeat a failed request unchanged.
 
 **Diagnostics: ONE `print(json.dumps(...))` per cell — never several

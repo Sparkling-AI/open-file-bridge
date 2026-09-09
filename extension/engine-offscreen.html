@@ -1,0 +1,16 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Open File Bridge — engines (offscreen)</title>
+</head>
+<body>
+<!-- The invisible engine host (Dandan's ask, 2026-09-09): same bootstrap
+     as engine-host.html (engine-host.js guards every getElementById, so it
+     runs fine with no DOM), but opened as an OFFSCREEN document by the
+     service worker — no tab, no window, nothing to keep open. The visible
+     engine-host.html tab remains as the manual fallback. Loads mirror
+     engine-host.html: fs-idb/fs-core for engine-impl.js's globals. -->
+<script src="fs-idb.js"></script>
+<script src="fs-core.js"></script>
+<script src="engine-host.js"></script>
+</body>
+</html>

@@ -111,16 +111,16 @@ trash.</p>
 <summary>🔤 OCR language</summary>
 <p class="hint" id="engstat"></p>
 <div class="btnrow">
-<button id="engbtn">Open engine tab</button>
-<span class="hint">PDF &amp; OCR run in that tab — keep it open
-while the assistant works with PDFs or scanned files.</span>
+<button id="engbtn" class="secondary">Open engine tab</button>
+<span class="hint">Manual fallback only — engines start by themselves
+(invisibly) when the assistant first uses a PDF/OCR operation.</span>
 </div>
 <label style="display:flex;align-items:flex-start;gap:10px;margin:6px 0 2px;cursor:pointer">
 <input type="checkbox" id="engauto" style="width:auto;margin-top:3px">
-<span><b>Auto-open the engine tab when needed</b> — if the assistant asks
-for a PDF/OCR operation while the tab is closed, the extension opens it
-automatically in a background tab and retries (no action needed). When
-off, the assistant is told to ask you to open it.
+<span><b>Auto-start the engines when needed</b> — the first PDF/OCR
+operation spins up the engines in a hidden background document (nothing
+opens, no action needed; the first call takes a few seconds extra). When
+off, the assistant is told to ask you to start them.
 <span class="hint" id="engautostat"></span></span>
 </label>
 <p class="hint">For reading scanned PDFs / photos — tick one or more:</p>

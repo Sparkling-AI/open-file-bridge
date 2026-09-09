@@ -28,12 +28,17 @@ permission is re-asked on the stored handle.</div>
 be asked again on future restarts. (“Allow this time” works too but asks
 again after the next browser restart.)</div>
 
-<h2>“engine tab closed” / engine_needed error</h2>
-<p>PDF text extraction, PDF operations and OCR run in a background tab of
-the extension itself — not on any server.</p>
+<h2>“engine_needed” error</h2>
+<p>PDF text extraction, PDF operations and OCR run inside the extension
+itself — not on any server. The engines normally <b>start automatically
+and invisibly</b> the first time the assistant uses them; you should
+never need to do anything.</p>
+<p>If a 409 <code>engine_needed</code> error persists anyway:</p>
 <div class="step">Click the Open File Bridge toolbar icon.</div>
-<div class="step">Open the <b>engine tab</b> and keep it open while the
-assistant works with PDFs or scanned files.</div>
+<div class="step">In the OCR card, check <b>Auto-start the engines when
+needed</b> is ticked, then press <b>Open engine tab</b> (the manual
+fallback) and keep that tab open while the assistant works with PDFs or
+scanned files.</div>
 
 <h2>“no shared folder configured”</h2>
 <div class="step">Click the toolbar icon (it opens the settings page) and

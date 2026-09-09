@@ -1,12 +1,18 @@
 // Open File Bridge — engine RPC bridge (Stage 3, P3/P4).
 //
-// The engines (pdfium-WASM, tesseract.js, pdf-lib) run in the ENGINE PAGE
-// (plan §4.2): the SW cannot importScripts wasm and WASM re-instantiation
-// per SW cold start would burn the 5-min MV3 cap. fsRoute calls
-// fsEngineRoute() which forwards to the page over chrome.runtime messaging.
+// The engines (pdfium-WASM, tesseract.js, pdf-lib) run in an ENGINE HOST
+// document (plan §4.2): the SW cannot importScripts wasm and WASM
+// re-instantiation per SW cold start would burn the 5-min MV3 cap.
+// fsRoute calls fsEngineRoute() which forwards to the host over
+// chrome.runtime messaging.
 //
-// If no engine page is open, endpoints answer with a structured 409 telling
-// the model exactly what to ask the user for (open the engine tab).
+// Host = an OFFSCREEN document since 2026-09-09 (invisible — no tab, no
+// window; the SW starts it on demand when an engine endpoint is first
+// called, default ON via kv "engine_auto_open"). The visible
+// engine-host.html tab remains as the manual fallback (settings button)
+// and for older Chrome without the offscreen API. If starting fails
+// entirely, endpoints answer a structured 409 telling the model exactly
+// what to ask the user for.
 
 "use strict";
 
@@ -36,14 +42,47 @@ async function fsEngineRoute(method, path, q, body) {
  * chrome.runtime.sendMessage structured-clones and DROPS File/Blob
  * instances (found 2026-09-06: "Image file /input cannot be read"). */
 
-/** Setting gate for auto-open (kv "engine_auto_open", default ON since
- * 2026-09-07: opening OUR OWN extension page in a background tab is not
- * navigation and keeps the visible-tab consent story — the settings page
- * documents it and can turn it off; 409 remains the fallback).
+/** Setting gate for auto-start (kv "engine_auto_open", default ON since
+ * 2026-09-07; meaning widened 2026-09-09): starting OUR OWN engine host is
+ * not navigation and keeps the consent story — the settings page documents
+ * it and can turn it off; 409 remains the fallback.
  * Read fresh on every engine op (no cache): ops take seconds, an IDB read
  * is noise, and the toggle must take effect on the very next request. */
 async function engineAutoOpen() {
   return await kvGet("engine_auto_open", true);
+}
+
+/** Bring an engine host up, INVISIBLE first: an offscreen document (no
+ * tab, no window — Dandan's ask, 2026-09-09). Falls back to the visible
+ * engine-host.html background tab when the offscreen API is unavailable.
+ * The caller then polls FS_ENGINE_ALIVE for the hello. Single-document
+ * rule: createDocument throws when one already exists — that's success.
+ * Returns a detail string for logs/409s, or null when nothing worked. */
+async function engineEnsureHost(extraDetail) {
+  if (chrome.offscreen && chrome.offscreen.createDocument) {
+    try {
+      try {
+        await chrome.offscreen.createDocument({
+          url: "engine-offscreen.html",
+          reasons: ["BLOBS"],
+          justification: "Runs the bundled WASM PDF/OCR engines (pdfium, tesseract.js, pdf-lib) — they cannot execute in the service worker.",
+        });
+      } catch (e) {
+        // "Only a single offscreen document may be created" (or a race with
+        // a concurrent engine call) — an existing host is exactly what we
+        // want; anything else falls through to the tab fallback below.
+        if (!/single offscreen document|already/i.test(String(e && e.message || e))) {
+          return engineEnsureTab((extraDetail || "") + " | offscreen create failed: " +
+            (e.message || e));
+        }
+      }
+      return "engine host auto-started (offscreen, invisible) — retrying";
+    } catch (e) {
+      return engineEnsureTab((extraDetail || "") + " | offscreen unavailable: " +
+        (e.message || e));
+    }
+  }
+  return engineEnsureTab(extraDetail);
 }
 
 async function engineEnsureTab(extraDetail) {
@@ -111,14 +150,14 @@ async function engineCall(op, params) {
           // the op; 409 engine_needed remains the fallback (setting off or
           // open failed / timed out).
           if (await engineAutoOpen()) {
-            const detail = await engineEnsureTab();
+            const detail = await engineEnsureHost();
             const t0 = Date.now();
             while (!FS_ENGINE_ALIVE && Date.now() - t0 < 15000) {
               await new Promise((r) => setTimeout(r, 300));
             }
             if (!FS_ENGINE_ALIVE) {
               reject(new OpFail(409, engineNeededBody(
-                "auto-open: engine page did not come up within 15s" +
+                "auto-start: engine host did not come up within 15s" +
                 (detail ? " (" + detail + ")" : ""))));
               return;
             }
@@ -152,7 +191,7 @@ async function engineCall(op, params) {
           fsEngineSetAlive(false);
           if (await engineAutoOpen()) {
             try {
-              await engineEnsureTab();
+              await engineEnsureHost();
               const t0 = Date.now();
               while (!FS_ENGINE_ALIVE && Date.now() - t0 < 15000) {
                 await new Promise((r) => setTimeout(r, 300));
@@ -249,9 +288,9 @@ function engExtOf(name) {
 
 function engineNeededBody(extra) {
   const b = {
-    error: "PDF/OCR engines are not running — the engine tab is closed",
+    error: "PDF/OCR engines could not be started",
     engine_needed: true,
-    hint: "tell the user: click the Open File Bridge toolbar icon and open the engine tab (keep it open while the assistant works with PDFs or scanned files)",
+    hint: "engines normally auto-start (invisibly, offscreen) when an engine endpoint is called — retry ONCE; if this 409 persists, tell the user: click the Open File Bridge toolbar icon and open the engine tab manually (settings → Open engine tab)",
   };
   if (extra) b.detail = extra;
   return b;

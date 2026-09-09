@@ -187,8 +187,10 @@ assert d["status"] == 409 and b.get("engine_needed") is True, _r + " raw: " + st
 print(_r); RESULT = _r
 '''
 
-# auto-open ON (the default since 2026-09-07): with the engine tab closed,
-# the SW must open it itself (background tab) and the op must SUCCEED.
+# auto-start ON (the default since 2026-09-07): with the engine tab closed,
+# the SW must start the engines itself (offscreen document since ext
+# 3.0.3 — no tab appears; the driver asserts that separately) and the op
+# must SUCCEED.
 ENGINE_AUTO_OPEN_CELL = '''
 d = (await ofb_fetch("GET", "/pdf_text?path={F}/inv.pdf")).to_py()
 b = json.loads(d["body"]) if d.get("body") else {{}}
@@ -430,8 +432,11 @@ def main():
         pg12, ok12 = run_cells(ctx, base, "e12", h12, timeout=120)
         pg12.close()
 
-        # e13: engine tab closed + auto-open ON (default) -> SW opens the
-        # tab itself and the op succeeds (2026-09-07 toggle)
+        # e13: engine tab closed + auto-start ON (default) -> SW starts the
+        # engines itself and the op succeeds (2026-09-07 toggle). Since ext
+        # 3.0.3 the start is an OFFSCREEN document: assert NO engine-host
+        # tab appears in the context (a tab means the offscreen path failed
+        # and fell back — the test must tell us).
         cells13 = {"e13_auto_open": ENGINE_AUTO_OPEN_CELL.replace("{F}", FIXREL).replace("{{", "{").replace("}}", "}")}
         h13 = SCRATCH / "harness-e13.html"
         h13.write_text(assemble_harness_page(spike1.OWUI, spike1_cells_python(), cells13))
@@ -444,6 +449,9 @@ def main():
         opt.close()
         pg13, ok13 = run_cells(ctx, base, "e13", h13, timeout=180)
         pg13.close()
+        host_tabs = [p.url for p in ctx.pages if "engine-host.html" in p.url]
+        offscreen_ok = not host_tabs
+        print("engine-host tabs after e13:", host_tabs or "none (offscreen path ✓)")
 
         ctx.close()
 
@@ -453,8 +461,9 @@ def main():
         f = FIX / name
         print(f"{name}: {'OK ' + str(f.stat().st_size) + 'B' if f.exists() else 'MISSING'}")
 
-    verdict = "PASS" if (ok and ok12 and ok13) else "FAIL"
-    print(f"\nENGINES P3+P4 VERDICT: {verdict}")
+    verdict = "PASS" if (ok and ok12 and ok13 and offscreen_ok) else "FAIL"
+    print(f"\nENGINES P3+P4 VERDICT: {verdict}" +
+          ("" if offscreen_ok else " (engine started via TAB, not offscreen)"))
     return 0 if verdict == "PASS" else 1
 
 

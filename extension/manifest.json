@@ -1,10 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Open File Bridge",
-  "version": "3.0.2",
+  "version": "3.0.3",
   "description": "Lets the code interpreter in Open WebUI read and write files in one folder on this machine — no server, no network. The extension holds the folder grant; the page relay only forwards narrow, id-correlated requests.",
+  "minimum_chrome_version": "109",
   "permissions": [
-    "storage"
+    "storage",
+    "offscreen"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"

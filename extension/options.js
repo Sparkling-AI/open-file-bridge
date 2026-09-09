@@ -93,14 +93,15 @@ async function beat() {
         : " · " + roots.map((x) => x.path).join(", "))
       : " · no folder chosen yet");
   // engines card state (lives in the SW, not this page — hence the pipe).
-  // addons = bundled capability; engine_alive = the engine tab's heartbeat.
+  // addons = bundled capability; engine_alive = the engine host's heartbeat
+  // (idle is the NORMAL resting state — engines auto-start on first use).
   const eng = r.data.addons || { pdf: false, ocr: false };
   const alive = !!r.data.engine_alive;
   document.getElementById("engstat").innerHTML =
     "PDF &amp; OCR engines " + (eng.pdf && eng.ocr ? "bundled" : "missing??") + " · " +
-    (alive ? '<span class="ok">engine tab running</span>'
-      : '<span class="warn">engine tab not running</span> — PDF text extraction, ' +
-        "PDF operations and OCR will ask for it; open it below and keep it open.");
+    (alive ? '<span class="ok">running (invisible)</span>'
+      : '<span class="ok">idle — auto-starts on the first PDF/OCR call</span> ' +
+        "(nothing to open; the first call takes a few seconds extra)");
   // language boxes depend on engine aliveness (available list comes empty
   // otherwise). Skip while the user has unsaved ticks — the 5 s beat must
   // not clobber a half-edited selection.
