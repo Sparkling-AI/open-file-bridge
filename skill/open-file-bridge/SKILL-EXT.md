@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.8-EXT (extension backend)
+# Local File Bridge — skill v3.0.9-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -29,7 +29,7 @@ description: "MUST-CALL before ANY file task. User's real files are reachable ON
 > elected relay's tab was closed mid-session — retry once (the
 > bootstrap re-elects automatically on the next call).
 
-Requires extension ≥ **3.0.1** (`/version` reports `3.0.3-EXT` on
+Requires extension ≥ **3.0.1** (`/version` reports `3.0.4-EXT` on
 current builds; `skill_min` 2.5). ≥ **3.0.3** = invisible engine
 auto-start (offscreen); on 3.0.1–3.0.2 engines still auto-start but in a
 background tab. The endpoint surface mirrors bridge app 2.11 — every

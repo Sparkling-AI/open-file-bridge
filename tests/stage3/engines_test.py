@@ -176,6 +176,32 @@ _r = "e11 lang=" + str(cb.get("ocr_lang")) + " avail=" + str(len(cb.get("availab
 assert s["status"] == 200 and cb.get("ocr_lang") == "swe+eng" and len(cb.get("available", [])) == 8, _r
 print(_r); RESULT = _r
 ''',
+        # e14 (2026-09-09): method-as-contract on engine endpoints + the
+        # /image_info header parser port (it 500'd "not defined" in a real
+        # chat). POST /ocr must TEACH the method, not 404 "unknown".
+        "e14_method_contract": f'''d = (await ofb_fetch("POST", "/ocr", json.dumps({{"path": "{F}/inv.png", "lang": "eng"}}))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "e14 post_ocr=" + str(d["status"]) + " err=" + str(b.get("error", ""))[:50]
+assert d["status"] == 405 and "GET-only" in str(b.get("error", "")), _r + " raw: " + str(d)[:300]
+i = (await ofb_fetch("GET", "/image_info?path={F}/inv.png")).to_py()
+ib = json.loads(i["body"]) if i.get("body") else {{}}
+_r += " | image_info=" + str(i["status"]) + " " + str(ib.get("format")) + " " + str(ib.get("width")) + "x" + str(ib.get("height"))
+assert i["status"] == 200 and ib.get("format") and ib.get("width", 0) > 0 and ib.get("height", 0) > 0, _r + " raw: " + str(i)[:300]
+print(_r); RESULT = _r
+''',
+        # e15 (2026-09-09): a PROPERLY URL-encoded lang (swe%2Beng — what a
+        # correct client sends for '+') must decode before the engine; the
+        # raw-parse bug silently fell back to eng (garbage Swedish OCR).
+        "e15_lang_encoded": f'''d = (await ofb_fetch("GET", "/ocr?path={F}/swe.png&lang=swe%2Beng")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+pages = b.get("pages", [])
+t = " ".join(" ".join(p.get("lines", [])) for p in pages)
+aa = all(c in t for c in "\\u00e5\\u00e4\\u00f6")
+dg = all(x in t for x in ["24680", "13579", "3394.75", "55-123"])
+_r = "e15 lang=" + str(b.get("lang")) + " aa=" + str(aa) + " digits=" + str(dg)
+assert d["status"] == 200 and b.get("lang") == "swe+eng" and aa and dg, _r + " raw: " + str(d)[:300]
+print(_r); RESULT = _r
+''',
     }
 
 

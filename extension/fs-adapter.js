@@ -201,6 +201,13 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       error: "reveal is disabled — an extension cannot open the OS file manager",
       hint: "the extension page shows the file path with a copy button" });
     if (path === "/pdf_text" || path === "/ocr" || path === "/ocr_pdf" || path === "/pdf_op") {
+      // URL-decode lang at the routing boundary: parseQueryString is
+      // deliberately raw (paths decode per-endpoint via unquoteComp), and
+      // a properly-encoded swe%2Beng reached the engine un-decoded →
+      // sanitizeLangs rejected it → silent English fallback → garbage OCR
+      // of a Swedish sign (real chat 2026-09-09)
+      if (q.lang !== undefined) q.lang = unquoteComp(q.lang);
+      if (body && typeof body.lang === "string") body.lang = unquoteComp(body.lang);
       return await fsEngineRoute(method, path, q, body);
     }
   } catch (e) { return opFailToResp(e); }
@@ -544,10 +551,93 @@ async function epTree(q) {
     truncated ? { hint: "increase max_entries/max_depth for more" } : {}));
 }
 
+/** Parse png/jpeg/gif/webp/bmp headers — port of the app's /image_info
+ * walker (src/file_bridge.py): width/height + JPEG EXIF orientation, no
+ * decoding. Missing since the Stage-3 port (the call site 500'd with
+ * "imageInfoFromHeader is not defined" in a real chat 2026-09-09).
+ * Returns {format,width,height,megapixels[,exif_orientation,
+ * effective_width,effective_height,note]} or null. */
+function imageInfoFromHeader(head, size) {
+  if (!head || head.length < 12) return null;
+  function be(off, n) {
+    let v = 0;
+    for (let i = 0; i < n; i++) v = v * 256 + (head[off + i] || 0);
+    return v;
+  }
+  function le16(off) { return (head[off] || 0) | ((head[off + 1] || 0) << 8); }
+  function le32(off) {
+    return (head[off] || 0) | ((head[off + 1] || 0) << 8) |
+      ((head[off + 2] || 0) << 16) | ((head[off + 3] || 0) << 24);
+  }
+  function sig(s, off) {
+    for (let i = 0; i < s.length; i++)
+      if (head[off + i] !== (s.charCodeAt(i) & 0xff)) return false;
+    return true;
+  }
+  let fmt = null, w = null, h = null, orientation = null;
+  if (sig("\x89PNG\r\n\x1a\n", 0)) {
+    fmt = "png";
+    if (sig("IHDR", 12)) { w = be(16, 4); h = be(20, 4); }
+  } else if (sig("GIF87a", 0) || sig("GIF89a", 0)) {
+    fmt = "gif"; w = le16(6); h = le16(8);
+  } else if (head[0] === 0x42 && head[1] === 0x4d) { // "BM"
+    fmt = "bmp"; w = le32(18); h = le32(22); // signed i32 (top-down BMPs use negative h)
+  } else if (sig("RIFF", 0) && sig("WEBP", 8)) {
+    fmt = "webp";
+    if (sig("VP8 ", 12) && head[23] === 0x9d && head[24] === 0x01 && head[25] === 0x2a) {
+      w = le16(26) & 0x3fff; h = le16(28) & 0x3fff;
+    } else if (sig("VP8L", 12)) {
+      const b0 = head[21], b1 = head[22], b2 = head[23], b3 = head[24];
+      w = 1 + (((b1 & 0x3f) << 8) | b0);
+      h = 1 + (((b3 & 0x0f) << 10) | (b2 << 2) | ((b1 & 0xc0) >> 6));
+    } else if (sig("VP8X", 12)) {
+      w = 1 + (head[24] | (head[25] << 8) | (head[26] << 16));
+      h = 1 + (head[27] | (head[28] << 8) | (head[29] << 16));
+    }
+  } else if (head[0] === 0xff && head[1] === 0xd8) {
+    fmt = "jpeg";
+    let off = 2;
+    while (off + 4 < head.length) {
+      if (head[off] !== 0xff) { off++; continue; }
+      const marker = head[off + 1];
+      if (marker === 0xd8 || marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) { off += 2; continue; }
+      const seglen = be(off + 2, 2);
+      if (marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc) {
+        h = be(off + 5, 2); w = be(off + 7, 2); break; // SOFn
+      }
+      if (marker === 0xe1 && sig("Exif\x00\x00", off + 4)) {
+        const tiff = off + 10;
+        const little = head[tiff] === 0x49 && head[tiff + 1] === 0x49; // "II"
+        const rd16 = (o) => little ? le16(o) : be(o, 2);
+        const rd32 = (o) => little ? le32(o) : be(o, 4);
+        const cntAt = tiff + rd32(tiff + 4); // IFD0 offset
+        const n = rd16(cntAt);
+        for (let k = 0; k < n; k++) {
+          const ent = cntAt + 2 + k * 12;
+          if (rd16(ent) === 0x0112) { orientation = rd16(ent + 8); break; } // Orientation
+        }
+      }
+      off += 2 + seglen;
+    }
+  }
+  if (!fmt || w == null) return null;
+  const out = { format: fmt, width: w, height: h,
+    megapixels: Math.round((w * h / 1e6) * 100) / 100 };
+  if (orientation) {
+    out.exif_orientation = orientation;
+    const swap = orientation >= 5 && orientation <= 8;
+    out.effective_width = swap ? h : w;
+    out.effective_height = swap ? w : h;
+    out.note = "EXIF orientation present — effective dims swap w/h; viewers auto-rotate but raw decoders may not";
+  }
+  return out;
+}
+
 async function epImageInfo(q) {
   const rg = await resolveGuarded(unquoteComp(q.path || ""));
   const file = await getFileFor(rg.rootRec, rg.parts);
-  const bytes = new Uint8Array(await file.slice(0, 128).arrayBuffer());
+  // 64 KB like the app — the JPEG marker/EXIF walk can run past 128 bytes
+  const bytes = new Uint8Array(await file.slice(0, 65536).arrayBuffer());
   const info = imageInfoFromHeader(bytes, file.size);
   if (!info) {
     return fsFail(415, { error: "unsupported image format", hint: "supported: png/jpeg/gif/webp/bmp" });

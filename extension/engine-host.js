@@ -53,11 +53,19 @@ async function keepalivePing() {
 
 window.addEventListener("DOMContentLoaded", () => {
   log("engine host page up");
-  fsEngineHello();
-  setInterval(fsEngineHello, 30000);
+  // The FIRST hello goes out only AFTER engine-impl.js registers its
+  // handlers: the hello flips the SW's FS_ENGINE_ALIVE, and registration
+  // takes seconds (vendor/wasm loads) — a hello before that made the
+  // first engine call answer 500 "engine not loaded" (real chat
+  // 2026-09-09). Not-alive remains the safe resting state; the SW's
+  // auto-start loop waits for this post-registration hello.
   keepalivePing();
   setInterval(keepalivePing, 5000);
   import(chrome.runtime.getURL("engine-impl.js"))
-    .then(() => log("engines registered: pdfium + tesseract.js + pdf-lib"))
+    .then(() => {
+      log("engines registered: pdfium + tesseract.js + pdf-lib");
+      fsEngineHello();
+      setInterval(fsEngineHello, 30000);
+    })
     .catch((e) => log("engine load FAILED: " + e));
 });

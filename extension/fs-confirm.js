@@ -130,9 +130,18 @@ async function confirmRequiredFor(method, path, body) {
     return body && body.__finalizing && (await confirmTargetExists(body.path || ""))
       ? "overwrite" : null;
   }
-  if (path === "/pdf_op" || path === "/ocr_pdf" ||
-      path === "/versions/restore" || path === "/trash/restore") {
-    return (await confirmTargetExists(b.out || b.path || "")) ? "overwrite" : null;
+  if (path === "/versions/restore" || path === "/trash/restore") {
+    // restores: `path` IS the write target
+    return (await confirmTargetExists(b.path || "")) ? "overwrite" : null;
+  }
+  if (path === "/pdf_op" || path === "/ocr_pdf") {
+    // engine WRITE ops: the only write target is `out` — `path` is the
+    // INPUT. Regression 2026-09-09: the old `b.out || b.path` fallback
+    // asked to "overwrite" the INPUT image on an /ocr_pdf with no out
+    // (Dandan denied the popup; even approved it would have 400'd
+    // "missing out" — a pure false alarm). Missing out is engineCall's
+    // own honest 400, never a confirmation.
+    return (await confirmTargetExists(b.out || "")) ? "overwrite" : null;
   }
   return null; // /write_b64_chunk internals reach here only via finalize;
                // the initiating /write_b64 carried the gate decision

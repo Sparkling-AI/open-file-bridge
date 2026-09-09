@@ -30,6 +30,19 @@ function fsEngineSetAlive(alive) {
 }
 
 async function fsEngineRoute(method, path, q, body) {
+  // method-as-contract: a wrong-method call on a KNOWN engine endpoint
+  // must say what to do — the old fall-through 404 "unknown engine
+  // endpoint" sent the model endpoint-guessing in a real chat (2026-09-09:
+  // POST /ocr after /image_info failed)
+  const ENGINE_METHODS = { "/pdf_text": "GET", "/ocr": "GET", "/ocr_pdf": "POST", "/pdf_op": "POST" };
+  if (ENGINE_METHODS[path] && method !== ENGINE_METHODS[path]) {
+    return fsFail(405, {
+      error: path + " is " + ENGINE_METHODS[path] + "-only — got " + method,
+      hint: (path === "/ocr" || path === "/pdf_text")
+        ? "use GET " + path + "?path=<file>&lang=<langs> (URL-encode '+' as %2B)"
+        : "POST a JSON body — see the skill's engine recipes",
+    });
+  }
   if (path === "/pdf_text" && method === "GET") return await engineCall("pdf.text", q);
   if (path === "/ocr" && method === "GET") return await engineCall("ocr", q);
   if (path === "/ocr_pdf" && method === "POST") return await engineCall("ocr.pdf", body);

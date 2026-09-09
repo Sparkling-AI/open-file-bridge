@@ -1576,3 +1576,48 @@ is covered there by e13. Live check for Dandan after reload: the OWUI
 chat should now just DO the OCR (first call ~5–15 s slower); also watch
 that the offscreen host keeps the folder-grant session alive the way the
 tab did (untested headless — no grant in the smoke).
+
+## Stage-3 session #10: five OCR-round bugs from Dandan's parking-sign chat (2026-09-09)
+
+His transcript (model reading a Swedish parking sign) exposed five real
+bugs in one flow; the popup was the headline:
+
+1. **False-alarm overwrite confirmation** — the model called POST
+   /ocr_pdf (the searchable-PDF WRITER) with the image as input and NO
+   out; fs-confirm's `b.out || b.path` fallback treated the INPUT as the
+   write target and asked to "overwrite parking_images….jpg" (Dandan
+   denied — right instinct; even approved, engineCall's next check 400s
+   "missing out", so nothing could have written). Fix: engine write ops
+   (/pdf_op /ocr_pdf) gate on `out` ONLY; restores keep `path` (it IS
+   their target). confirm_test A3 unit added.
+2. **/image_info 500 "imageInfoFromHeader is not defined"** — the header
+   parser was never ported to the extension (only the call site
+   existed). Ported from the app (file_bridge.py:1691): PNG/GIF/BMP/
+   WebP(VP8/VP8L/VP8X)/JPEG SOFn walk + EXIF orientation + effective
+   dims; head slice 128 → 64 KB to match. engines_test e14 asserts it
+   on a real fixture.
+3. **POST /ocr → 404 "unknown engine endpoint"** — engine endpoints are
+   method-locked but the fall-through hid it; the model went
+   endpoint-guessing. fsEngineRoute now 405s with the contract
+   ("/ocr is GET-only — use GET /ocr?path=…&lang=… (URL-encode '+' as
+   %2B)") for all four endpoints. e14 covers it.
+4. **500 "engine not loaded: ocr" right after auto-start** — engine-host
+   hello'd at DOMContentLoaded, seconds before engine-impl.js finished
+   registering (alive=true but handlers empty). The first hello now
+   fires only after registration; not-alive stays the safe resting
+   state. Smoke asserts an IMMEDIATE post-alive ocr RPC hits the
+   registered handler.
+5. **URL-encoded lang silently fell back to eng** — the model properly
+   sent swe%2Beng; parseQueryString is deliberately raw and nothing
+   decoded lang → sanitizeLangs rejected "swe%2Beng" → eng fallback →
+   garbage OCR of the Swedish sign (his final answer was mostly
+   "10-19, unclear"). Fix: decode q.lang/body.lang via unquoteComp at
+   the engine routing boundary. engines_test e15 asserts lang=="swe+eng"
+   AND the åäö/digit probes on swe.png with the encoded form.
+
+ext 3.0.4 / skill 3.0.9-EXT (version-string touch-up only). Headless
+smoke: all five PASS (gate unit no-out→null / asked=out.pdf; crafted
+PNG parses 256x200; 405 both directions; immediate RPC = domain error
+not "engine not loaded"; decode primitive; zero engine-host tabs).
+Linux suites pending as always; e14/e15 + confirm A3 cover the rest
+there.

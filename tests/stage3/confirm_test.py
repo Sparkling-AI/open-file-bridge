@@ -198,6 +198,26 @@ def main():
             "() => confirmGate('POST','/delete', JSON.stringify({path:'%s/delme.txt'}), null)"
             ".then(g => g ? g.confirmation_required === true : false)" % FIXREL)
         verdicts["A_gate_raises"] = bool(a2)
+        # A3 (2026-09-09 regression): /ocr_pdf with NO out must NOT ask —
+        # the old b.out||b.path fallback asked to "overwrite" the INPUT
+        # image (Dandan denied a false-alarm popup). With out set to an
+        # existing target it still asks, about `out`, never the input.
+        a3 = sw.evaluate("""() => {
+            const real = confirmTargetExists;
+            let asked = null;
+            globalThis.confirmTargetExists = async (p) => { asked = p; return !!p; };
+            // ^ real one resolves the path: empty/unresolvable -> false
+            return confirmRequiredFor('POST', '/ocr_pdf', JSON.stringify({path: 'input.jpg'}))
+              .then((noOut) => confirmRequiredFor('POST', '/ocr_pdf',
+                  JSON.stringify({path: 'input.jpg', out: 'out.pdf'}))
+              .then((withOut) => {
+                  globalThis.confirmTargetExists = real;
+                  return { noOut: noOut, withOut: withOut, asked: asked };
+              }));
+        }""")
+        verdicts["A_ocrpdf_no_out_no_ask"] = a3["noOut"] is None
+        verdicts["A_ocrpdf_out_asks_overwrite"] = a3["withOut"] == "overwrite"
+        verdicts["A_ocrpdf_asks_out_not_input"] = a3["asked"] == "out.pdf"
 
         # ---- B. real-pipe cells ----
         def cell(name):
