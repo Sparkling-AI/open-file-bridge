@@ -40,10 +40,13 @@ function pipe(method, path, bodyObj) {
 
 /* ---------------- shared bits (ported from the app page) ------------------ */
 
-const LANG_NAMES = {
-  eng: "English", swe: "Swedish", chi_sim: "Chinese (Simplified)",
-  dan: "Danish", nor: "Norwegian", deu: "German", fra: "French",
-  spa: "Spanish",
+const LANG_NAMES = {  // names match the app page; render order is name-sorted
+  ara: "Arabic", chi_sim: "Chinese (Simplified)",
+  chi_tra: "Chinese (Traditional)", dan: "Danish", deu: "German",
+  eng: "English", est: "Estonian", fin: "Finnish", fra: "French",
+  hun: "Hungarian", ita: "Italian", jpn: "Japanese", kor: "Korean",
+  lav: "Latvian", lit: "Lithuanian", nor: "Norwegian", pol: "Polish",
+  por: "Portuguese", rus: "Russian", spa: "Spanish", swe: "Swedish",
 };
 
 function esc(s) {

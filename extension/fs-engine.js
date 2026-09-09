@@ -20,7 +20,10 @@
 // is reported per-request: engine endpoints answer a structured 409
 // engine_needed when the engine tab is closed.
 const FS_ENGINES = { pdf: true, ocr: true };
-const FS_OCR_LANGS = ["eng", "swe", "dan", "nor", "deu", "fra", "spa", "chi_sim"];
+// App-parity set (21 langs, same fast files as src/tessdata), alphabetical.
+const FS_OCR_LANGS = ["ara", "chi_sim", "chi_tra", "dan", "deu", "eng", "est",
+  "fin", "fra", "hun", "ita", "jpn", "kor", "lav", "lit", "nor", "pol",
+  "por", "rus", "spa", "swe"];
 
 const FS_ENGINE_TIMEOUT_MS = 300000; // 5 min: OCR of a 50-page doc is slow
 let FS_ENGINE_ALIVE = false;         // set by the page's hello/heartbeat

@@ -172,8 +172,10 @@ print(_r); RESULT = _r
         "e11_ocr_lang": f'''s = (await ofb_fetch("POST", "/ocr/lang", json.dumps({{"lang": "swe eng"}}))).to_py()
 c = (await ofb_fetch("GET", "/ocr/config")).to_py()
 cb = json.loads(c["body"]) if c.get("body") else {{}}
-_r = "e11 lang=" + str(cb.get("ocr_lang")) + " avail=" + str(len(cb.get("available", [])))
-assert s["status"] == 200 and cb.get("ocr_lang") == "swe+eng" and len(cb.get("available", [])) == 8, _r
+avail = cb.get("available", [])
+_r = "e11 lang=" + str(cb.get("ocr_lang")) + " avail=" + str(len(avail))
+assert s["status"] == 200 and cb.get("ocr_lang") == "swe+eng", _r
+assert len(avail) == 21 and avail == sorted(avail), _r + " order=" + str(avail)
 print(_r); RESULT = _r
 ''',
         # e14 (2026-09-09): method-as-contract on engine endpoints + the

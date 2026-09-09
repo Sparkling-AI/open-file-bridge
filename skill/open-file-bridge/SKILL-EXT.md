@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.12-EXT (extension backend)
+# Local File Bridge — skill v3.0.13-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -29,7 +29,7 @@ description: "MUST-CALL before ANY file task. User's real files are reachable ON
 > elected relay's tab was closed mid-session — retry once (the
 > bootstrap re-elects automatically on the next call).
 
-Requires extension ≥ **3.0.1** (`/version` reports `3.0.6-EXT` on
+Requires extension ≥ **3.0.1** (`/version` reports `3.0.11-EXT` on
 current builds; `skill_min` 2.5). ≥ **3.0.3** = invisible engine
 auto-start (offscreen); on 3.0.1–3.0.2 engines still auto-start but in a
 background tab. The endpoint surface mirrors bridge app 2.11 — every
@@ -72,7 +72,10 @@ recipe from the standard skill works with the exceptions below.
 
 ## OCR notes (tesseract.js, bundled fast models)
 
-Languages bundled: `eng swe dan nor deu fra spa chi_sim` (set with
+Languages bundled (21, alphabetical — same set as the app, ext ≥ 3.0.11):
+`ara chi_sim chi_tra dan deu eng est fin fra hun ita jpn kor lav lit
+nor pol por rus spa swe`. On older extension builds only 8 of these
+exist — trust `/health`'s `ocr_langs_available` over this list (set with
 `POST /ocr/lang {"lang": "swe+eng"}` or per-request `lang=`; combo langs
 matter — `swe+eng` fixes å/ä/ö AND digits, each alone can break one).
 One known caveat: an isolated ALL-CAPS diacritic token (e.g. a lone

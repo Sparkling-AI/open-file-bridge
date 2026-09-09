@@ -1827,3 +1827,46 @@ app untouched. skill 3.0.12-EXT; both OWUI rows restaged (table is
 `skill` in this OWUI — has its own is_active column; frontmatter
 stripped for Dandan's manual local-file-bridge-ext row, full file for
 the open-file-bridge row; updated_at unix int, no restart).
+
+## Stage-3 session #18: OCR languages to app parity (21) + alphabetical order (2026-09-10)
+
+Two asks from Dandan in one arc. First: reorder the language lists
+alphabetically (his "pdf ticker" — the lists the MODEL sees; the options
+tick-boxes were already name-sorted since the unified settings page).
+Second, after a sizing sanity check: bring the bundled set to app
+parity.
+
+Sizing verdict first (drove the go decision): CWS hard limit is 2 GB,
+package went 52 → 94 MB (31 → 74 MB of traineddata) — no rejection
+risk; nothing OCR loads at browser start (engines lazy, offscreen doc
+spins up on first engine call); several OWUI tabs never multiply the
+engine (single offscreen doc + relay election; tabs only add relay
+scripts). Bundling ≠ loading: a worker fetches only the langs named in
+its lang string. The one dead byte: osd.traineddata (10.6 MB, the
+biggest single file) is bundled but NOTHING in the extension references
+it — kept for now (dropping it wasn't asked; it's a free −10.6 MB if we
+ever want it, and the app bundles it too).
+
+Changes (ext 3.0.11 / skill 3.0.13-EXT):
+- 13 fast models copied src/tessdata → extension/vendor/tessdata-fast
+  (fin hun pol est rus lit lav ita jpn chi_tra por kor ara; byte-
+  identical to the app's — same fast variants, quality parity by
+  construction).
+- FS_OCR_LANGS (fs-engine) + ENG_OCR_LANGS (engine-impl) → 21 langs in
+  alphabetical code order; /health's ocr_langs_available and
+  /ocr/config's available now come out sorted (the options tick-boxes
+  keep name-sorting at render, unchanged).
+- options.js LANG_NAMES +13 names (wording matches the app page).
+- SKILL-EXT: bundled-langs line now the 21-lang alphabetical list with
+  an "older builds have 8 — trust /health" note; H1 3.0.13-EXT; stale
+  "`/version` reports 3.0.6-EXT" refreshed to 3.0.11-EXT.
+- engines_test e11 now asserts avail == 21 AND avail == sorted(avail).
+- Static checks green (suite itself is X11-only, Linux run pending,
+  TODO 6b): node --check on all touched JS; arrays ↔ 21 non-osd files
+  exact both ways; alphabetical; every code passes sanitizeLangs'
+  ^[a-zA-Z_]{2,8}$ (chi_sim/chi_tra are exactly 8); eng==fs arrays;
+  LANG_NAMES covers all 21.
+
+Both OWUI rows restaged to 3.0.13-EXT (same recipe as session #17).
+Dandan's live check after reloading the unpacked ext: options page
+tick list shows 21, chat /health lists them alphabetically.

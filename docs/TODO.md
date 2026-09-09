@@ -107,11 +107,19 @@ Bridge must be running during chats. Non-technical users will forget.
       Mac-runnable `tests/stage3/worker_transport_test.py` (7/7) covers
       both transports and the election, but the picker-driven paths and
       the engines/confirm suites were not re-run on this machine.
+      The 2026-09-10 language expansion (ext 3.0.11) also needs that
+      engines run: e11 now asserts 21 langs in alphabetical order, and
+      no new-lang OCR (rus/jpn/…) has been exercised live yet — only
+      static checks ran on the Mac.
 - [ ] Bump the CWS zip (`dist-stage3/…-3.0.2.zip`) when releasing — the
-      manifest moved to 3.0.2 (worker transport + blocking confirmations).
+      manifest is at 3.0.11 now (worker transport, blocking
+      confirmations, …, 21 OCR languages; zip is 94 MB unpacked).
 - [ ] confirm_test.py was rewritten for the 2026-09-09 blocking-confirmation
       contract (c0 approve-mid-wait, c1 timed_out, c5 deny-mid-wait) but
       only runs on Linux/Xvfb — first run there must confirm it green.
+- [ ] osd.traineddata (10.6 MB) sits in the extension bundle unreferenced
+      by any code — drop it or wire it into orientation detection,
+      Dandan's call (app bundles it too, so parity keeps it for now).
 
 ## 7. CI gaps
 

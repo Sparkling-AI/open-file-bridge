@@ -31,7 +31,9 @@ const ENGINES = {
   tessLang: null,       // lang string the worker was created with
 };
 
-const ENG_OCR_LANGS = ["eng", "swe", "dan", "nor", "deu", "fra", "spa", "chi_sim"];
+const ENG_OCR_LANGS = ["ara", "chi_sim", "chi_tra", "dan", "deu", "eng", "est",
+  "fin", "fra", "hun", "ita", "jpn", "kor", "lav", "lit", "nor", "pol",
+  "por", "rus", "spa", "swe"];
 const OCR_MAX_PAGES_DEFAULT = 5;      // /ocr on PDFs (app parity)
 const OCR_PDF_MAX_PAGES = 50;         // /ocr_pdf cap (app parity)
 const RASTER_SCALE = 2.0;             // /pdf_text?mode=images (app parity, ~144dpi)
