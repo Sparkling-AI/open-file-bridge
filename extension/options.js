@@ -73,7 +73,6 @@ function fmtTTL(v) {
 
 let lastHealth = null; // {ok, roots:[{id,path,perm}], addons, ocr_lang, ...}
 let langSig = "";      // last rendered language-box signature (avail|current)
-let langDirty = false; // user has unsaved ticks/input — beat must not clobber
 
 async function beat() {
   const dot = document.getElementById("beat");
@@ -106,10 +105,10 @@ async function beat() {
       : '<span class="ok">idle — auto-starts on the first PDF/OCR call</span> ' +
         "(nothing to open; the first call takes a few seconds extra)");
   // language boxes depend on engine aliveness (available list comes empty
-  // otherwise). Skip while the user has unsaved ticks — the 5 s beat must
-  // not clobber a half-edited selection.
+  // otherwise). Ticks apply immediately, so re-rendering from /health is
+  // always safe; the signature check only avoids needless DOM churn.
   const sig = (r.data.ocr_langs_available || []).join(",") + "|" + (r.data.ocr_lang || "");
-  if (!langDirty && sig !== langSig) {
+  if (sig !== langSig) {
     langSig = sig;
     renderLangs(r.data.ocr_langs_available || [], r.data.ocr_lang || "eng");
   }
@@ -163,7 +162,7 @@ function renderLangs(avail, cur) {
     (LANG_NAMES[c] ? " — " + LANG_NAMES[c] : "") + "</label>").join(" ")
     : '<span class="hint">no bundled languages available in this build</span>';
   const inp = document.getElementById("ocrlang");
-  if (inp !== null && document.activeElement !== inp) inp.value = cur || "eng";
+  if (inp !== null) inp.value = cur || "eng";  // read-only summary of the stored set
 }
 
 function syncBoxes(fromBoxes) {
@@ -367,17 +366,23 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("pick").onclick = () => pickFolder();
 
-  document.getElementById("savelang").onclick = async () => {
-    syncBoxes(false);
+  // OCR ticks apply immediately (no Save button — a tick that shows but
+  // isn't stored is a lie). The text field is a read-only summary of the
+  // stored set, so the empty-selection guard restores truth from it.
+  document.getElementById("langbox").addEventListener("change", async () => {
+    syncBoxes(true);
     const l = document.getElementById("ocrlang").value.trim();
+    const stat = document.getElementById("langs");
+    if (!l) {
+      syncBoxes(false);  // re-tick the stored set — at least one must stay on
+      stat.textContent = "✗ keep at least one language ticked — still using the saved set";
+      return;
+    }
     const r = await pipe("POST", "/ocr/lang", { lang: l });
-    langDirty = false; langSig = ""; // force re-render from the saved value
-    document.getElementById("langs").textContent =
-      r.ok ? "✓ OCR language: " + r.data.ocr_lang : "✗ " + (r.error || "failed");
+    langSig = "";  // force re-render from the saved value on the next beat
+    stat.textContent = r.ok ? "✓ OCR language: " + r.data.ocr_lang : "✗ " + (r.error || "failed");
     beat();
-  };
-  document.getElementById("langbox").addEventListener("change", () => { langDirty = true; syncBoxes(true); });
-  document.getElementById("ocrlang").addEventListener("input", () => { langDirty = true; syncBoxes(false); });
+  });
 
   document.getElementById("saveignore").onclick = async () => {
     const pats = document.getElementById("ignorepats").value.split("\n")
@@ -388,11 +393,15 @@ window.addEventListener("DOMContentLoaded", async () => {
     renderPreview();
   };
 
-  document.getElementById("savettl").onclick = async () => {
+  // Selects apply on change (same as confirm-scope); refresh() sets the
+  // value programmatically, which fires no change event — no save loop.
+  document.getElementById("linkttl").addEventListener("change", async () => {
     const v = parseInt(document.getElementById("linkttl").value, 10);
-    if (Number.isFinite(v)) await OFBIDB.put("kv", v, "link_ttl");
-    document.getElementById("ttlinfo").textContent = "Links live " + fmtTTL(v) + " ✓";
-  };
+    if (Number.isFinite(v)) {
+      await OFBIDB.put("kv", v, "link_ttl");
+      document.getElementById("ttlinfo").textContent = "Links live " + fmtTTL(v) + " ✓";
+    }
+  });
 
   document.getElementById("saverate").onclick = async () => {
     const w = parseInt(document.getElementById("ratelimitw").value, 10);

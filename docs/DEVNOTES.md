@@ -1928,3 +1928,42 @@ on, "look at the parking sign image and describe it" (no OCR words);
 expect the model to fetch /image_b64, print the data URL, and describe
 the sign visually. If his OWUI model skips the print, the skill
 teaching needs a nudge.
+
+## Stage-3 session #19: options page — ticks/selects apply immediately (2026-09-10)
+
+Dandan's diagnosis: a tick that shows but isn't stored is a lie. The
+page itself already proved the immediate-apply pattern (read-only
+toggle, engine auto-start, confirm-scope select all save on change with
+no button); the four remaining Save buttons were the inconsistency.
+Decision (his call after my per-control assessment): OCR language ticks
+and the link-lifetime select go immediate; rate limits and ignore
+patterns KEEP their explicit Save (number inputs have invalid
+intermediate states; a half-edited pattern set silently active can hide
+files from the AI).
+
+Changes (ext 3.0.12 / skill 3.0.15-EXT):
+- OCR card: "Save language" button gone; every tick/untick POSTs the
+  full current set immediately (each intermediate state is complete and
+  valid). The free-text input is now a READ-ONLY summary of the stored
+  set — the worst fake-state offender was typing ("sw" looks like a
+  choice, stores nothing); as a readout it always shows truth. Unticking
+  the last box is refused client-side with the stored set re-ticked
+  (endpoint already 400s "bad lang" on empty — store can't corrupt).
+  The langDirty/langSig heartbeat clobber-guard is deleted — with
+  nothing unsaved, the 5 s beat re-rendering from /health is always
+  safe; the sig check now only avoids DOM churn.
+- Link lifetime: "Save" button gone; select applies on change, same as
+  confirm-scope. refresh() sets the value programmatically (fires no
+  change event), so no save loop.
+- SKILL-EXT: the "/version reports 3.0.11-EXT on current builds" line
+  went stale at EVERY ext bump — reworded once to name the running
+  build as the source of truth with 3.0.12-EXT as the writing-time
+  snapshot. That plus the H1 stamp is why skill 3.0.15-EXT (3.0.14 was
+  taken by the parallel CI-vision-filter round, fb47476, which landed
+  between this session's code edits and its commit).
+
+Static checks: node --check both JS files; every getElementById target
+exists in the HTML; no savelang/savettl/langDirty references anywhere;
+tests unaffected (engines_test only waits on #engauto, untouched).
+Both OWUI rows restaged to 3.0.15-EXT. Dandan reloads the unpacked ext
+to see it: ticks save on click, lifetime saves on select.

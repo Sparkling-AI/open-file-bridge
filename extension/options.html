@@ -122,15 +122,14 @@ opens, no action needed; the first call takes a few seconds extra). When
 off, the assistant is told to ask you to start them.
 <span class="hint" id="engautostat"></span></span>
 </label>
-<p class="hint">For reading scanned PDFs / photos — tick one or more:</p>
+<p class="hint">For reading scanned PDFs / photos — tick one or more
+(applies immediately):</p>
 <div id="langbox" class="panel"></div>
 <p class="hint">Ticks combine automatically in tesseract syntax (e.g.
 <code>eng+swe</code> — mixing languages fixes special letters and digits).
-Only the bundled languages above are available offline; typing others is
-possible but the engine will fail to load them.</p>
+Only the bundled languages above are available offline.</p>
 <div class="btnrow">
-<input id="ocrlang" placeholder="eng+swe">
-<button id="savelang">Save language</button>
+<input id="ocrlang" readonly title="Current OCR languages — set by the ticks above">
 </div>
 <p class="hint" id="langs"></p>
 </details>
@@ -149,7 +148,6 @@ lifetime means old chat answers stay clickable for longer.</p>
 <option value="7776000">90 days</option>
 <option value="31536000">1 year</option>
 </select>
-<button id="savettl">Save</button>
 <span class="hint" id="ttlinfo"></span>
 </div>
 </details>
