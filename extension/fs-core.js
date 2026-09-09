@@ -7,7 +7,7 @@
 
 "use strict";
 
-const FS_VERSION = "3.0.12-EXT";
+const FS_VERSION = "3.0.13-EXT";
 const FS_SKILL_MIN = "2.11";
 const MAX_LIST = 500;
 const MAX_BINARY = 8000000;          // b64 endpoints
@@ -92,6 +92,83 @@ function hexRand(n) {
   crypto.getRandomValues(b);
   return Array.from(b, (x) => x.toString(16).padStart(2, "0")).join("");
 }
+
+/* ---------------- image → data URL (with resize, ext 3.0.13) --------- */
+
+// /image_b64 workhorse, app parity plus a long-edge cap. The app resizes
+// via pymupdf halving; here the browser's own codecs do it (no engine,
+// works in the SW). Decode is EXIF-aware ("from-image"), so width/height
+// are the effective dims — same story /image_info tells.
+//
+// Behavior: images under BOTH caps return their ORIGINAL bytes untouched
+// (shrunk:false). Over either cap → redraw at a smaller size (high-quality
+// smoothing) and re-encode, preferring the original mime (gif/bmp fall
+// back to png; an over-cap png/webp retries as jpeg 0.85) until under the
+// byte cap, halving as needed (min dimension floor 64, app parity).
+// Undecodable bytes degrade to raw passthrough when under the byte cap
+// (the app's no-pymupdf behavior).
+async function fsImageToDataUrl(file, opts) {
+  const maxBytes = opts.maxBytes, maxEdge = opts.maxEdge;
+  const raw = new Uint8Array(await file.arrayBuffer());
+  const name = String(file.name || "").toLowerCase();
+  let mime = name.endsWith(".png") ? "image/png"
+    : name.endsWith(".gif") ? "image/gif"
+    : name.endsWith(".webp") ? "image/webp"
+    : name.endsWith(".bmp") ? "image/bmp"
+    : "image/jpeg";
+
+  let bitmap = null;
+  try {
+    bitmap = await createImageBitmap(file, { imageOrientation: "from-image" });
+  } catch (e) { bitmap = null; }
+
+  if (!bitmap) {
+    return { ok: raw.length <= maxBytes, mime, bytes: raw.length,
+             width: null, height: null, shrunk: false, b64: b64enc(raw) };
+  }
+
+  const ow = bitmap.width, oh = bitmap.height;
+  if (raw.length <= maxBytes && (maxEdge <= 0 || Math.max(ow, oh) <= maxEdge)) {
+    bitmap.close();
+    return { ok: true, mime, bytes: raw.length, width: ow, height: oh,
+             origBytes: raw.length, origWidth: ow, origHeight: oh,
+             shrunk: false, b64: b64enc(raw) };
+  }
+
+  // Re-encode target: keep the original mime where the canvas codec
+  // supports it; gif/bmp decode to a still frame → png.
+  const encodeAs = (mime === "image/gif" || mime === "image/bmp") ? "image/png" : mime;
+  let scale = maxEdge > 0 ? Math.min(1, maxEdge / Math.max(ow, oh)) : 1;
+  if (raw.length > maxBytes && scale >= 1) scale = 0.5;  // byte-driven only
+  for (let tries = 0; tries < 6; tries++) {
+    const w = Math.max(1, Math.round(ow * scale));
+    const h = Math.max(1, Math.round(oh * scale));
+    if (Math.min(w, h) < 64) break;
+    const canvas = new OffscreenCanvas(w, h);
+    const ctx = canvas.getContext("2d");
+    ctx.imageSmoothingQuality = "high";
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    let blob = await canvas.convertToBlob({ type: encodeAs, quality: 0.9 });
+    let outMime = encodeAs;
+    if (blob.size > maxBytes && outMime !== "image/jpeg") {
+      const j = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.85 });
+      if (j.size < blob.size) { blob = j; outMime = "image/jpeg"; }
+    }
+    if (blob.size <= maxBytes) {
+      bitmap.close();
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      return { ok: true, mime: outMime, bytes: bytes.length, width: w, height: h,
+               origBytes: raw.length, origWidth: ow, origHeight: oh,
+               shrunk: true, b64: b64enc(bytes) };
+    }
+    scale = scale / 2;
+  }
+  bitmap.close();
+  return { ok: false, mime, bytes: raw.length, width: ow, height: oh,
+           origBytes: raw.length, origWidth: ow, origHeight: oh,
+           shrunk: false, b64: null };
+}
+
 function unquoteComp(s) {
   try { return decodeURIComponent(String(s)); } catch (e) { return String(s); }
 }

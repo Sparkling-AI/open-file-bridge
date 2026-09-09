@@ -2016,3 +2016,49 @@ uncommitted /image_b64 downscale feature that already stamped manifest
 + fs-core to 3.0.13 in the working tree; this text round rides into
 that bump instead of colliding (second interleaving today; always
 check git log + working-tree manifest before stamping).
+
+## Stage-3 session #20: /image_b64 resizes big images before b64 (2026-09-10)
+
+Dandan's follow-up on the CI-vision arc: small images work, but big
+ones take too long as base64 — resize FIRST in the extension, then
+encode. Wrong to fix in the filter: resizing at the source shrinks
+every hop (cell stdout, event round-trip, OWUI upload, filter re-
+encode, provider request) AND cuts vision token cost (providers charge
+by resolution). Bonus: this round also closed a parity LIE — EXT
+/image_b64 returned bare {path,size,b64} while SKILL-EXT claimed
+"same shapes as the app" (app: {mime,width,height,bytes,shrunk,
+data_url} + max_bytes auto-downscale via pymupdf). Dandan's live
+"works for small images" only worked because the model improvised the
+data: prefix onto b64.
+
+Changes (ext 3.0.13 / skill 3.0.16-EXT — 3.0.15 taken by session #19's
+commit ae3edfb; the follow-up text round 5cb0b0f rode this same ext
+3.0.13 stamp by agreement):
+- fs-core.js: fsImageToDataUrl(file, {maxBytes, maxEdge}) — EXIF-aware
+  decode (createImageBitmap imageOrientation:"from-image"), byte-
+  identical passthrough under BOTH caps, else OffscreenCanvas redraw
+  (high-quality smoothing) + re-encode (original mime; gif/bmp→png;
+  over-cap png/webp retries jpeg 0.85; halve loop, 64px floor = app
+  parity); undecodable bytes degrade to raw passthrough (app's
+  no-pymupdf behavior). Browser codecs — no engine, no addon, runs in
+  the SW.
+- fs-adapter.js epImageB64: params max_bytes (50k–8MB, dflt 4MB = app
+  parity) + max_edge (0–8192, dflt 2000, 0=off); response now
+  {path,mime,width,height,bytes,shrunk,orig_*,b64,data_url} — b64 kept
+  for compat, data_url is the vision/display contract.
+- Verified on the Mac (chrome-devtools-mcp evaluate, real fs-core.js
+  served over http): 10/10 — worst-case 41 MB 12MP noise PNG →
+  2000×1500 jpeg 1.58 MB in 759 ms; byte-identical passthrough under
+  caps; byte-driven-only shrink (edge under cap); fake-bytes raw
+  passthrough; hand-crafted EXIF Orientation=6 jpeg (3000×2000 stored)
+  resized as PORTRAIT 1333×2000 (from-image works); max_edge=0
+  disables; data_url decodes with matching dims. Real photos compress
+  far easier than noise, so 759 ms is the pessimistic bound.
+- SKILL-EXT vision paragraph + OCR display convention updated (auto-
+  resize facts, tune via max_edge/max_bytes, /read_b64 for ORIGINAL
+  bytes); both OWUI rows restaged to 3.0.16-EXT.
+
+Pipe-level (Linux X11 suite) rerun still owed by the stage3 backlog;
+the endpoint's response-shape change is additive (b64 kept) so old
+recipes keep working. PDF mode=images pages can still be big (png_b64
+at RASTER_SCALE 2) — resize there is future work if it bites.

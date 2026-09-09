@@ -678,7 +678,26 @@ async function epImageB64(q) {
   if (file.size > MAX_BINARY) {
     return fsFail(413, { error: "file too large: " + file.size + " > " + MAX_BINARY + " bytes" });
   }
-  const bytes = new Uint8Array(await file.arrayBuffer());
-  await auditRow({ endpoint: "/image_b64", method: "GET", path: rg.relInRoot, status: 200, size: bytes.length });
-  return fsOk({ path: q.path, size: bytes.length, b64: b64enc(bytes) });
+  const clampParam = (v, lo, hi, dflt) => {
+    const n = Math.floor(Number(v));
+    return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
+  };
+  const maxBytes = clampParam(q.max_bytes, 50000, MAX_BINARY, 4000000);
+  const maxEdge = clampParam(q.max_edge, 0, 8192, 2000);  // 0 disables the edge cap
+  const r = await fsImageToDataUrl(file, { maxBytes, maxEdge });
+  if (!r.ok) {
+    return fsFail(413, {
+      error: "image is " + file.size + " bytes; could not shrink under the "
+           + maxBytes + "-byte cap",
+      hint: "pass a larger max_bytes (≤ 8 MB) or max_edge=0 (no resize); use "
+          + "/read_b64 if the model needs ORIGINAL bytes",
+    });
+  }
+  await auditRow({ endpoint: "/image_b64", method: "GET", path: rg.relInRoot, status: 200, size: r.bytes });
+  return fsOk({
+    path: q.path, mime: r.mime, width: r.width, height: r.height,
+    bytes: r.bytes, shrunk: r.shrunk,
+    ...(r.shrunk ? { orig_bytes: r.origBytes, orig_width: r.origWidth, orig_height: r.origHeight } : {}),
+    b64: r.b64, data_url: "data:" + r.mime + ";base64," + r.b64,
+  });
 }
