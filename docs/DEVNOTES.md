@@ -1808,3 +1808,22 @@ sweep, assert oldest-gone / newest-kept / count bounded + trim row.
 Headless: seeded 1005 → sweep {removed:0, auditTrimmed:5} → count 1001
 (1000 + the trim's own row), card renders rows, zero console errors.
 ext 3.0.10.
+
+## Stage-3 session #17: vision-input truth ported to SKILL-EXT (2026-09-10)
+
+Dandan asked whether the skill teaches that the ONE real vision path
+is the user attaching the image to their chat message. Answer was
+split: app SKILL.md + SKILL-TOKEN.md carried the "Truth about vision
+input" paragraph; SKILL-EXT.md did NOT — it taught the display
+convention (/image_b64 + data-URL markdown echo) and the OCR-garble
+fallback, but never the attach escalation, so an extension-mode model
+had no taught answer for "I actually need to SEE this."
+
+Ported the paragraph verbatim after the display-convention paragraph
+in the OCR notes (both referenced endpoints exist in the extension —
+/image_b64 and /pdf_text?mode=images, engine-impl renders pages as
+png_b64 at RASTER_SCALE 2). No extension code change; skill-only bump,
+app untouched. skill 3.0.12-EXT; both OWUI rows restaged (table is
+`skill` in this OWUI — has its own is_active column; frontmatter
+stripped for Dandan's manual local-file-bridge-ext row, full file for
+the open-file-bridge row; updated_at unix int, no restart).

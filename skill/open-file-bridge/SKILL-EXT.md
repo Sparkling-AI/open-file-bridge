@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.11-EXT (extension backend)
+# Local File Bridge — skill v3.0.12-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -88,6 +88,14 @@ you got, say the photo is hard, and show it to the user —
 `![name](data:image/jpeg;base64,…)` in your reply (the sanctioned
 display convention; 8 MB cap). The user can read a sign themselves
 faster than three more OCR passes.
+
+**Truth about vision input:** code output reaches you as TEXT in this
+environment — a data URL in stdout does not let a vision model literally
+SEE local image pixels. If true visual inspection is required (layout,
+charts, handwriting), ask the user to attach the image file to their
+chat message (that is the input path vision models actually consume).
+`/image_b64` and `/pdf_text?mode=images` are for SHOWING the user, and
+for answering questions about files via OCR/text extraction.
 
 ## Bootstrap (run once per session)
 
