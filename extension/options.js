@@ -73,6 +73,7 @@ function fmtTTL(v) {
 
 let lastHealth = null; // {ok, roots:[{id,path,perm}], addons, ocr_lang, ...}
 let langSig = "";      // last rendered language-box signature (avail|current)
+let langSaved = new Set();  // stored lang set — the empty-tick guard restores from it
 
 async function beat() {
   const dot = document.getElementById("beat");
@@ -154,6 +155,7 @@ async function refresh() {
 function renderLangs(avail, cur) {
   const box = document.getElementById("langbox");
   const sel = new Set(String(cur || "").split("+").filter(Boolean));
+  langSaved = sel;
   const order = [...(avail || [])].sort((a, b) =>
     (LANG_NAMES[a] || a).localeCompare(LANG_NAMES[b] || b));
   box.innerHTML = order.length ? order.map((c) =>
@@ -161,19 +163,6 @@ function renderLangs(avail, cur) {
     (sel.has(c) ? " checked" : "") + "> " + esc(c) +
     (LANG_NAMES[c] ? " — " + LANG_NAMES[c] : "") + "</label>").join(" ")
     : '<span class="hint">no bundled languages available in this build</span>';
-  const inp = document.getElementById("ocrlang");
-  if (inp !== null) inp.value = cur || "eng";  // read-only summary of the stored set
-}
-
-function syncBoxes(fromBoxes) {
-  const inp = document.getElementById("ocrlang");
-  if (fromBoxes) {
-    const v = [...document.querySelectorAll("#langbox input:checked")].map((x) => x.value);
-    inp.value = v.join("+");
-  } else {
-    const sel = new Set(inp.value.split(/[+,\s]+/).filter(Boolean));
-    document.querySelectorAll("#langbox input").forEach((x) => { x.checked = sel.has(x.value); });
-  }
 }
 
 /* ---------------- shared folders card (ported from setup.js) ---------------- */
@@ -367,18 +356,17 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("pick").onclick = () => pickFolder();
 
   // OCR ticks apply immediately (no Save button — a tick that shows but
-  // isn't stored is a lie). The text field is a read-only summary of the
-  // stored set, so the empty-selection guard restores truth from it.
+  // isn't stored is a lie). The ✓ line under the box is the readout.
   document.getElementById("langbox").addEventListener("change", async () => {
-    syncBoxes(true);
-    const l = document.getElementById("ocrlang").value.trim();
+    const v = [...document.querySelectorAll("#langbox input:checked")].map((x) => x.value).join("+");
     const stat = document.getElementById("langs");
-    if (!l) {
-      syncBoxes(false);  // re-tick the stored set — at least one must stay on
+    if (!v) {  // at least one language must stay on — restore the stored set
+      document.querySelectorAll("#langbox input").forEach((x) => { x.checked = langSaved.has(x.value); });
       stat.textContent = "✗ keep at least one language ticked — still using the saved set";
       return;
     }
-    const r = await pipe("POST", "/ocr/lang", { lang: l });
+    const r = await pipe("POST", "/ocr/lang", { lang: v });
+    if (r.ok) langSaved = new Set(String(r.data.ocr_lang).split("+"));
     langSig = "";  // force re-render from the saved value on the next beat
     stat.textContent = r.ok ? "✓ OCR language: " + r.data.ocr_lang : "✗ " + (r.error || "failed");
     beat();

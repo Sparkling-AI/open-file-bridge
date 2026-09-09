@@ -1967,3 +1967,52 @@ exists in the HTML; no savelang/savettl/langDirty references anywhere;
 tests unaffected (engines_test only waits on #engauto, untouched).
 Both OWUI rows restaged to 3.0.15-EXT. Dandan reloads the unpacked ext
 to see it: ticks save on click, lifetime saves on select.
+
+## Stage-3 session #20: options-page text diet (2026-09-10)
+
+Dandan's asks: drop the eng+swe read-only box and the tesseract-syntax
+paragraph, drop the "origin lock and token" security sentence, and trim
+UI copy generally. Plus his question: WHY "only the OWUI page's own
+code-interpreter sandbox can reach the bridge"?
+
+That sentence turned out to OVERCLAIM. What's actually true (relay.js
+header + sw.js): the relay content script injects into EVERY matching
+page (all https + localhost), and it accepts bridge requests only from
+(1) postMessage by descendant iframes OF THAT SAME PAGE (frame-tree
+walk; cross-origin walk failure rejects) or (2) the same-origin
+BroadcastChannel "ofb-pipe" (worker transport) — other windows/tabs
+cannot post INTO a page's relay. But the service worker does NOT check
+the sender's origin (sw.js handleOfbRequest takes senderTabId only for
+the confirm gate), and relay.js's own header admits "a hostile page can
+proxy through its own iframes — no new capability is granted". So the
+real boundary is NOT "only OWUI's sandbox"; it's the SW-side gates
+applied to whatever request arrives: per-op folder-grant re-check,
+folder confinement, ignore floor (credentials refused), rate brake,
+confirm cards, read-only mode. The UI sentence was replaced with the
+defensible claim: "Every read and write is re-checked against the
+folder grant stored in this browser before it runs."
+
+Removed (Dandan's explicit asks): the ocrlang read-only box (the ✓
+status line under the ticks is the readout now; JS tracks langSaved as
+the truth set for the empty-tick guard — syncBoxes deleted) + its CSS
+rule, and the whole "Ticks combine automatically in tesseract
+syntax…" paragraph (the combo-langs teaching lives in the skill, where
+the model needs it — the user just ticks boxes).
+
+Trimmed (duplications and restatements): header intro second sentence
+(duplicated the Security card), confirm-card paragraph's
+overwrite/trash tail (stated verbatim one paragraph above), link
+lifetime "a longer lifetime means … clickable for longer" (restated the
+first sentence), Safety card's overwrite/trash detail + "opens the
+guide for your installed version" + rate-brake parenthetical, ignore
+patterns "not listed, not readable, and … at any depth" compaction,
+preview card "Folders are collapsible / while this tab is visible",
+activity-card "older rows are trimmed daily". Engine texts shortened
+("Manual fallback — engines start by themselves when first needed";
+engauto loses the "hidden background document" mechanics).
+
+VERSION NOTE: no ext bump in this commit — a parallel session has an
+uncommitted /image_b64 downscale feature that already stamped manifest
++ fs-core to 3.0.13 in the working tree; this text round rides into
+that bump instead of colliding (second interleaving today; always
+check git log + working-tree manifest before stamping).
