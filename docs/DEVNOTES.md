@@ -1697,3 +1697,22 @@ relied on the lingering card and would now fail, so it moved onto c8's
 fresh ask). Headless: label units + versions/read contract matrix
 (400/400/400-traversal/503) + settings smoke clean. ext 3.0.6-EXT;
 OWUI rows restaged; zip rebuilt.
+
+## Stage-3 session #13: restart cycle verified GOOD (Dandan, 2026-09-10)
+
+Full Chrome exit → restart → OWUI → "list my files" worked DIRECTLY:
+no Reconnect, no permission bubble. This is the persistent-grant happy
+path: Dandan chose "Allow on every visit" during an earlier reconnect,
+and Chrome stores that per-extension+folder — queryPermission returns
+"granted" across browser restarts, so the skill's preflight sees
+perm:"granted" and proceeds. The offscreen engine host needs to keep
+nothing alive in this mode.
+
+The two permission paths are now BOTH live-verified:
+- persistent grant ("Allow on every visit") + browser restart → works
+  directly (this test, 2026-09-10);
+- session grant ("Allow this time") or EXTENSION RELOAD (chrome://
+  extensions → reload resets the grant even when persistent) → perm
+  "prompt" → skill preflight stops → Reconnect → "Allow on every
+  visit" (verified 2026-09-07 + 2026-09-09). Expect one reconnect
+  after every extension update Dandan loads in place.
