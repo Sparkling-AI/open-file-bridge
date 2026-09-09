@@ -1784,3 +1784,27 @@ Session #15b (2026-09-10): Dandan's layout ask — the 🚫 Ignore
 patterns card moved to sit directly above 👁 What the AI can see (was
 between OCR language and Link lifetime). Better pairing: the patterns
 drive exactly what the preview below shows. ext 3.0.9, smoke green.
+
+## Stage-3 session #16: audit log capped at 1000 rows (2026-09-10)
+
+Dandan's ask: keep the most recent 1000 audit rows, trimmed by the same
+opportunistic once-a-day sweep. maybeSweepTrash → maybeSweepMaintenance
+(trash TTL + audit cap; sw.js hook message name ofbTrashSweep kept for
+the negatives contract). auditTrimOver: VERSIONLESS raw IDB open,
+getAllKeys, one IDBKeyRange.upperBound delete of everything older than
+the newest 1000 (autoIncrement keys are monotonic); trimmed count
+audited as op audit-trim. options.html card says "keeps the most
+recent 1000".
+
+BONUS BUG this uncovered: options.js's audit reader opened the DB
+pinned at version 1 — since fs-idb went v2 (confirmation round), that
+open throws VersionError, so Dandan's Recent activity card has been
+showing "audit unavailable" since 2026-09-09 (fresh-profile smokes
+masked it via a v1-creation race). Fixed: versionless open (readers
+never request upgrades). auditTrimOver follows the same rule.
+
+negatives n14: seed 1005 rows (single tx, oldest marked), force the
+sweep, assert oldest-gone / newest-kept / count bounded + trim row.
+Headless: seeded 1005 → sweep {removed:0, auditTrimmed:5} → count 1001
+(1000 + the trim's own row), card renders rows, zero console errors.
+ext 3.0.10.

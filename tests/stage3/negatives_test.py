@@ -305,6 +305,47 @@ def main():
         print("n13 trash expiry:", sweep_res,
               "| stale exists:", stale.exists(),
               "| fresh exists:", fresh.exists())
+
+        # n14: audit cap — seed 1005 rows (one tx, first row marked), force
+        # the sweep, assert the store trimmed to <= ~1000 and the OLDEST
+        # marker row is gone while the newest seed survives.
+        seed = setup.evaluate("""(() => new Promise((res) => {
+          const rq = indexedDB.open('ofb-ext');
+          rq.onsuccess = () => {
+            const db = rq.result;
+            const tx = db.transaction('audit', 'readwrite');
+            const os = tx.objectStore('audit');
+            for (let i = 0; i < 1005; i++) os.add({ts: Date.now(), endpoint: i === 0 ? 'seed-oldest' : 'seed-' + i, status: 200});
+            tx.oncomplete = () => { db.close(); res('seeded'); };
+            tx.onerror = () => res('seed-err');
+          };
+          rq.onerror = () => res('open-err');
+        }))()""")
+        time.sleep(0.3)
+        setup.evaluate(
+            "chrome.runtime.sendMessage({ofbTrashSweep: true, force: true},"
+            " (r) => { window.__sweep2 = JSON.stringify(r); })")
+        time.sleep(1.5)
+        sweep2 = setup.evaluate("window.__sweep2")
+        after = setup.evaluate("""(() => new Promise((res) => {
+          const rq = indexedDB.open('ofb-ext');
+          rq.onsuccess = () => {
+            const db = rq.result;
+            const tx = db.transaction('audit', 'readonly');
+            const c = tx.objectStore('audit').count();
+            const all = tx.objectStore('audit').getAll();
+            tx.oncomplete = () => {
+              db.close();
+              res(JSON.stringify({count: c.result,
+                oldestGone: !all.result.some(r => r.endpoint === 'seed-oldest'),
+                newestKept: all.result.some(r => r.endpoint === 'seed-1004')}));
+            };
+          };
+        }))()""")
+        a = json.loads(after or "{}")
+        ok14 = (a.get("oldestGone") is True and a.get("newestKept") is True
+                and isinstance(a.get("count"), int) and 995 <= a["count"] <= 1010)
+        print("n14 audit cap: seed:", seed, "| sweep:", sweep2, "| after:", after)
         # restore readwrite for any later phases (n8 flipped it)
         setup.evaluate("""
         new Promise((res) => {
@@ -337,7 +378,7 @@ def main():
     unz = FIX / f"unz-{RUN}" / "ok.txt"
     print("unzip partial extraction (must be False):", unz.exists())
 
-    verdict = "PASS" if (ok_main and ok8 and ok13 and snaps and not slipped and not unz.exists()) else "FAIL"
+    verdict = "PASS" if (ok_main and ok8 and ok13 and ok14 and snaps and not slipped and not unz.exists()) else "FAIL"
     print(f"\nP1b NEGATIVES VERDICT: {verdict}")
     return 0 if verdict == "PASS" else 1
 

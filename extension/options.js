@@ -312,7 +312,7 @@ async function renderAudit() {
   const el = document.getElementById("auditrows");
   try {
     const rows = await new Promise((resolve, reject) => {
-      const dbReq = indexedDB.open("ofb-ext", 1);
+      const dbReq = indexedDB.open("ofb-ext"); // VERSIONLESS — a pinned version throws VersionError after fs-idb upgrades
       dbReq.onsuccess = () => {
         const db = dbReq.result;
         const tx = db.transaction("audit", "readonly");

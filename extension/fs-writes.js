@@ -422,16 +422,21 @@ async function epRestore(kind, body) {
   return fsOk({ ok: true, restored: rg.relInRoot, from: kind + "/" + ts, snapshot: snap });
 }
 
-/* ---------------- trash expiry (30-day TTL, app parity; 2026-09-10) ----
+/* ---------------- maintenance sweep: trash expiry + audit cap --------
+ * (trash 30-day TTL since 2026-09-10; audit 1000-row cap same day.)
  * MV3 SWs have no reliable timers, so the sweep runs OPPORTUNISTICALLY:
  * sw.js fires it (unawaited) on pipe traffic, throttled to once per 24 h
- * (in-memory first — free — then a kv stamp across SW restarts). Entry
- * age comes from the directory name itself (tsStamp shape, local time);
+ * (in-memory first — free — then a kv stamp across SW restarts; the kv
+ * key keeps its historical name trash_sweep_ts). Trash entry age comes
+ * from the directory name itself (tsStamp shape, local time);
  * unparseable names are left alone. Snapshots (.ofb-snapshots/) are NOT
  * pruned — deliberate: they are the undo net, and their cap is the 8 MB
- * per-file snapshot rule. */
+ * per-file snapshot rule. The audit store is append-only by design, so
+ * the sweep keeps its most recent AUDIT_MAX_ROWS rows (oldest deleted
+ * first — autoIncrement keys are monotonic, one range delete). */
 
 const TRASH_TTL_MS = 30 * 24 * 3600 * 1000;
+const AUDIT_MAX_ROWS = 1000;
 let _trashSweepMem = 0;
 
 function trashEntryTsMs(name) {
@@ -442,7 +447,7 @@ function trashEntryTsMs(name) {
   return isNaN(d.getTime()) ? null : d.getTime();
 }
 
-async function maybeSweepTrash(force) {
+async function maybeSweepMaintenance(force) {
   try {
     const now = Date.now();
     if (!force) {
@@ -474,10 +479,58 @@ async function maybeSweepTrash(force) {
     if (removed) {
       await auditRow({ op: "trash-expiry", path: TRASH_DIR + "/", status: 200, size: removed });
     }
-    return { removed: removed };
+    const trimmed = await auditTrimOver(AUDIT_MAX_ROWS);
+    if (trimmed > 0) {
+      await auditRow({ op: "audit-trim", path: "audit/", status: 200, size: trimmed });
+    }
+    return { removed: removed, auditTrimmed: trimmed };
   } catch (e) {
     return { error: String(e) };
   }
+}
+
+/** Keep the newest `cap` audit rows; returns how many were deleted
+ * (-1 = store unreadable). Opens the DB VERSIONLESS — readers must
+ * never request an upgrade (a stale pinned version throws VersionError
+ * once fs-idb moves on; options.js's audit reader had exactly that bug
+ * against v2). */
+function auditTrimOver(cap) {
+  return new Promise((resolve) => {
+    const req = indexedDB.open("ofb-ext");
+    req.onerror = () => resolve(-1);
+    req.onsuccess = () => {
+      const db = req.result;
+      db.onversionchange = () => db.close();
+      let settled = false;
+      const finish = (n) => {
+        if (settled) return;
+        settled = true;
+        tx.oncomplete = () => { db.close(); resolve(n); };
+        tx.onabort = tx.onerror = () => { db.close(); resolve(-1); };
+      };
+      let tx;
+      try {
+        tx = db.transaction("audit", "readwrite");
+        const os = tx.objectStore("audit");
+        const gk = os.getAllKeys();
+        gk.onsuccess = () => {
+          const all = gk.result || [];
+          if (all.length <= cap) { finish(0); return; }
+          // keep the newest `cap` keys (autoIncrement ⇒ monotonic ints);
+          // exclusive upperBound on the cutoff deletes everything older
+          const cutoff = all[all.length - cap];
+          try {
+            os.delete(IDBKeyRange.upperBound(cutoff, true));
+            finish(all.length - cap);
+          } catch (e) { finish(-1); }
+        };
+        gk.onerror = () => finish(-1);
+      } catch (e) {
+        try { db.close(); } catch (e2) {}
+        resolve(-1);
+      }
+    };
+  });
 }
 
 /* ---------------- /zip + /unzip ---------------- */
