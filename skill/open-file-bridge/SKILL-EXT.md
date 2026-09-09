@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.9-EXT (extension backend)
+# Local File Bridge — skill v3.0.10-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -29,7 +29,7 @@ description: "MUST-CALL before ANY file task. User's real files are reachable ON
 > elected relay's tab was closed mid-session — retry once (the
 > bootstrap re-elects automatically on the next call).
 
-Requires extension ≥ **3.0.1** (`/version` reports `3.0.4-EXT` on
+Requires extension ≥ **3.0.1** (`/version` reports `3.0.5-EXT` on
 current builds; `skill_min` 2.5). ≥ **3.0.3** = invisible engine
 auto-start (offscreen); on 3.0.1–3.0.2 engines still auto-start but in a
 background tab. The endpoint surface mirrors bridge app 2.11 — every
@@ -79,6 +79,15 @@ One known caveat: an isolated ALL-CAPS diacritic token (e.g. a lone
 "ÅÄÖ") may decode as AAO. Words with diacritics in normal case are
 accurate; if a critical all-caps token looks wrong, ask the user to
 confirm it rather than trusting the OCR blindly.
+
+Small photos are auto-upscaled before recognition (sign snapshots,
+crops — big accuracy win since ext 3.0.5). If lines STILL look
+garbled, do not burn cells re-trying languages: give the best reading
+you got, say the photo is hard, and show it to the user —
+`GET /image_b64?path=…` then echo
+`![name](data:image/jpeg;base64,…)` in your reply (the sanctioned
+display convention; 8 MB cap). The user can read a sign themselves
+faster than three more OCR passes.
 
 ## Bootstrap (run once per session)
 
@@ -238,19 +247,31 @@ to confirm before retrying. A browser restart or extension reload
 resets `perm` to `prompt`; every read/write would fail with 403
 `permission_needed` until they Reconnect.
 
-**Errors are JSON** — read them, don't blind-retry. The three
-user-actionable shapes: 403 `permission_needed` (Reconnect → Allow on
-every visit), 409 `engine_needed` (auto-start usually handles it —
-retry once; only if it persists, the user opens the engine tab from
-settings), 503 no-folder
-(pick a folder). Never repeat a failed request unchanged.
+**Errors are JSON** — read them, don't blind-retry. The shapes:
+403 `permission_needed` (Reconnect → Allow on every visit), 409
+`engine_needed` (auto-start usually handles it — retry once; only if
+it persists, the user opens the engine tab from settings), 503
+no-folder (pick a folder), 405 wrong method (the error NAMES the right
+method — re-issue with it, don't guess endpoints). Never repeat a
+failed request unchanged.
 
-**Diagnostics: ONE `print(json.dumps(...))` per cell — never several
-prints.** OWUI chats can drop all but the LAST stdout line of a cell
-(observed 2026-09-07: a 403 `permission_needed` was printed, vanished
-from the transcript, and the session went guessing nonexistent
-endpoints). To show several results, collect them into one dict and
-print it once.
+**Method cheat** (405 enforces it): reads are **GET** with query
+params — `/list /read /peek /stat /search /directory_tree /image_info
+/image_b64 /pdf_text /ocr`; writes & actions are **POST** with a JSON
+body — `/link /write /write_b64 /write_many /edit /delete /zip /unzip
+/versions/* /trash/* /ocr_pdf /pdf_op`. `/list` is THE listing
+endpoint — `/files`, `/ls`, `/dir`, `/entries` do not exist (real
+chats kept probing them); don't discovery-scan, the endpoint table
+above is complete.
+
+**Diagnostics: ONE `print(json.dumps(...))` per cell — and NEVER
+print inside a loop.** OWUI chats show only the LAST stdout line of a
+cell (observed 2026-09-07: a 403 `permission_needed` was printed,
+vanished, and the session went guessing nonexistent endpoints;
+2026-09-09: a loop printing one dict per iteration hid every result
+but the last — the model literally could not see its own /image_b64
+output). Accumulate into a dict/list across iterations, then print it
+ONCE at the end.
 
 Writes are IMMEDIATE and snapshot-first: every overwrite keeps a copy
 under `.ofb-snapshots/`, deletes under `.ofb-trash/` — recovery via

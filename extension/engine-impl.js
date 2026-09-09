@@ -139,8 +139,28 @@ async function opOcr(payload) {
   const results = [];
 
   async function ocrImage(bytes) {
-    const blob = new Blob([bytes], { type: mimeFor(ext) });
-    const { data } = await worker.recognize(blob);
+    let input = new Blob([bytes], { type: mimeFor(ext) });
+    // small-photo upscale: tesseract's accuracy falls off a cliff on
+    // small text — a real-world sign photo OCR'd as near-garbage with
+    // every language (2026-09-09). Scale images whose short side is
+    // under 800 px up to ~1200 px (max ×3) before recognizing. PDF
+    // pages render at 200 dpi (~1650 px) and are never touched.
+    try {
+      const bmp = await createImageBitmap(new Blob([bytes], { type: mimeFor(ext) }));
+      const m = Math.min(bmp.width, bmp.height);
+      if (m > 0 && m < 800) {
+        const scale = Math.min(1200 / m, 3);
+        const cv = new OffscreenCanvas(
+          Math.round(bmp.width * scale), Math.round(bmp.height * scale));
+        const g = cv.getContext("2d");
+        g.imageSmoothingEnabled = true;
+        g.imageSmoothingQuality = "high";
+        g.drawImage(bmp, 0, 0, cv.width, cv.height);
+        input = await cv.convertToBlob({ type: "image/png" });
+      }
+      if (bmp.close) bmp.close();
+    } catch (e) { /* decode/upscale failed — recognize the original bytes */ }
+    const { data } = await worker.recognize(input);
     return data.text.split("\n").filter((l) => l.trim());
   }
 

@@ -178,11 +178,21 @@ print(_r); RESULT = _r
 ''',
         # e14 (2026-09-09): method-as-contract on engine endpoints + the
         # /image_info header parser port (it 500'd "not defined" in a real
-        # chat). POST /ocr must TEACH the method, not 404 "unknown".
+        # chat). POST /ocr must TEACH the method, not 404 "unknown". Round
+        # 2: the ROUTER-wide 405 — POST /image_info and GET /link are
+        # known endpoints with the wrong method.
         "e14_method_contract": f'''d = (await ofb_fetch("POST", "/ocr", json.dumps({{"path": "{F}/inv.png", "lang": "eng"}}))).to_py()
 b = json.loads(d["body"]) if d.get("body") else {{}}
 _r = "e14 post_ocr=" + str(d["status"]) + " err=" + str(b.get("error", ""))[:50]
 assert d["status"] == 405 and "GET-only" in str(b.get("error", "")), _r + " raw: " + str(d)[:300]
+pi = (await ofb_fetch("POST", "/image_info", json.dumps({{"path": "{F}/inv.png"}}))).to_py()
+pib = json.loads(pi["body"]) if pi.get("body") else {{}}
+_r += " | post_image_info=" + str(pi["status"])
+assert pi["status"] == 405 and "GET-only" in str(pib.get("error", "")), _r + " raw: " + str(pi)[:300]
+lk = (await ofb_fetch("GET", "/link?path={F}/inv.png")).to_py()
+lkb = json.loads(lk["body"]) if lk.get("body") else {{}}
+_r += " | get_link=" + str(lk["status"])
+assert lk["status"] == 405 and "POST-only" in str(lkb.get("error", "")), _r + " raw: " + str(lk)[:300]
 i = (await ofb_fetch("GET", "/image_info?path={F}/inv.png")).to_py()
 ib = json.loads(i["body"]) if i.get("body") else {{}}
 _r += " | image_info=" + str(i["status"]) + " " + str(ib.get("format")) + " " + str(ib.get("width")) + "x" + str(ib.get("height"))

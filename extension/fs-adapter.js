@@ -228,6 +228,30 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       hint: "open legacy formats in your office app (Word / Excel / LibreOffice) and save as .docx / .xlsx, then I can read and edit it" });
   }
 
+  /* ---- router fall-through: method-aware 405 ----
+   * A wrong-method call on a KNOWN endpoint used to 404 "unknown
+   * endpoint" — indistinguishable from a typo'd path, and real chats
+   * kept endpoint-guessing after it (POST /image_info, GET /link,
+   * 2026-09-09). Engine endpoints keep their richer hint in
+   * fsEngineRoute; this table covers the rest. */
+  const ROUTE_GET = new Set(["/health", "/version", "/state", "/wheels",
+    "/ocr/config", "/guide", "/list", "/read", "/peek", "/read_b64",
+    "/stat", "/search", "/directory_tree", "/image_info", "/image_b64",
+    "/pdf_text", "/ocr"].concat([...MOVED_READ_ENDPOINTS]));
+  const ROUTE_POST = new Set(["/ocr/lang", "/write", "/write_b64",
+    "/write_b64_chunk", "/write_many", "/edit", "/delete",
+    "/versions/list", "/versions/restore", "/trash/list", "/trash/restore",
+    "/zip", "/unzip", "/link", "/ocr_pdf", "/pdf_op"]
+    .concat([...MOVED_WRITE_ENDPOINTS]));
+  if (ROUTE_GET.has(path)) {
+    return fsFail(405, { error: path + " is GET-only — got " + method,
+      hint: "call it as GET with query params, e.g. " + path + "?path=<file>" });
+  }
+  if (ROUTE_POST.has(path)) {
+    return fsFail(405, { error: path + " is POST-only — got " + method,
+      hint: "POST a JSON body, e.g. {\"path\": \"<file>\"}" });
+  }
+
   return fsFail(404, { error: "unknown endpoint" });
 }
 

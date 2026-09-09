@@ -1621,3 +1621,43 @@ PNG parses 256x200; 405 both directions; immediate RPC = domain error
 not "engine not loaded"; decode primitive; zero engine-host tabs).
 Linux suites pending as always; e14/e15 + confirm A3 cover the rest
 there.
+
+## Stage-3 session #11: efficiency round from the good parking-sign chat (2026-09-09)
+
+The re-test worked end-to-end (swe+eng applied, engines invisible, no
+popup) in 6 cells — the log still showed three things worth fixing:
+
+1. **Router-wide method-aware 405.** POST /image_info and GET /link
+   still fell to the generic 404 "unknown endpoint" (only ENGINE
+   endpoints had the method teaching). fsRoute's fall-through now
+   checks a derived endpoint→method table (GET set incl. moved reads;
+   POST set incl. moved writes + /link) and 405s with the contract.
+   Verified matrix: POST /image_info, GET /link, GET /write, POST
+   /read, DELETE /list all teach; /files stays an honest 404. This
+   closes the extension-side twin of app docs/TODO.md §6 (405-hint).
+2. **OCR small-image upscale (the real quality win).** ocrImage fed the
+   raw blob to tesseract — real-world sign photos OCR as near-garbage
+   at every language. Now images with short side < 800 px are upscaled
+   to ~1200 px (max ×3, high-quality smoothing, OffscreenCanvas) before
+   recognize; PDF pages (200 dpi renders) are untouched. A/B through
+   the REAL engines headless: a 400×300 canvas sign read
+   "p | 10-19 | (10-19) | 1 april | TIMAVGIFT" — identical to the
+   1600×1200 control, +0.3 s. WATCH on the next Linux run: e7/e8/e10/
+   e15 fixtures under 800 px short side now take the upscale path —
+   if any probe flips, tune the threshold (not the assertions).
+3. **Skill 3.0.10-EXT efficiency teachings** (all from observed model
+   behavior): method cheat + "/list is THE listing endpoint — /files
+   /ls /dir /entries do not exist, don't discovery-scan"; NEVER print
+   inside a loop (cell 6's per-iteration prints made the model's own
+   /image_b64 result invisible to it — OWUI last-line quirk); 405
+   joins the error shapes; /image_b64 → data-URL markdown display
+   convention (was missing from SKILL-EXT entirely); OCR flow: report
+   the best read + SHOW the image instead of burning cells re-trying
+   languages.
+
+Automation lesson: playwright 1.58 ServiceWorker.evaluate SILENTLY
+returns undefined for function-form expressions ((x) => …) — string
+expressions only (cost a debugging cycle in the A/B script).
+
+ext 3.0.5 / skill 3.0.10-EXT; OWUI rows restaged; e14 extended (POST
+/image_info + GET /link 405 asserts); zip rebuilt.
