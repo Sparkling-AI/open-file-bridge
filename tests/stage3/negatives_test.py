@@ -282,6 +282,47 @@ def main():
         print(text8.strip())
         ok8 = "ALL-SANDBOX-TESTS-DONE" in text8 and "HARNESS-ERROR" not in text8
 
+        # n13: trash auto-expiry (30-day TTL, ext 3.0.8). Craft one stale
+        # (1999) and one fresh (yesterday) trash dir ON DISK, force the
+        # sweep via the SW's ofbTrashSweep hook, assert stale swept +
+        # fresh (and its file) untouched.
+        import datetime
+        trash_root = GRANT / ".ofb-trash"
+        stale = trash_root / "19990101-000000-aa"
+        fresh_ts = (datetime.datetime.now() - datetime.timedelta(days=1)).strftime("%Y%m%d-%H%M%S") + "-bb"
+        fresh = trash_root / fresh_ts
+        stale.mkdir(parents=True, exist_ok=True)
+        (stale / "old.txt").write_text("stale")
+        fresh.mkdir(parents=True, exist_ok=True)
+        (fresh / "new.txt").write_text("fresh")
+        setup.evaluate(
+            "chrome.runtime.sendMessage({ofbTrashSweep: true, force: true},"
+            " (r) => { window.__sweep = JSON.stringify(r); })")
+        time.sleep(1.5)
+        sweep_res = setup.evaluate("window.__sweep")
+        ok13 = ('"removed":1' in (sweep_res or "")
+                and not stale.exists() and fresh.exists() and (fresh / "new.txt").exists())
+        print("n13 trash expiry:", sweep_res,
+              "| stale exists:", stale.exists(),
+              "| fresh exists:", fresh.exists())
+        # restore readwrite for any later phases (n8 flipped it)
+        setup.evaluate("""
+        new Promise((res) => {
+          const rq = indexedDB.open('ofb-ext', 2);
+          rq.onsuccess = () => {
+            const tx = rq.result.transaction('roots', 'readwrite');
+            const getAll = tx.objectStore('roots').getAll();
+            getAll.onsuccess = () => {
+              const row = getAll.result[0];
+              row.mode = 'readwrite';
+              tx.objectStore('roots').put(row);
+              tx.oncomplete = () => res('restored');
+            };
+          };
+        })
+        """)
+        time.sleep(0.3)
+
         pg.close()
         pg8.close()
         ctx.close()
@@ -296,7 +337,7 @@ def main():
     unz = FIX / f"unz-{RUN}" / "ok.txt"
     print("unzip partial extraction (must be False):", unz.exists())
 
-    verdict = "PASS" if (ok_main and ok8 and snaps and not slipped and not unz.exists()) else "FAIL"
+    verdict = "PASS" if (ok_main and ok8 and ok13 and snaps and not slipped and not unz.exists()) else "FAIL"
     print(f"\nP1b NEGATIVES VERDICT: {verdict}")
     return 0 if verdict == "PASS" else 1
 

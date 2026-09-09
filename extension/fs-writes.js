@@ -422,6 +422,64 @@ async function epRestore(kind, body) {
   return fsOk({ ok: true, restored: rg.relInRoot, from: kind + "/" + ts, snapshot: snap });
 }
 
+/* ---------------- trash expiry (30-day TTL, app parity; 2026-09-10) ----
+ * MV3 SWs have no reliable timers, so the sweep runs OPPORTUNISTICALLY:
+ * sw.js fires it (unawaited) on pipe traffic, throttled to once per 24 h
+ * (in-memory first — free — then a kv stamp across SW restarts). Entry
+ * age comes from the directory name itself (tsStamp shape, local time);
+ * unparseable names are left alone. Snapshots (.ofb-snapshots/) are NOT
+ * pruned — deliberate: they are the undo net, and their cap is the 8 MB
+ * per-file snapshot rule. */
+
+const TRASH_TTL_MS = 30 * 24 * 3600 * 1000;
+let _trashSweepMem = 0;
+
+function trashEntryTsMs(name) {
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-[0-9a-f]{2}$/
+    .exec(String(name || ""));
+  if (!m) return null;
+  const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);
+  return isNaN(d.getTime()) ? null : d.getTime();
+}
+
+async function maybeSweepTrash(force) {
+  try {
+    const now = Date.now();
+    if (!force) {
+      if (_trashSweepMem && now - _trashSweepMem < 24 * 3600 * 1000) {
+        return { skipped: "throttled" };
+      }
+      const last = await kvGet("trash_sweep_ts", 0);
+      if (now - last < 24 * 3600 * 1000) return { skipped: "throttled" };
+    }
+    _trashSweepMem = now;
+    await kvSet("trash_sweep_ts", now);
+    const roots = await enabledRoots();
+    let removed = 0;
+    for (const r of roots) {
+      let trash;
+      try { trash = await r.handle.getDirectoryHandle(TRASH_DIR); }
+      catch (e) { continue; }
+      const stale = [];
+      for await (const [name, h] of trash.entries()) {
+        if (h.kind !== "directory") continue;
+        const ts = trashEntryTsMs(name);
+        if (ts != null && now - ts > TRASH_TTL_MS) stale.push(name);
+      }
+      for (const name of stale) {
+        try { await trash.removeEntry(name, { recursive: true }); removed++; }
+        catch (e) { /* in use / raced — next sweep retries */ }
+      }
+    }
+    if (removed) {
+      await auditRow({ op: "trash-expiry", path: TRASH_DIR + "/", status: 200, size: removed });
+    }
+    return { removed: removed };
+  } catch (e) {
+    return { error: String(e) };
+  }
+}
+
 /* ---------------- /zip + /unzip ---------------- */
 
 const ZIP_CAP_BYTES = 8000000;

@@ -89,7 +89,7 @@ folder grant stored in this browser, and only the Open WebUI page's own
 code-interpreter sandbox can reach the bridge — nothing else can send requests.</p>
 <p class="hint">Always on, not configurable: credential-looking files
 (<code>.env</code>, <code>id_rsa</code>, <code>*.pem</code>, …) are refused;
-every overwrite keeps the previous version; deletes go to the trash.</p>
+every overwrite keeps the previous version; deletes go to the trash (30-day expiry).</p>
 <p class="hint" id="secstatus"></p>
 <div class="btnrow" style="margin-top:4px">
 <label class="hint" for="confirmscope" style="white-space:nowrap">Confirm before</label>
@@ -174,9 +174,9 @@ lifetime means old chat answers stay clickable for longer.</p>
 <details class="sec" id="sec-safety" open>
 <summary>🛟 Safety &amp; recovery</summary>
 <p class="hint">Nothing the AI changes is unrecoverable: every overwrite keeps the
-previous version, and deletes go to the trash (kept inside your folder
-until you empty it — see the recovery guide). How to restore or find
-deleted files:</p>
+previous version, and deletes go to the trash (inside your folder;
+entries auto-expire after 30 days — see the recovery guide). How to
+restore or find deleted files:</p>
 <div class="btnrow">
 <button id="openguide">📖 Recovery guide</button>
 <span class="hint">opens the guide for <b>your installed version</b></span>

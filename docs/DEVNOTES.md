@@ -1747,3 +1747,35 @@ expiry code exists). All three fixed to honest wording. Bumped ext
 version stamp 3.0.7-EXT, zero console errors; GLM-4.6V review clean
 (no breakage; density matches the app guide by design). Skill
 untouched (its trash wording was already claim-free) — no restage.
+
+## Stage-3 session #15: trash auto-expiry + bigger guide type (2026-09-10)
+
+Dandan's two asks:
+
+1. **Trash auto-expiry (30 days, app parity; ext 3.0.8).** MV3 SWs have
+   no reliable timers, so the sweep is OPPORTUNISTIC: sw.js fires
+   maybeSweepTrash() unawaited on pipe traffic, throttled once per 24 h
+   (in-memory check first — free after the first call per SW lifetime —
+   then a kv stamp across restarts). Entry age comes from the directory
+   NAME (tsStamp shape, local time; regex-matched, rollover dates land
+   in the future = kept — conservative direction only); unparseable
+   names are never touched. removeEntry recursive per stale dir,
+   audited as op trash-expiry. Snapshots are NOT pruned (they are the
+   undo net; the 8 MB/file cap is their limit). sw.js also answers a
+   non-pipe {ofbTrashSweep, force} message — the test hook. NOTE:
+   omitted force === force (only explicit false throttles) — bit me in
+   the smoke before I re-tested.
+   negatives_test n13: craft 1999-stale + yesterday-fresh trash dirs ON
+   DISK, force the sweep from the extension page, assert stale gone +
+   fresh file intact; folded into the verdict (and root restored to
+   readwrite after n8's flip).
+2. **Guide type up.** body 16→18px / line-height 1.65, h1-h3, code/pre/
+   table/hint scaled with it. Retention text updated everywhere the
+   guide/options described manual-only retention: trash = 30-day
+   auto-expiry (FAQ entry added), snapshots = kept until you empty
+   them. GLM-4.6V: comfortably readable, no regressions.
+
+Verified headless: parser units (valid→epoch, garbage→null,
+rollover→future-kept), forced sweep {removed:0} on a root-less profile,
+explicit force:false → {skipped:"throttled"}. Guide renders 10 sections
+at 18px, zero console errors.

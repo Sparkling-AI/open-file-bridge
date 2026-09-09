@@ -51,6 +51,9 @@ async function handleOfbRequest(msg, senderTabId) {
 
   inflight++;
   try {
+    // trash expiry rides along (unawaited): throttled to once per 24 h
+    // internally, so this is free after the first call per SW lifetime
+    maybeSweepTrash().catch(() => {});
     // out-of-band confirmation gate (destructive ops) — BEFORE the
     // adapter; passes the requesting tab so the popup lands there
     const gate = await confirmGate(method, path, bodyText, senderTabId);
@@ -96,6 +99,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     if (typeof fsEngineSetAlive === "function") fsEngineSetAlive(true);
     sendResponse({ ok: true });
     return;
+  }
+  // trash-expiry force hook (tests + diagnostics; not pipe-shaped)
+  if (msg.ofbTrashSweep === true) {
+    maybeSweepTrash(msg.force !== false).then(sendResponse);
+    return true; // async sendResponse
   }
   // narrow pipe: only the exact OFB request shape
   if (msg.ofb !== true || msg.id === undefined) return; // not ours: ignore
