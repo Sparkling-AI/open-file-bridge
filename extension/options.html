@@ -135,23 +135,6 @@ possible but the engine will fail to load them.</p>
 <p class="hint" id="langs"></p>
 </details>
 
-<details class="sec" id="sec-ignore" open>
-<summary>🚫 Ignore patterns</summary>
-<p class="hint">Files matching these patterns are invisible to the AI — not
-listed, not readable, and <b>writes to them are refused</b>. One pattern per
-line, gitignore-style: <code>*.zip</code>, <code>secrets/</code> (that folder,
-anywhere), <code>/build</code> (top level only); bare names match at any
-depth. The preview below updates within seconds of saving.</p>
-<textarea id="ignorepats" rows="4" placeholder="*.zip&#10;.secrets&#10;node_modules/"></textarea>
-<div class="btnrow">
-<button id="saveignore">Save patterns</button>
-<span class="hint" id="ignstat"></span>
-</div>
-<p class="hint">Always ignored (built in, not editable):
-<b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b> ·
-<b>.ofb-snapshots/</b> · <b>.ofb-trash/</b> · <b>.ofb-chunks/</b></p>
-</details>
-
 <details class="sec" id="sec-links" open>
 <summary>⏳ Link lifetime</summary>
 <p class="hint">How long the chat-answer file links keep working after the
@@ -196,6 +179,23 @@ happen; the AI is told to ask you before continuing):</p>
 <span><b>Read-only mode</b> — block <i>all</i> writes to every shared folder
 (the AI can read and analyze, never modify). <span class="hint" id="rostat"></span></span>
 </label>
+</details>
+
+<details class="sec" id="sec-ignore" open>
+<summary>🚫 Ignore patterns</summary>
+<p class="hint">Files matching these patterns are invisible to the AI — not
+listed, not readable, and <b>writes to them are refused</b>. One pattern per
+line, gitignore-style: <code>*.zip</code>, <code>secrets/</code> (that folder,
+anywhere), <code>/build</code> (top level only); bare names match at any
+depth. The preview below updates within seconds of saving.</p>
+<textarea id="ignorepats" rows="4" placeholder="*.zip&#10;.secrets&#10;node_modules/"></textarea>
+<div class="btnrow">
+<button id="saveignore">Save patterns</button>
+<span class="hint" id="ignstat"></span>
+</div>
+<p class="hint">Always ignored (built in, not editable):
+<b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b> ·
+<b>.ofb-snapshots/</b> · <b>.ofb-trash/</b> · <b>.ofb-chunks/</b></p>
 </details>
 
 <details class="sec" id="sec-preview" open>

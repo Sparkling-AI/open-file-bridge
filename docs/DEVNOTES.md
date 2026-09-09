@@ -1779,3 +1779,8 @@ Verified headless: parser units (valid→epoch, garbage→null,
 rollover→future-kept), forced sweep {removed:0} on a root-less profile,
 explicit force:false → {skipped:"throttled"}. Guide renders 10 sections
 at 18px, zero console errors.
+
+Session #15b (2026-09-10): Dandan's layout ask — the 🚫 Ignore
+patterns card moved to sit directly above 👁 What the AI can see (was
+between OCR language and Link lifetime). Better pairing: the patterns
+drive exactly what the preview below shows. ext 3.0.9, smoke green.
