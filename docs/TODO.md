@@ -100,6 +100,19 @@ Bridge must be running during chats. Non-technical users will forget.
 - [ ] If weak models hallucinate bridge responses, enforce skill via
       `$open-file-bridge` mention in prompt suggestions
 
+## 6b. Stage 3 (extension) follow-ups
+
+- [ ] Re-run the Linux stage-3 suites (spike1/engines/negatives/confirm,
+      Xvfb) after the 2026-09-09 worker-transport relay change — the
+      Mac-runnable `tests/stage3/worker_transport_test.py` (7/7) covers
+      both transports and the election, but the picker-driven paths and
+      the engines/confirm suites were not re-run on this machine.
+- [ ] Bump the CWS zip (`dist-stage3/…-3.0.2.zip`) when releasing — the
+      manifest moved to 3.0.2 (worker transport + blocking confirmations).
+- [ ] confirm_test.py was rewritten for the 2026-09-09 blocking-confirmation
+      contract (c0 approve-mid-wait, c1 timed_out, c5 deny-mid-wait) but
+      only runs on Linux/Xvfb — first run there must confirm it green.
+
 ## 7. CI gaps
 
 - [x] Windows/macOS smoke tests in Actions — done 2026-08-28: every matrix

@@ -15,7 +15,7 @@
 
 const OFBIDB = (() => {
   const DB_NAME = "ofb-ext";
-  const VERSION = 1;
+  const VERSION = 2;
   let dbp = null;
 
   function open() {
@@ -34,8 +34,21 @@ const OFBIDB = (() => {
           db.createObjectStore("clicks", { keyPath: "token" });
         if (!db.objectStoreNames.contains("transfers"))
           db.createObjectStore("transfers", { keyPath: "tid" });
+        // v2 (2026-09-09): confirmation asks/verdicts SURVIVE service-worker
+        // death — MV3 SWs die after ~30 s idle and were eating approvals
+        if (!db.objectStoreNames.contains("confirm"))
+          db.createObjectStore("confirm", { keyPath: "id" });
       };
-      req.onsuccess = () => resolve(req.result);
+      req.onsuccess = () => {
+        // A v1 connection in another context (e.g. an options tab open
+        // since before the upgrade) would BLOCK this open forever —
+        // yield on versionchange so upgrades always go through.
+        req.result.onversionchange = () => {
+          req.result.close();
+          dbp = null;
+        };
+        resolve(req.result);
+      };
       req.onerror = () => reject(req.error);
     });
     return dbp;

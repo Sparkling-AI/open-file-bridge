@@ -63,10 +63,11 @@
             text-align: center; }
     .card.resolved .row { display: none; }
     .verdict { display: none; font-size: 13px; text-align: center;
-               padding: 4px 0 2px; font-weight: 600; }
+                padding: 4px 0 2px; font-weight: 600; }
     .card.resolved .verdict { display: block; }
     .card.ok .verdict { color: #0a7d32; }
     .card.no .verdict { color: #b00; }
+    .card.expired .row { display: none; }
   </style>
   <div class="wrap"></div>`;
 
@@ -77,6 +78,7 @@
     card.className = "card";
     const whatHtml = String(ask.summary || "")
       .replace(/[&<>"]/g, (m) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[m]));
+    const waitSec = Math.max(1, Math.round((ask.wait_ms || 20000) / 1000));
     card.innerHTML =
       '<div class="brand"><img class="logo" alt="" src="' +
         chrome.runtime.getURL("icons/icon-48.png") + '">' +
@@ -89,18 +91,52 @@
       '<button class="approve">Approve</button>' +
       '<button class="deny">Deny</button></div>' +
       '<div class="verdict"></div>' +
-      '<div class="meta">single-use · valid 5 min · from your AI assistant\u2019s request</div>';
+      '<div class="meta">click within <span class="countdown">' + waitSec +
+        '</span> s · single-use · from your AI assistant\u2019s request</div>';
+
+    // live countdown for the interactive window (the request itself
+    // returns a timeout-flavored 403 when this hits zero)
+    const cd = card.querySelector(".countdown");
+    const tick = setInterval(() => {
+      if (!card.isConnected) { clearInterval(tick); return; }
+      const left = waitSec - Math.round((Date.now() - t0) / 1000);
+      cd.textContent = String(Math.max(0, left));
+      if (left <= 0) clearInterval(tick);
+    }, 500);
+    const t0 = Date.now();
 
     const settle = (verdict) => {
+      clearInterval(tick);
       card.classList.add("resolved", verdict === "approved" ? "ok" : "no");
+      // in-window click → the blocked request completes in THIS round
+      // trip; late click (countdown already at 0) → the request returned
+      // timed_out and the assistant's one retry will pick the grant up
+      const inWindow = (Date.now() - t0) < waitSec * 1000;
       card.querySelector(".verdict").textContent =
-        verdict === "approved" ? "✓ Approved — the assistant will retry" :
-                                 "✗ Denied — nothing was changed";
+        verdict === "approved"
+          ? (inWindow ? "✓ Approved — completing the operation…"
+                      : "✓ Approved (late) — the assistant can retry once now")
+          : "✗ Denied — nothing was changed";
       try {
         chrome.runtime.sendMessage({
           ofbConfirmVerdict: true, id: ask.id, verdict: verdict,
-        }, () => { void chrome.runtime.lastError; });
-      } catch (e) { /* SW gone: the ask expires server-side anyway */ }
+        }, (resp) => {
+          void chrome.runtime.lastError;
+          // honest outcome: the SW (which may have restarted since the
+          // ask) is the authority — never claim an approval it rejected
+          if (resp && resp.ok === false && card.isConnected) {
+            card.classList.add("expired");
+            card.querySelector(".verdict").textContent =
+              "⚠ " + (resp.error || "not recorded") + " — ask again in chat";
+          }
+        });
+      } catch (e) { /* SW gone: the ask expires server-side anyway */
+        if (card.isConnected) {
+          card.classList.add("expired");
+          card.querySelector(".verdict").textContent =
+            "⚠ extension unavailable — ask again in chat";
+        }
+      }
       setTimeout(() => {
         try { card.remove(); } catch (e2) {}
         syncCount();

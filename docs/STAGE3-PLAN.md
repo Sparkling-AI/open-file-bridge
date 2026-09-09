@@ -47,8 +47,12 @@ Open File Bridge desktop app                permissions persisted in IndexedDB)
 (Python — REMOVED from the story)
 ```
 
-Same message pipe end to end. **relay.js stays byte-for-byte unchanged;
-sw.js swaps its transport core** from `fetch(BRIDGE_ORIGIN + path)` to a
+Same message pipe end to end. **relay.js stayed byte-for-byte unchanged
+until 2026-09-09** (session #7: OWUI >= 0.11 may execute cells in a
+pyodide WORKER where no `parent` window exists, so the relay additionally
+listens on `BroadcastChannel("ofb-pipe")` behind a per-worker relay
+election; the window/postMessage path is unchanged for iframe executors —
+security rationale in DEVNOTES session #7); sw.js swaps its transport core** from `fetch(BRIDGE_ORIGIN + path)` to a
 router that dispatches `{method, path, body}` against the FS-handle
 backend. The v2 API surface (paths, query/body shapes, status-code
 semantics 401/403/404/409/413/429/501 per `references/v2-endpoints.md`)
@@ -306,8 +310,12 @@ Chrome 110):
    approval round trip — writes are immediate + snapshot-first, same
    contract as app 2.11+ / skill 2.11+.
 3. **Relay gates unchanged** (descendant-iframes-only, id-correlated
-   targeted replies, ≤30 in-flight, ≤120/min, 10 MB payload cap) —
-   relay.js is byte-for-byte the Stage-1 file.
+   targeted replies, ≤30 in-flight, ≤120/min, 10 MB payload cap) on
+   the window path; the 2026-09-09 worker path (BroadcastChannel
+   "ofb-pipe") accepts same-origin senders behind a per-worker relay
+   election (one forwarder per worker, so two OWUI tabs never run a
+   write twice) — the page itself could already ride the window pipe,
+   so the trust boundary is unchanged.
 4. **Write safety carried from the app:** snapshot-before-overwrite
    (copy target into `.ofb-trash/` before replace), trash-deletes,
    snapshot-on-restore, write-rate breaker + MB caps (the Safety-card

@@ -1397,3 +1397,123 @@ identity holds — same tradeoff the app's own 16px .ico entry makes, so
 brand-consistent; no simplified 16px variant needed. Extension still
 loads clean in Chrome-for-Testing with the icons present; zip rebuilt
 (63 entries incl. the 5 PNGs + icons/ dir).
+
+## Stage-3 session #7: worker transport — OWUI 0.11's pyodide WORKER executor (2026-09-09)
+
+Symptom: real OWUI chats ("list files") hung to "Execution Time Limit
+Exceeded" while the extension was loaded, the folder granted, and the
+tab refreshed. Systematic elimination:
+
+1. Extension healthy — a fresh 127.0.0.1 tab in Dandan's own Chrome
+   answered /health in 0.0 s with roots granted (verdict page
+   /tmp/ofb-debug/page.html pattern); content scripts injected.
+2. The OWUI tab itself failed even after reload — not a stale relay.
+3. Ground truth from his owui-local bundle (v0.11.1-crypto44): python
+   cells execute in a pyodide WORKER (CodeBlock + execute_code tool;
+   shared-worker executor with an iframe-sandbox FALLBACK — chunk
+   Cu_6R2Jb.js exports the iframe factory `mm()`). In a worker
+   `from js import parent` ImportError-kills the cell at line 2
+   (reproduced with his pyodide v314.0.3 — which, note, rejects CLASSIC
+   workers, module only). The tool runner then shows its own 60 s
+   "Execution Time Limit Exceeded" instead of the ImportError, which is
+   why this looked like a transport hang rather than a crash. The skill
+   only ever worked in real chats when the iframe fallback executor ran
+   (matches the 2026-09-07 real-chat 403 observation).
+
+Fix (this session):
+- extension/relay.js — new worker pipe: BroadcastChannel("ofb-pipe")
+  listener alongside the window pipe. Workers have no parent window but
+  CAN use BroadcastChannel (same-origin); content scripts share the page
+  origin, so the relay hears them. Per-worker ELECTION: every relay
+  answers an {ofbHello, workerId} with its random tag; the worker keeps
+  the smallest tag and addresses requests {to: tag} so exactly ONE relay
+  forwards (two OWUI tabs must never run a write twice). Security: the
+  channel is same-origin = the page's own scripts, which could already
+  ride the window pipe (isDescendantIframe matches the page's own
+  window; a hostile page can proxy via its own iframes) — no new
+  capability. Both sendMessage call sites now also catch the orphaned
+  content-script throw ("Extension context invalidated") and answer
+  fast instead of hanging the caller to its timeout (long-standing
+  minor bug, found during the hunt).
+- SKILL-EXT.md 3.0.5-EXT → 3.0.6-EXT — bootstrap guards
+  `from js import parent` (ImportError → None), installs BOTH listeners
+  (window + BroadcastChannel) and picks the transport per call:
+  parent.postMessage in an iframe executor, elected-relay
+  BroadcastChannel in a worker. Fast-fails with actionable messages
+  ("no relay answered" / "no transport available") instead of a 60 s
+  timeout; a timeout resets the election (dead tab self-heal).
+  ofb_fetch_b64 is now a thin wrapper (b64 flag) — less duplicated
+  bootstrap code for models to copy.
+- Version bumps: manifest + FS_VERSION 3.0.0 → 3.0.1 (transport
+  capability the skill gates on: "requires extension ≥ 3.0.1"). The
+  "no manifest bump while unreleased" convention from #5/#6 was for
+  cosmetic changes; a capability the skill negotiates needs the stamp.
+- STAGE3-PLAN "relay.js byte-for-byte" invariant amended (§diag + §P6)
+  with the why; TODO §6b records the Linux-suite rerun debt.
+
+Verification (this Mac, real extension from the repo tree):
+tests/stage3/worker_transport_test.py — NEW, Mac-safe (no Xvfb, no
+folder grant needed): extracts the bootstrap VERBATIM from SKILL-EXT.md
+and runs it (a) in a module worker → /health 200 in 0.27 s incl.
+election, body honest ("no folder chosen yet" — scratch profile),
+(b) with a second relay page open → exactly one reply envelope per
+request (election, no duplicate forwards), (c) hello/relay handshake
+observed on the channel, (d) iframe regression: same bootstrap in a
+srcdoc+allow-scripts sandbox answers via parent.postMessage in 0.0 s.
+7/7 green. Harness notes: pyodide dist fetched from the running OWUI
+(like spike1); the scratch server needs CORS (OWUI itself serves
+/pyodide with access-control-allow-origin: null for its opaque-origin
+sandbox) and ThreadingHTTPServer once several pages load the 10 MB wasm
+concurrently; pyodide in an opaque srcdoc needs an ABSOLUTE indexURL
+(its own location.href is about:srcdoc).
+
+OWUI restage: SKILL-EXT 3.0.6-EXT staged to both rows (staged skill +
+Dandan's manual local-file-bridge-ext) via webui.db, updated_at unix
+int — no container restart.
+
+## Stage-3 session #7b: blocking confirmations — the approve-retry LOOP (2026-09-09, later same day)
+
+Dandan's report: overwrite → popup → Approve → "approved" → model
+retries → a NEW popup → forever. Root cause: v1 stored verdicts ONLY
+in the SW's CONFIRM_PENDING map — MV3 SWs die after ~30 s idle, so the
+Approve click usually woke a FRESH worker with an empty map; the click
+was answered "unknown or expired" but confirm.js ignored the response
+and the card still said "✓ Approved". Every retry raised a fresh ask.
+
+Redesign per Dandan's spec (ext 3.0.2 / skill 3.0.7-EXT):
+- fs-confirm: the gated request now BLOCKS on the verdict for
+  CONFIRM_WAIT_MS = 20 s (chosen under the relay's 120 s id TTL, the
+  skill's 60 s cell timeout, OWUI's 60 s executor limit, and the SW's
+  ~30 s idle window, leaving ~40 s for the write). Approve in time →
+  the SAME call executes and returns the real result. Deny → 403
+  denied. No click → 403 {confirmation_required, timed_out: true} with
+  a retry-once hint; the ask STAYS armed so a LATE approve grants the
+  next identical retry (single-use, 5-min TTL).
+- Persistence: asks/verdicts now live in IndexedDB (fs-idb v2, new
+  "confirm" store) — SW death can never eat an approval again.
+  fs-idb connections also close on versionchange now: an options tab
+  holding a v1 connection would otherwise BLOCK the v2 upgrade forever
+  (his options tab was open — would have hung /health on upgrade).
+- sw.js: confirmVerdict is async (IDB) — the verdict listener returns
+  true and answers via .then(sendResponse).
+- confirm.js: honest settle (a rejected verdict shows "⚠ not recorded
+  — ask again in chat" instead of lying "✓ Approved"), plus a live
+  countdown for the 20 s window; meta text updated.
+- Skill 3.0.7-EXT: the confirm section now teaches the one-call flow
+  (approve in time = same call returns the result; timed_out = tell
+  the user, retry ONCE; late clicks still count).
+- confirm_test.py updated to the new contract: NEW c0 (driver approves
+  MID-WAIT from the SW → same call returns 200), c1 expects
+  timed_out, c5's deny now happens mid-wait on the cell's own ask.
+  Linux/Xvfb only — NOT run on this Mac (recorded in TODO §6b).
+
+Verification on this Mac: worker_transport_test 7/7 (regression, incl.
+the fs-idb v2 bump). LIVE end-to-end in Dandan's Chrome (ext reloaded
+to 3.0.2, fresh chat, real popup): "append a line to link-smoke.txt" →
+popup appeared → DANDAN clicked Approve himself (the real-user path;
+the AX-driven click raced his and lost with a stale-element error) →
+the SAME execute_code returned {"ok": true, "written":
+"/link-smoke.txt", "bytes": 35, "snapshot": {...5-byte original}} →
+model confirmed the append. No retry round trip. Side observation:
+the closed-shadow card DOES expose its Approve/Deny buttons to macOS
+accessibility. OWUI rows restaged to 3.0.7-EXT.

@@ -106,7 +106,8 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
 // confirmation popup verdicts (content script confirm.js → SW)
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.ofbConfirmVerdict === true && msg.id) {
-    sendResponse(confirmVerdict(String(msg.id), String(msg.verdict || "")));
-    return;
+    confirmVerdict(String(msg.id), String(msg.verdict || ""))
+      .then(sendResponse);
+    return true; // async sendResponse (confirmVerdict touches IndexedDB)
   }
 });

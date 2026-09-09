@@ -41,11 +41,20 @@ FIXREL = f"conf-{RUN}"
 FIX = GRANT / FIXREL
 
 CELLS = {
+  # 2026-09-09 blocking design: the gate WAITS ~20 s for the click.
+  # c0 proves the headline behavior — the driver approves MID-WAIT, so
+  # the SAME call returns 200 (no retry round trip).
+  "c0_blocking_approve": '''
+d = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/target.txt", "content": "blocked-v1"}}))).to_py()
+_r = "c0 status=" + str(d["status"])
+assert d["status"] == 200, _r + " raw: " + str(d)[:300]
+print(_r); RESULT = _r
+''',
   "c1_delete_gated": '''
 d = (await ofb_fetch("POST", "/delete", json.dumps({{"path": "{F}/delme.txt"}}))).to_py()
 b = json.loads(d["body"]) if d.get("body") else {{}}
-_r = "c1 status=" + str(d["status"]) + " conf=" + str(b.get("confirmation_required")) + " id=" + str(b.get("confirm_id"))
-assert d["status"] == 403 and b.get("confirmation_required") is True and b.get("confirm_id"), _r + " raw: " + str(d)[:400]
+_r = "c1 status=" + str(d["status"]) + " conf=" + str(b.get("confirmation_required")) + " timed_out=" + str(b.get("timed_out")) + " id=" + str(b.get("confirm_id"))
+assert d["status"] == 403 and b.get("confirmation_required") is True and b.get("timed_out") is True and b.get("confirm_id"), _r + " raw: " + str(d)[:400]
 print(_r); RESULT = _r
 ''',
   "c2_overwrite_vs_new": '''
@@ -219,6 +228,49 @@ def main():
             pg.close()
             return None, txt
 
+        # c0: launch the cell, approve the ask MID-WAIT from the SW
+        # (same entry point the popup's click uses) -> same call = 200
+        hp0 = SCRATCH / "harness-c0.html"
+        hp0.write_text(engines_test.assemble_harness_page(
+            spike1.OWUI, engines_test.spike1_cells_python(),
+            {"c0": cell("c0_blocking_approve")}))
+        pg0 = ctx.new_page()
+        pg0.goto(base + "/harness-c0.html")
+        appr_id = None
+        t0 = time.time()
+        while time.time() - t0 < 15 and not appr_id:
+            pend = sw.evaluate(
+                "() => JSON.stringify(Array.from(CONFIRM_PENDING.entries())"
+                ".map(e => [e[0], e[1].verdict, e[1].pathKey]))")
+            try:
+                for eid, v, pk in json.loads(pend):
+                    if v is None and "target.txt" in pk:
+                        appr_id = eid
+            except Exception as e:
+                print("parse err", e)
+            if not appr_id:
+                time.sleep(0.5)
+        print("approve target:", appr_id)
+        if appr_id:
+            sw.evaluate(
+                f"() => JSON.stringify(confirmVerdict('{appr_id}', 'approved'))")
+        txt0 = ""
+        t0 = time.time()
+        while time.time() - t0 < 120:
+            try:
+                txt0 = pg0.evaluate(
+                    "document.getElementById('log').textContent") or ""
+            except Exception:
+                txt0 = ""
+            if "ALL-SANDBOX-TESTS-DONE" in txt0 or "HARNESS-ERROR" in txt0:
+                break
+            time.sleep(1)
+        print("--- harness (c0) ---")
+        print(txt0.strip()[:700])
+        pg0.close()
+        verdicts["B_c0_blocking_approve_same_call"] = ("c0 status=200" in txt0
+                                                       and "HARNESS-ERROR" not in txt0)
+
         _pg1, txt1 = run_cell_page("c1", cell("c1_delete_gated"), keep_open=True)
         verdicts["B_c1_delete_gated"] = ("c1 status=403" in txt1
                                          and "HARNESS-ERROR" not in txt1)
@@ -249,26 +301,46 @@ def main():
         verdicts["B_c4_single_use"] = ("c4 status=403" in txt4
                                        and "HARNESS-ERROR" not in txt4)
 
-        # c5: raise an overwrite ask via SW (direct), deny it, then cell
-        sw.evaluate(
-            "() => confirmGate('POST','/write', JSON.stringify({path:'%s/target.txt', content:'x'}), null)"
-            % FIXREL)
-        time.sleep(0.4)
-        pend = sw.evaluate(
-            "() => JSON.stringify(Array.from(CONFIRM_PENDING.entries())"
-            ".map(e => [e[0], e[1].verdict, e[1].pathKey]))")
-        print("pending:", pend)
+        # c5 (2026-09-09): the ask is raised BY the cell's own blocking
+        # call — deny it mid-wait so the SAME call returns 403 denied
+        hp5 = SCRATCH / "harness-c5.html"
+        hp5.write_text(engines_test.assemble_harness_page(
+            spike1.OWUI, engines_test.spike1_cells_python(),
+            {"c5": cell("c5_denied")}))
+        pg5 = ctx.new_page()
+        pg5.goto(base + "/harness-c5.html")
         deny_id = None
-        try:
-            for eid, v, pk in json.loads(pend):
-                if v is None and "target.txt" in pk:
-                    deny_id = eid
-        except Exception as e:
-            print("parse err", e)
+        t0 = time.time()
+        while time.time() - t0 < 15 and not deny_id:
+            pend = sw.evaluate(
+                "() => JSON.stringify(Array.from(CONFIRM_PENDING.entries())"
+                ".map(e => [e[0], e[1].verdict, e[1].pathKey]))")
+            try:
+                for eid, v, pk in json.loads(pend):
+                    if v is None and "target.txt" in pk:
+                        deny_id = eid
+            except Exception as e:
+                print("parse err", e)
+            if not deny_id:
+                time.sleep(0.5)
+        print("deny target:", deny_id)
         if deny_id:
             sw.evaluate(
                 f"() => JSON.stringify(confirmVerdict('{deny_id}', 'denied'))")
-        txt5 = run_cell_page("c5", cell("c5_denied"))[1]
+        txt5 = ""
+        t0 = time.time()
+        while time.time() - t0 < 120:
+            try:
+                txt5 = pg5.evaluate(
+                    "document.getElementById('log').textContent") or ""
+            except Exception:
+                txt5 = ""
+            if "ALL-SANDBOX-TESTS-DONE" in txt5 or "HARNESS-ERROR" in txt5:
+                break
+            time.sleep(1)
+        print("--- harness (c5) ---")
+        print(txt5.strip()[:700])
+        pg5.close()
         verdicts["B_c5_denied_shape"] = ("c5 status=403 denied=True" in txt5
                                          and "HARNESS-ERROR" not in txt5)
 

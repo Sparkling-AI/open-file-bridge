@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.5-EXT (extension backend)
+# Local File Bridge — skill v3.0.7-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -13,18 +13,23 @@ description: "MUST-CALL before ANY file task. User's real files are reachable ON
 > **EXTENSION VARIANT (3.0 — Stage 3)** — use when the user has the Open
 > File Bridge **browser extension**. The extension IS the backend now: no
 > desktop app, no bridge process, no token. Requests travel
-> `postMessage → page relay → extension service worker → the user's
-> granted folder` (Chrome File System Access API). This works on **any
-> OWUI origin** — public HTTPS included — because nothing touches
-> localhost at all.
+> `postMessage or BroadcastChannel → page relay → extension service
+> worker → the user's granted folder` (Chrome File System Access API).
+> OWUI ≥ 0.11 may execute cells in a pyodide **worker** (no parent
+> window); the bootstrap detects the context and picks the transport —
+> `postMessage` in an iframe sandbox, `BroadcastChannel` in a worker
+> (requires extension ≥ 3.0.1 relay). This works on **any OWUI origin**
+> — public HTTPS included — because nothing touches localhost at all.
 >
-> If `ofb_fetch` requests time out (no reply within ~30 s), the extension
-> is NOT installed or its content script is not on this page — tell the
-> user the extension is required (Chrome Web Store / unpacked load) and
-> stop; do not fall back to `pyfetch 127.0.0.1` (there is no app to talk
-> to in extension mode).
+> If `ofb_fetch` raises "no relay answered", the extension is NOT
+> installed/enabled on this page — tell the user the extension is
+> required (Chrome Web Store / unpacked load) and stop; do not fall back
+> to `pyfetch 127.0.0.1` (there is no app to talk to in extension
+> mode). A slow TIMEOUT (no reply in ~30 s) now almost always means the
+> elected relay's tab was closed mid-session — retry once (the
+> bootstrap re-elects automatically on the next call).
 
-Requires extension ≥ **3.0.0** (`/version` reports `3.0.0-EXT`;
+Requires extension ≥ **3.0.1** (`/version` reports `3.0.1-EXT`;
 `skill_min` 2.5). The endpoint surface mirrors bridge app 2.11 — every
 recipe from the standard skill works with the exceptions below.
 
@@ -72,21 +77,34 @@ confirm it rather than trusting the OCR blindly.
 ## Bootstrap (run once per session)
 
 ```python
-import sys, json, base64, asyncio
-from js import parent
+import sys, json, base64, asyncio, random
+import js
 from pyodide.ffi import create_proxy, to_js
+
+# OWUI >= 0.11 may run cells in a pyodide WORKER: no parent window exists
+# there, and `from js import parent` ImportError-kills the whole cell. In
+# an iframe sandbox parent EXISTS. Guard it and pick the transport at runtime.
+try:
+    from js import parent
+except ImportError:
+    parent = None
 
 _pending = {}
 _next = [0]
 _installed = [False]
+_bc = None            # worker transport (BroadcastChannel "ofb-pipe")
+_relay_tag = [None]   # elected relay — the ONE tab that forwards for us
+_wid = "w%08x" % random.getrandbits(32)
 
 def _install():
     if _installed[0]:
         return
-    import js
-    def on_message(ev):
+    global _bc
+    def _on_msg(ev):
         try:
             d = getattr(ev, "data", None)
+            if d is None:
+                return
             dd = d.to_py()          # JsProxy -> dict (REQUIRED before .get)
             if dd.get("ofb") is not True:
                 return
@@ -95,10 +113,35 @@ def _install():
                 fut.set_result(d)
         except Exception:
             pass
-    js.addEventListener("message", create_proxy(on_message))
+    js.addEventListener("message", create_proxy(_on_msg))  # iframe replies
+    try:
+        _bc = js.BroadcastChannel.new("ofb-pipe")           # worker replies
+        _bc.addEventListener("message", create_proxy(_on_msg))
+    except Exception:
+        _bc = None
     _installed[0] = True
 
-async def ofb_fetch(method, path, body=None):
+async def _elect_relay(timeout=0.25):
+    # every relay tab on this origin answers; the smallest tag is the single
+    # forwarder (2 OWUI tabs must not run a write twice). No answer = no
+    # extension on this page.
+    found = []
+    def _on_hello(ev):
+        try:
+            dd = getattr(ev, "data", None).to_py()
+            if dd.get("ofbRelay") is True and dd.get("workerId") == _wid:
+                found.append(dd.get("tag"))
+        except Exception:
+            pass
+    proxy = create_proxy(_on_hello)
+    _bc.addEventListener("message", proxy)
+    _bc.postMessage(to_js({"ofbHello": True, "workerId": _wid}))
+    await asyncio.sleep(timeout)
+    try: _bc.removeEventListener("message", proxy)
+    except Exception: pass
+    _relay_tag[0] = min(found) if found else None
+
+async def ofb_fetch(method, path, body=None, b64=False, timeout=60.0):
     _install()
     loop = asyncio.get_event_loop()
     fut = loop.create_future()
@@ -107,20 +150,33 @@ async def ofb_fetch(method, path, body=None):
     msg = {"ofb": True, "id": rid, "method": method, "path": path}
     if body is not None:
         msg["body"] = body
-    parent.postMessage(to_js(msg), "*")
-    ev = await asyncio.wait_for(fut, 60.0)
-    return ev.to_py()   # fut holds the event's data (set in on_message) — do NOT unwrap .data again
+    if b64:
+        msg["b64"] = True
+    if parent is not None:
+        parent.postMessage(to_js(msg), "*")     # iframe-sandbox executor
+    else:
+        if _bc is None:
+            _pending.pop(rid, None)
+            raise RuntimeError("no transport available (worker without "
+                               "BroadcastChannel) — extension mode needs "
+                               "a Chromium-based browser")
+        if _relay_tag[0] is None:
+            await _elect_relay()
+        if _relay_tag[0] is None:
+            _pending.pop(rid, None)
+            raise RuntimeError("Open File Bridge extension not present on "
+                               "this page (no relay answered)")
+        msg["to"] = _relay_tag[0]
+        _bc.postMessage(to_js(msg))             # worker executor
+    try:
+        ev = await asyncio.wait_for(fut, timeout)
+    except asyncio.TimeoutError:
+        _relay_tag[0] = None    # elected tab may have closed — re-elect next call
+        raise
+    return ev.to_py()   # fut holds the event's data (set in _on_msg) — do NOT unwrap .data again
 
-async def ofb_fetch_b64(path):
-    _install()
-    loop = asyncio.get_event_loop()
-    fut = loop.create_future()
-    rid = _next[0]; _next[0] += 1
-    _pending[rid] = fut
-    parent.postMessage(to_js({"ofb": True, "id": rid, "method": "GET",
-                              "path": path, "b64": True}), "*")
-    ev = await asyncio.wait_for(fut, 120.0)
-    d = ev.to_py()
+async def ofb_fetch_b64(path, timeout=120.0):
+    d = await ofb_fetch("GET", path, b64=True, timeout=timeout)
     if not d.get("ok"):
         raise RuntimeError(f"bridge {path} -> HTTP {d.get('status')}: {d.get('error')}")
     return base64.b64decode(d["bodyB64"])
@@ -153,11 +209,13 @@ async def write_binary(path, data: bytes):
 ```
 
 **First call:** `h = await bridge_get("/health")` — one call answers
-everything: extension alive, `version` (`3.0.0-EXT`), `addons`
+everything: extension alive, `version` (`3.0.2-EXT`), `addons`
 (`{pdf: true, ocr: true}`), `roots` (granted folders; empty = the user
 has not picked one yet → tell them to click the toolbar icon and choose
-a folder). `/health` failing with a TIMEOUT means no extension; a 503
-"no shared folder" means no folder picked yet.
+a folder). "no relay answered" or "extension not present" means no
+extension on this page; a 503 "no shared folder" means no folder picked
+yet. A raw TIMEOUT is now rare — retry once (the relay election
+self-heals), then treat it as a dead extension.
 
 **Permission preflight (same /health call):** every root carries a
 `perm` field. If ANY root shows `"perm": "prompt"` instead of
@@ -191,17 +249,19 @@ Writes >1 MB chunk automatically inside the pipe (model code never
 chunks manually).
 
 **Out-of-chat confirmations (default on).** Deletes and overwrites of
-EXISTING files answer `403 {confirmation_required: true, confirm_id,
-op, detail}` — the USER sees an Approve/Deny popup in the chat page
-(the extension renders it). Your loop: (1) tell the user once, plainly
-("a confirmation popup appeared — Approve or Deny"); (2) WAIT; (3) after
-they Approve, RE-SEND the exact same request once — the retry executes
-(approval is single-use, 5 min). If the retry 403s again with
-`confirmation_required`, the user hasn't clicked yet — wait, do not
-spam. `denied: true` means the user refused: do not retry; ask in chat
-what they want instead. Creating a NEW file never asks. (Admins can
-change the scope in the extension settings; `confirmation_required`
-only appears when a confirmation is actually required.)
+EXISTING files push an Approve/Deny popup into the chat page (the
+extension renders it) and the request WAITS ~20 s for the click:
+- user clicks **Approve in time → your SAME call returns the real
+  result** (200 + the write outcome — no retry needed).
+- `403 {confirmation_required, timed_out: true}` → they hadn't clicked
+  yet. Tell them once, plainly ("an approval popup appeared — please
+  click Approve"), WAIT for them to confirm, then retry the exact same
+  request ONCE. A LATE click still counts (single-use, 5 min).
+- `denied: true` → the user refused: do not retry; ask in chat what
+  they want instead.
+Creating a NEW file never asks. (Admins can change the scope in the
+extension settings; `confirmation_required` only appears when a
+confirmation is actually required.)
 
 ## Office files in extension mode (the moved endpoints)
 
