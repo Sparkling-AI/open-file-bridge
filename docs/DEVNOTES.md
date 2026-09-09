@@ -1870,3 +1870,61 @@ Changes (ext 3.0.11 / skill 3.0.13-EXT):
 Both OWUI rows restaged to 3.0.13-EXT (same recipe as session #17).
 Dandan's live check after reloading the unpacked ext: options page
 tick list shows 21, chat /health lists them alphabetically.
+
+## Stage-3 session #19: OFB CI Vision filter — models SEE code-output images (2026-09-10)
+
+Dandan's ask after the vision-input study: build Option A — a no-fork
+OWUI Filter that closes the code-interpreter vision gap. The study
+(found in his owui-test 0.11.1 container) showed OWUI already has
+~90% of the machinery: stdout data-URL lines are uploaded + rewritten
+to ![Output Image](/api/v1/files/<id>/content); convert_output_to_
+messages(flatten_tool_images=True) already emits a synthetic USER
+message with image_url parts ("Here are the images from the tool
+results above") — but ONLY for native tool_call outputs, never for
+code-interpreter items, whose output reaches the model as text inside
+<code_interpreter_output> tags.
+
+NEW: owui-filters/ofb_ci_vision.py — global filter, ~200 lines,
+stock-OWUI 0.11+, no fork/patching. Inlet scans the LAST assistant
+message's <code_interpreter_output> sections for BOTH forms (the
+rewritten /api/v1/files/<id>/content refs AND raw data URLs printed
+anywhere in the output text — the JSON-embedded case OWUI's full-line
+rewrite misses, which is exactly what his parking-sign chat produced),
+resolves them to data URLs (file refs via Files.get_file_by_id +
+Storage.get_file IN-PROCESS, owner-checked: requesting user or admin
+only — the HTTP API enforces that and the filter must not weaken it),
+and appends a [ofb-ci-vision]-marked synthetic user message with
+image_url parts. Strips its own earlier synthetic messages from
+history (base64 token hygiene); valves: max_images=3, max_image_mb=8,
+inject_for_all_models (no server-side vision flag exists in 0.11 —
+gate is opt-out only via explicit capabilities.vision=False). Any
+internal error → passthrough (inlet exceptions fail the whole chat).
+
+Verified:
+- Unit 15/15 in-container (owui-filters/ofb_ci_vision_test.py; docker
+  cp + PYTHONPATH=/app/backend): no-op on plain chats, both attachment
+  forms, dedupe, label from markdown alt, stale-marker strip, caps,
+  size gate, vision=False gate, error passthrough, outside-CI ignored.
+- Staged via admin API (functions/create + toggle + toggle/global —
+  no DB surgery, no restart) into owui-test.
+- INTEGRATION, real model: uploaded the actual parking-sign jpg, sent
+  a request shaped like a real CI continuation (assistant message with
+  <code_interpreter_output> containing the file ref) to local-file-
+  access (vision=True) — the model described VISUAL details never
+  present in the text: blue sign, "1 tim", "10–19", red 10–19 text,
+  no-play/ball-games sign. docker logs show the filter fired
+  ("attached 1 image(s) from code output"). Regression: plain chat
+  unaffected.
+- NOTE the flip this causes in skill truth: with the filter installed,
+  printing d["data_url"] as its OWN stdout line in the cell (then the
+  json summary LAST — last-line display quirk) gives a vision model
+  direct visual input on its next turn. SKILL-EXT 3.0.14-EXT replaces
+  the "Truth about vision input" paragraph with "Vision input — three
+  honest paths" (print-in-cell w/ filter / OCR / ask-user-to-attach);
+  both OWUI rows restaged.
+
+Remaining for Dandan: one live UI test — fresh chat, code interpreter
+on, "look at the parking sign image and describe it" (no OCR words);
+expect the model to fetch /image_b64, print the data URL, and describe
+the sign visually. If his OWUI model skips the print, the skill
+teaching needs a nudge.

@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.13-EXT (extension backend)
+# Local File Bridge — skill v3.0.14-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -92,13 +92,25 @@ you got, say the photo is hard, and show it to the user —
 display convention; 8 MB cap). The user can read a sign themselves
 faster than three more OCR passes.
 
-**Truth about vision input:** code output reaches you as TEXT in this
-environment — a data URL in stdout does not let a vision model literally
-SEE local image pixels. If true visual inspection is required (layout,
-charts, handwriting), ask the user to attach the image file to their
-chat message (that is the input path vision models actually consume).
-`/image_b64` and `/pdf_text?mode=images` are for SHOWING the user, and
-for answering questions about files via OCR/text extraction.
+**Vision input — three honest paths:** code output reaches you as TEXT,
+and a data URL echoed in your final ANSWER only SHOWS the image to the
+user. But a data URL printed as its OWN stdout line INSIDE the cell is
+special: Open WebUI uploads it (user sees it rendered in chat), and on
+instances with the **OFB CI Vision filter** it is attached to your next
+turn as real visual input — you will literally see it:
+
+```python
+d = await bridge_get("/image_b64", {"path": "photos/site.jpg"})
+print(d["data_url"])   # own line, FIRST — feeds the vision path
+print(json.dumps({"width": d["width"], "height": d["height"]}))  # summary LAST
+```
+
+If after printing you still cannot see the image (filter absent on this
+instance), fall back to OCR — and for one-off visual inspection (layout,
+charts, handwriting) ask the user to ATTACH the image to their chat
+message (the one input path every vision model consumes natively).
+`/pdf_text?mode=images` pages follow the same contract: print
+`data:image/png;base64,` + the page's `png_b64` as its own line.
 
 ## Bootstrap (run once per session)
 
