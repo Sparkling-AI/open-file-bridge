@@ -2243,3 +2243,38 @@ Fix (three pieces):
 - ext 3.0.16 (relay.js changed — Dandan must RELOAD the unpacked ext;
   the page also needs one refresh so the new relay.js injects), skill
   3.0.20-EXT, rows restaged. Bootstrap syntax-checked (194 lines).
+
+## Stage-3 session #25: live 401 repro in Dandan's Chrome; relay staleness confirmed as the missing step (2026-09-11, skill 3.0.21-EXT)
+
+Per Dandan's ask ("make the end-to-end test yourself"), drove HIS daily
+Chrome via computer-use (AX only — no Screen Recording permission, so
+no raster): sent the exact IMG_9502.jpeg question in a fresh chat.
+LIVE REPRO: three POST /api/v1/files/ 401s at 22:27 (model retrying
+the upload). Then chrome://extensions confirmed the extension IS
+3.0.16 — so the ofbToken relay branch exists, but the OWUI tab was
+opened BEFORE the ext reload and content scripts do NOT hot-swap on
+extension reload → the page still ran the 3.0.15 relay → ofbToken
+unanswered (1s timeout) → "" token → cookie-only → stale cookie → 401.
+The missing step all along: ONE PAGE REFRESH after reloading the
+extension (never taught anywhere).
+
+The final in-his-browser verification (refresh + rerun) hit automation
+walls: OWUI's rich-text editor ignores synthetic typing when a
+container AX node holds focus (two sends produced no completions POST;
+one earlier send went to a DevTools console prompt I'd opened as a
+probe vehicle — closed; also cleaned up a stray Google-search
+navigation of his tab and killed my separate E2E Chrome, whose native
+directory-picker automation also failed: AX single/double-click and
+Cmd+Shift+G don't drive NSOpenPanel reliably from this transport; a
+javascript:-in-omnibox probe got percent-encoded into a search).
+
+Hardening shipped (skill 3.0.21-EXT): ofb_vision's upload-failure
+return now says WHY when there was no relay token — "old in-page
+relay — if the extension was just reloaded, refresh this OWUI page
+once and ask again" — so the model relays the fix to the user instead
+of flailing. Rows restaged.
+
+REMAINING (Dandan, ~30 s): refresh the OWUI tab, new chat, same
+question — expect upload 200 + ![image](/api/v1/files/…) line + a
+visual description. After it passes, consider making the setup guide /
+reload ritual docs say "reload extension + REFRESH the OWUI page".

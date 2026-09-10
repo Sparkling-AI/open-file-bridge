@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.20-EXT (extension backend)
+# Local File Bridge — skill v3.0.21-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -313,7 +313,12 @@ async def ofb_vision(path, max_bytes=48000):
                      _to_js(init, dict_converter=js.Object.fromEntries))
     txt = await r.text()
     if r.status != 200:
-        return None, f"upload failed HTTP {r.status}: {txt[:200]}"
+        hint = ("HTTP " + str(r.status) + ": " + txt[:160] +
+                (" — no relay token (old in-page relay?). If the Open File "
+                 "Bridge extension was just reloaded, the OWUI PAGE needs "
+                 "one refresh for the new relay; tell the user to refresh "
+                 "this page and ask again." if not tok else ""))
+        return None, "upload failed " + hint
     m = _re.search(r'"id"\s*:\s*"([0-9a-fA-F-]{36})"', txt)
     if not m:
         return None, "no file id in upload response: " + txt[:200]
