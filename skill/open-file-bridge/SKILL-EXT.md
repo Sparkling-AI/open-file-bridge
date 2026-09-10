@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.17-EXT (extension backend)
+# Local File Bridge — skill v3.0.18-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -102,7 +102,7 @@ turn as real visual input — you will literally see it:
 
 ```python
 d = await bridge_get("/image_b64", {"path": "photos/site.jpg",
-                                    "max_bytes": 350000})
+                                    "max_bytes": 48000})
 print(d["data_url"])   # own line, FIRST — feeds the vision path
 print(json.dumps({"width": d["width"], "height": d["height"]}))  # summary LAST
 ```
@@ -115,12 +115,14 @@ message (the one input path every vision model consumes natively).
 `data:image/png;base64,` + the page's `png_b64` as its own line.
 
 Big images are auto-resized before encoding (defaults: long edge ≤ 2000
-px AND ≤ 350 KB; `shrunk: true` + `orig_*` fields say when) — whatever
-`data_url` comes back is already vision-sized AND safe to print. Keep
-`max_bytes` modest when printing into a cell: OWUI's UI HANGS on stdout
-lines ≳ 600 KB (a whole chat froze for 4+ minutes on a 922 KB image) —
-NEVER raise `max_bytes` for a data URL you will print; larger values
-are only for bytes that stay INSIDE the cell. If you need ORIGINAL
+px AND ≤ 48 KB; `shrunk: true` + `orig_*` fields say when) — whatever
+`data_url` comes back is already vision-sized AND safe to print. The
+48 KB default is a HARD safety ceiling: OWUI TRUNCATES cell stdout
+lines between 66 k and 160 k chars (a bigger printed data URL is
+dropped or comes back as a partial fragment — no upload, no vision
+attachment), so NEVER raise `max_bytes` for a data URL you will print
+inside a cell. If the vision detail is too coarse at 48 KB, fall back
+to OCR for text or ask the user to attach the original. For ORIGINAL
 bytes (e.g. to embed into a document), use `/read_b64`, not
 `/image_b64`.
 

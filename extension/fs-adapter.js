@@ -682,12 +682,13 @@ async function epImageB64(q) {
     const n = Math.floor(Number(v));
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
   };
-  // Default byte cap 350 KB (line ≈ 470 KB after base64): Open WebUI's
-  // frontend blocks its main thread on code-interpreter stdout lines of
-  // ≳600 KB (verified 2026-09-10: 600 k chars fine, 1.2 M chars froze the
-  // tab for minutes). Raise max_bytes explicitly only when the bytes are
-  // NOT printed back into a cell.
-  const maxBytes = clampParam(q.max_bytes, 50000, MAX_BINARY, 350000);
+  // Default byte cap 48 KB (b64 line ≈ 64 k chars): Open WebUI's frontend
+  // TRUNCATES code-interpreter stdout keeping the TAIL somewhere between
+  // 66 k and 160 k chars (verified 2026-09-10: 66 k line uploaded+seen
+  // end-to-end; 160 k line came back as a partial fragment — no upload,
+  // no attachment), and even larger lines freeze the tab. Raise max_bytes
+  // explicitly only when the bytes are NOT printed back into a cell.
+  const maxBytes = clampParam(q.max_bytes, 10000, MAX_BINARY, 48000);
   const maxEdge = clampParam(q.max_edge, 0, 8192, 2000);  // 0 disables the edge cap
   const r = await fsImageToDataUrl(file, { maxBytes, maxEdge });
   if (!r.ok) {

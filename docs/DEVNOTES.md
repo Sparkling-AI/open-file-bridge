@@ -2111,3 +2111,53 @@ in his OWUI ("Printing Repeated Characters" — dead tab, closed;
 "Large Output Generation"). The OWUI-side proper fix (chunk/emit
 giant stdout without blocking) would be an upstream issue — noted
 for the community-publishing backlog.
+
+## Stage-3 session #22: the REAL ceiling — OWUI truncates cell stdout at ~66k–160k chars (2026-09-10)
+
+Dandan's retest of the vision path (ext 3.0.14, max_bytes=350000): no
+freeze anymore (376 k-char line returned, model answered — session #21's
+fix held), but NO upload, NO filter attachment; the model saw only the
+summary line and correctly asked the user to attach per the skill
+fallback. New stderr "Cannot read properties of undefined (reading
+'includes')" turned out to be the KNOWN benign quirk (OWUI's worker
+fires a stray no-code execution: He(id, undefined, files) →
+code.includes throws; recorded 2026-09-07) — red herring.
+
+Controlled sweeps in the MCP Chrome (real chats, code interpreter, NO
+extension), two-line print: data URL line FIRST, summary LAST:
+- 250-char real PNG: FULL CHAIN ✓ — middleware uploaded, rewrote to
+  ![Output Image](/api/v1/files/…), filter attached, model SAW it
+  ("the attached image is black" — my hand-rolled red PNG reads dark;
+  attachment perception is the proof).
+- 65,842-char real PNG (noise 128²): FULL CHAIN ✓ — upload_file_handler
+  logged, file 062ca397 created, model answered (a) ![Output Image](
+  (b) SUMMARY-DONE (c) YES attached.
+- 160,426-char real PNG (noise 200²): DEAD — model's first line
+  "Neither" = a PARTIAL base64 fragment: the frontend TRUNCATES the
+  returned stdout KEEPING THE TAIL somewhere between 66 k and 160 k
+  chars. No upload (line no longer starts with data:), no filter match,
+  no attachment. This is exactly Dandan's 376 k failure shape (his
+  giant line dropped/mangled; summary survived; model inferred dims
+  from orig_* and asked to attach).
+- "A"*66k padding probe was INVALID: OWUI's upload decodes/validates
+  image bytes — garbage base64 is silently rejected (no rewrite) even
+  at small sizes. Bisect with REAL images only.
+- matplotlib in-cell generation path is dead in his env (worker
+  preload lacks numpy/matplotlib; package load fails) — prompt-embedded
+  base64 was the workaround (paste via DataTransfer + ClipboardEvent
+  into the contenteditable, CORS scratch server on :8899).
+
+Also: session #21's "600 k safe" ceiling was the RENDERER-freeze
+boundary only; the effective envelope for printed lines is the
+TRUNCATION boundary, far lower. Working envelope: line ≤ 64 k chars.
+
+Fix (ext 3.0.15 / skill 3.0.18-EXT): default max_bytes 350000 → 48000
+(floor 10000; theoretical worst line 64,023 chars < the 65,842 proven
+GOOD datapoint). Resize loop upgrade: blind halving → proportional
+shrink (scale *= max(0.5, min(1, 0.95·sqrt(cap/actual)))) — his 4284²
+photo now lands 376×376 @ 45 KB / 60,367-char line in ~800 ms (was
+250×250 @ 22 KB with halving). Skill: snippet max_bytes 48000, text
+teaches the hard ceiling + OCR/attach fallbacks for detail beyond 48 KB.
+Rows restaged. NOTE for future: if OWUI ever raises the truncation
+limit, revisit the 48 KB default (it caps vision detail at ~400–700 px
+for dense photos).

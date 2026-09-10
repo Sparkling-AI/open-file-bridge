@@ -7,7 +7,7 @@
 
 "use strict";
 
-const FS_VERSION = "3.0.14-EXT";
+const FS_VERSION = "3.0.15-EXT";
 const FS_SKILL_MIN = "2.11";
 const MAX_LIST = 500;
 const MAX_BINARY = 8000000;          // b64 endpoints
@@ -161,7 +161,11 @@ async function fsImageToDataUrl(file, opts) {
                origBytes: raw.length, origWidth: ow, origHeight: oh,
                shrunk: true, b64: b64enc(bytes) };
     }
-    scale = scale / 2;
+    // Over budget: shrink proportionally to the overshoot (halving
+    // blindly overshoots — a 4x-too-big PNG would land at 1/4 the
+    // needed size), never less than half for stability.
+    const factor = Math.sqrt(maxBytes / blob.size);
+    scale = scale * Math.max(0.5, Math.min(1, factor * 0.95));
   }
   bitmap.close();
   return { ok: false, mime, bytes: raw.length, width: ow, height: oh,
