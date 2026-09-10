@@ -682,15 +682,21 @@ async function epImageB64(q) {
     const n = Math.floor(Number(v));
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
   };
-  const maxBytes = clampParam(q.max_bytes, 50000, MAX_BINARY, 4000000);
+  // Default byte cap 350 KB (line ≈ 470 KB after base64): Open WebUI's
+  // frontend blocks its main thread on code-interpreter stdout lines of
+  // ≳600 KB (verified 2026-09-10: 600 k chars fine, 1.2 M chars froze the
+  // tab for minutes). Raise max_bytes explicitly only when the bytes are
+  // NOT printed back into a cell.
+  const maxBytes = clampParam(q.max_bytes, 50000, MAX_BINARY, 350000);
   const maxEdge = clampParam(q.max_edge, 0, 8192, 2000);  // 0 disables the edge cap
   const r = await fsImageToDataUrl(file, { maxBytes, maxEdge });
   if (!r.ok) {
     return fsFail(413, {
       error: "image is " + file.size + " bytes; could not shrink under the "
            + maxBytes + "-byte cap",
-      hint: "pass a larger max_bytes (≤ 8 MB) or max_edge=0 (no resize); use "
-          + "/read_b64 if the model needs ORIGINAL bytes",
+      hint: "pass a larger max_bytes (≤ 8 MB — only if NOT printing the "
+          + "data URL into a code cell; OWUI's UI hangs on giant stdout "
+          + "lines) or max_edge=0; use /read_b64 for ORIGINAL bytes",
     });
   }
   await auditRow({ endpoint: "/image_b64", method: "GET", path: rg.relInRoot, status: 200, size: r.bytes });

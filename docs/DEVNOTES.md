@@ -2062,3 +2062,52 @@ Pipe-level (Linux X11 suite) rerun still owed by the stage3 backlog;
 the endpoint's response-shape change is additive (b64 kept) so old
 recipes keep working. PDF mode=images pages can still be big (png_b64
 at RASTER_SCALE 2) — resize there is future work if it bites.
+
+## Stage-3 session #21: the 4-minute "hang" — OWUI UI dies on big stdout lines (2026-09-10)
+
+Dandan's live test of the vision path on IMG_9502.jpeg (4284×4284,
+4.1 MB): chat froze >4 min on the third execute_code. The extension
+audit showed /image_b64 → 200 at 922633 B (the RESIZED output — the
+resize itself was fine), and docker logs showed total silence after
+it: no upload, no continuation call. Two parallel sessions both
+stamped #19/#20 today — numbering is officially a mess, this is
+session #21.
+
+Debug trail:
+1. Resize ruled out: same image through the real fs-core.js in a
+   service worker (chrome-devtools-mcp + a registered /sw.js) —
+   683 ms, same 922633 B output.
+2. OWUI logs: pyodide loaded 20:52:52, extension answered 20:53:01,
+   then NOTHING server-side. The result never returned from the
+   browser to the backend (event_caller awaiting forever; an earlier
+   "session not owned or disconnected" socket warning was a red
+   herring from a page reload).
+3. REPRODUCED WITHOUT THE EXTENSION in the MCP-controlled Chrome:
+   asked the model (code interpreter on) to print one 1.2 M-char
+   line. The page's MAIN THREAD BLOCKED — even trivial synchronous
+   evaluate_script timed out. pyodide's stdout capture is per-line
+   (worker appends self.stdout += line), so the killer is whatever
+   the OWUI main thread does with a giant stdout line after the
+   worker posts it back (suspects: socket payload processing,
+   sanitizer/highlighter, or Svelte rendering — not worth
+   localizing precisely in minified code).
+4. Bisect on the REAL chat pipeline: 300 k-char line ✓ fast;
+   600 k-char line ✓ fast ("DONE600"); 1.2 M ✗ frozen tab. The
+   hazard zone starts somewhere between 600 KB and 1.2 MB of ONE
+   stdout line. Dandan's 922 KB image → 1.23 M-char b64 line = deep
+   in the kill zone.
+
+Fix (ext 3.0.14 / skill 3.0.17-EXT): keep printed data URLs under
+the boundary. epImageB64 default max_bytes 4 MB → 350 KB (explicit
+larger values still allowed up to 8 MB — the hint says only for
+bytes NOT printed into a cell); SKILL-EXT vision snippet now passes
+max_bytes=350000 explicitly (older exts default 4 MB, so explicit
+protects them) and the resize paragraph documents the hazard. His
+exact image under the new default: 1000×1000 jpeg, 282 KB, 377
+k-char line, 727 ms — verified through the real fs-core.js in-page.
+
+Filter untouched (the hang is upstream of it). Two test chats left
+in his OWUI ("Printing Repeated Characters" — dead tab, closed;
+"Large Output Generation"). The OWUI-side proper fix (chunk/emit
+giant stdout without blocking) would be an upstream issue — noted
+for the community-publishing backlog.
