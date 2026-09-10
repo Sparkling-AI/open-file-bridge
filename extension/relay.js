@@ -132,6 +132,19 @@
                                tag: RELAY_TAG }); } catch (e) {}
         return;
       }
+      if (m.ofbToken === true && m.to === RELAY_TAG) {
+        // OWUI's own login token for the page's pyodide worker (ofb_vision
+        // uploads; the worker cannot read localStorage). Same-origin channel
+        // — page scripts could read their own localStorage anyway, so this
+        // grants no new capability. The token NEVER crosses to the SW.
+        let tok = null;
+        try {
+          tok = String(localStorage.getItem("token") || "")
+            .replace(/^"+/, "").replace(/"+$/, "") || null;
+        } catch (e) {}
+        try { bc.postMessage({ ofb: true, id: m.id, ok: true, token: tok }); } catch (e) {}
+        return;
+      }
       if (m.ofb !== true || m.id === undefined || m.method === undefined) return;
       if (m.to !== RELAY_TAG) return; // only the elected relay forwards
       if (typeof m.method !== "string" || typeof m.path !== "string") return;

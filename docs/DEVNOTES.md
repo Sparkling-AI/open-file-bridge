@@ -2211,3 +2211,35 @@ the community-publishing backlog: stdout truncation (66k–160k, keeps
 tail), stdout loss in long-await cells, stray no-code worker
 executions ("reading 'includes'" stderr), native CI-image attachment
 (undocumented).
+
+## Stage-3 session #24: the 401 — stale cookie; relay now hands the Bearer token (2026-09-11, ext 3.0.16 / skill 3.0.20-EXT)
+
+Dandan's ofb_vision live test: the model DID call it (even reconstructed
+the helper inline — bootstrap was run; bridge_get existed), and the
+EXTENSION side was perfect (its own probe shows /image_b64 → 376×376,
+45,258 B, shrunk: true, full new shape). The upload was the failure:
+access logs show POST /api/v1/files/ → **401**. Root cause: OWUI auth
+takes Bearer-header FIRST, cookie second; the cell could only rely on
+the cookie, and the token cookie is stale/expired after his browser
+restarts while the page stays logged in off localStorage's Bearer (my
+tests passed because my MCP chrome had signed in fresh minutes before).
+Cookie auth is not durable — the cell needs the real token, but the
+pyodide worker cannot read localStorage.
+
+Fix (three pieces):
+- relay.js (BC branch): reserved message {ofbToken: true, id, to: tag} —
+  the ELECTED relay answers {ok: true, token: <localStorage.token,
+  quotes stripped>} directly. Security: the BC channel is same-origin —
+  page scripts can read their own localStorage anyway (the relay
+  header already documents this stance); the token NEVER crosses to
+  the extension SW. Verified in isolation against the real relay.js
+  (chrome-stubbed page, hello-election + token request over a real
+  BroadcastChannel → tag rf45…, token stripped correctly).
+- SKILL-EXT bootstrap: _owui_token() — ofbToken request through the
+  existing _pending/future machinery, cached, "" when no relay/iframe
+  transport; ofb_vision now sends Authorization: Bearer + falls back
+  to cookie, and hard-guards on the WORKER executor (iframe-sandbox
+  cells are cross-origin — upload can never work there).
+- ext 3.0.16 (relay.js changed — Dandan must RELOAD the unpacked ext;
+  the page also needs one refresh so the new relay.js injects), skill
+  3.0.20-EXT, rows restaged. Bootstrap syntax-checked (194 lines).

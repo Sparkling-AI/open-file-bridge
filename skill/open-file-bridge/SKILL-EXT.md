@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.19-EXT (extension backend)
+# Local File Bridge — skill v3.0.20-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -188,6 +188,40 @@ async def _elect_relay(timeout=0.25):
     except Exception: pass
     _relay_tag[0] = min(found) if found else None
 
+_owui_tok = [None]
+
+async def _owui_token(timeout=1.0):
+    # OWUI's own login token, fetched from the page's localStorage via the
+    # relay (the worker cannot read it). Needed because the cookie can be
+    # stale after browser restarts while the page stays logged in — cookie-
+    # auth uploads then 401. Cached; "" when unavailable.
+    if _owui_tok[0] is not None:
+        return _owui_tok[0]
+    _install()
+    if _bc is None or parent is not None:
+        _owui_tok[0] = ""
+        return ""
+    if _relay_tag[0] is None:
+        await _elect_relay()
+    if _relay_tag[0] is None:
+        _owui_tok[0] = ""
+        return ""
+    loop = asyncio.get_event_loop()
+    fut = loop.create_future()
+    rid = _next[0]; _next[0] += 1
+    _pending[rid] = fut
+    _bc.postMessage(to_js({"ofbToken": True, "id": rid,
+                           "to": _relay_tag[0]}))
+    tok = ""
+    try:
+        ev = await asyncio.wait_for(fut, timeout)
+        tok = str((ev.to_py().get("token") or "")).strip()
+    except Exception:
+        pass
+    _pending.pop(rid, None)
+    _owui_tok[0] = tok
+    return tok
+
 async def ofb_fetch(method, path, body=None, b64=False, timeout=60.0):
     _install()
     loop = asyncio.get_event_loop()
@@ -259,17 +293,24 @@ async def ofb_vision(path, max_bytes=48000):
     return (markdown_line, image_info). Print the markdown line as its
     own stdout line — it is SHORT (no giant base64 stdout, which OWUI
     truncates) and vision models receive the image as a real attachment.
-    Cookie auth is automatic (the cell runs on the OWUI origin)."""
+    Auth: Bearer via the page relay's token (cookies can be stale); needs
+    the WORKER executor (OWUI >= 0.11)."""
     import re as _re
     from js import fetch as _fetch, FormData as _FormData, Blob as _Blob
     from pyodide.ffi import to_js as _to_js
+    if parent is not None or _bc is None:
+        return None, "ofb_vision needs OWUI's worker executor (>= 0.11)"
     d = await bridge_get("/image_b64", {"path": path, "max_bytes": max_bytes})
     blob = _Blob.new([_to_js(base64.b64decode(d["b64"]))],
                      _to_js({"type": d["mime"]}, dict_converter=js.Object.fromEntries))
     fd = _FormData.new()
     fd.append("file", blob, path.split("/")[-1] or "image")
+    init = {"method": "POST", "body": fd}
+    tok = await _owui_token()
+    if tok:
+        init["headers"] = {"Authorization": "Bearer " + tok}
     r = await _fetch("/api/v1/files/",
-                     _to_js({"method": "POST", "body": fd}, dict_converter=js.Object.fromEntries))
+                     _to_js(init, dict_converter=js.Object.fromEntries))
     txt = await r.text()
     if r.status != 200:
         return None, f"upload failed HTTP {r.status}: {txt[:200]}"
