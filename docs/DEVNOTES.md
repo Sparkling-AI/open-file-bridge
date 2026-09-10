@@ -2161,3 +2161,53 @@ teaches the hard ceiling + OCR/attach fallbacks for detail beyond 48 KB.
 Rows restaged. NOTE for future: if OWUI ever raises the truncation
 limit, revisit the 48 KB default (it caps vision detail at ~400–700 px
 for dense photos).
+
+## Stage-3 session #23: ofb_vision — cell-side upload kills the stdout problem class (2026-09-10, skill 3.0.19-EXT)
+
+Dandan's retest of the 48 KB cap (ext 3.0.15): the print contract
+STILL failed in his Chrome — the 60,482-char data-URL line never
+reached the backend (no upload, no attachment; model correctly fell
+back to OCR per the skill teaching). Controlled sweeps in the MCP
+Chrome complicated the size story: single-cell prints up to 65,842
+chars went through the FULL chain (upload → rewrite → native attach —
+NB: the ofb_ci_vision filter fired exactly ONCE ever; OWUI 0.11.1
+attaches uploaded CI images NATIVELY, the filter is now belt-only),
+his 60k multi-cell run dropped, and a 2-short-line upload cell ALSO
+lost stdout while sleep+print cells survived — OWUI's frontend has
+env/state-dependent stdout-return flakiness (shared singleton pyodide
+worker, falsy-check ack capture, stray no-code executions) that we
+cannot reliably fix from outside. VERDICT: stop depending on big (or
+even medium) stdout lines at all.
+
+NEW DESIGN — the cell uploads the image itself: pyodide runs on the
+OWUI origin, so a same-origin fetch to POST /api/v1/files/ carries the
+user's cookie auth (verified: 200 + id, no Bearer). Mechanics proven
+against the real endpoint from pyodide:
+- GET bytes via pyfetch; blob = JsBlob.new([to_js(bytes)], {type})
+  (dict_converter=js.Object.fromEntries); FormData.append; POST via
+  RAW js.fetch — pyfetch MANGLES FormData bodies (400 "error parsing
+  the body");
+- response parse by REGEX over await r.text() — `await r.json()`
+  yields a dict in some contexts and a JsProxy in others (cost two
+  debugging rounds: j["id"] KeyError vs j.id AttributeError); never
+  call .json() here.
+
+SKILL-EXT 3.0.19-EXT: bootstrap gains `ofb_vision(path,
+max_bytes=48000)` → bridge /image_b64 (resize+cap) → direct upload →
+returns ("![path](/api/v1/files/<id>/content)", info); the cell prints
+ONE SHORT line (immune to truncation AND the freeze) and vision models
+get the image as a real attachment natively. Vision section rewritten
+around it; giant-base64 prints now explicitly FORBIDDEN; OCR/ask-user
+fallbacks kept; /pdf_text images pages → OCR or write-to-tempfile
+workaround. Rows restaged. ext UNCHANGED (3.0.15 — b64+mime already in
+the response).
+
+Verification of the exact shipped recipe: pyodide (OWUI's own
+/pyodide/, in-page) → status=200 + id extracted (regex) — twice.
+End-to-end through a real chat remains Dandan's live test (my
+chat-level attempts kept tripping on model paraphrase of long code;
+his environment has the real bridge anyway). OWUI flakiness notes for
+the community-publishing backlog: stdout truncation (66k–160k, keeps
+tail), stdout loss in long-await cells, stray no-code worker
+executions ("reading 'includes'" stderr), native CI-image attachment
+(undocumented).

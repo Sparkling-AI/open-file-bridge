@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.18-EXT (extension backend)
+# Local File Bridge — skill v3.0.19-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -93,38 +93,33 @@ you got, say the photo is hard, and show it to the user —
 convention; big images auto-downscale, `shrunk` says so). The user can
 read a sign themselves faster than three more OCR passes.
 
-**Vision input — three honest paths:** code output reaches you as TEXT,
-and a data URL echoed in your final ANSWER only SHOWS the image to the
-user. But a data URL printed as its OWN stdout line INSIDE the cell is
-special: Open WebUI uploads it (user sees it rendered in chat), and on
-instances with the **OFB CI Vision filter** it is attached to your next
-turn as real visual input — you will literally see it:
+**Vision input — use `ofb_vision`, never print raw base64:** code
+output reaches you as TEXT, and OWUI **truncates/drops giant stdout
+lines** (a printed `data:image/...;base64,…` line of tens of KB simply
+vanishes — no upload, no attachment; whole chats have frozen). The
+bootstrap's `ofb_vision(path)` avoids stdout entirely: it fetches the
+image from the bridge (auto-resized: long edge ≤ 2000 px, ≤ 48 KB —
+`shrunk`/`orig_*` say when), uploads it to THIS chat's file store
+directly from the cell (cookie auth, same origin), and returns a SHORT
+markdown line for you to print — vision models then receive the image
+as a real attachment:
 
 ```python
-d = await bridge_get("/image_b64", {"path": "photos/site.jpg",
-                                    "max_bytes": 48000})
-print(d["data_url"])   # own line, FIRST — feeds the vision path
-print(json.dumps({"width": d["width"], "height": d["height"]}))  # summary LAST
+md, info = await ofb_vision("photos/site.jpg")
+print(md)   # ONE short line — this is the vision attachment
+print(json.dumps({k: info.get(k) for k in ("width", "height", "shrunk")}))
 ```
 
-If after printing you still cannot see the image (filter absent on this
-instance), fall back to OCR — and for one-off visual inspection (layout,
-charts, handwriting) ask the user to ATTACH the image to their chat
-message (the one input path every vision model consumes natively).
-`/pdf_text?mode=images` pages follow the same contract: print
-`data:image/png;base64,` + the page's `png_b64` as its own line.
-
-Big images are auto-resized before encoding (defaults: long edge ≤ 2000
-px AND ≤ 48 KB; `shrunk: true` + `orig_*` fields say when) — whatever
-`data_url` comes back is already vision-sized AND safe to print. The
-48 KB default is a HARD safety ceiling: OWUI TRUNCATES cell stdout
-lines between 66 k and 160 k chars (a bigger printed data URL is
-dropped or comes back as a partial fragment — no upload, no vision
-attachment), so NEVER raise `max_bytes` for a data URL you will print
-inside a cell. If the vision detail is too coarse at 48 KB, fall back
-to OCR for text or ask the user to attach the original. For ORIGINAL
-bytes (e.g. to embed into a document), use `/read_b64`, not
-`/image_b64`.
+If `md` is None (upload failed) or you still cannot see the image
+(no multimodal model, or this OWUI drops file attachments), fall back
+to OCR — and for one-off visual inspection (layout, charts,
+handwriting) ask the user to ATTACH the image to their chat message
+(the one input path every vision model consumes natively). `/pdf_text?
+mode=images` pages: upload each page the same way — `ofb_vision` takes
+only bridge paths, so write the page PNG to a temp file first, or OCR
+the PDF instead. Detail too coarse at 48 KB? Use OCR for text or ask
+the user to attach. Need ORIGINAL bytes (e.g. to embed into a
+document)? Use `/read_b64`, not `/image_b64`.
 
 ## Bootstrap (run once per session)
 
@@ -258,6 +253,30 @@ async def write_text(path, text: str):
 async def write_binary(path, data: bytes):
     return await bridge_post("/write_b64",
         {"path": path, "b64": base64.b64encode(data).decode()})
+
+async def ofb_vision(path, max_bytes=48000):
+    """VISION PATH: upload a local image to THIS OWUI's file store and
+    return (markdown_line, image_info). Print the markdown line as its
+    own stdout line — it is SHORT (no giant base64 stdout, which OWUI
+    truncates) and vision models receive the image as a real attachment.
+    Cookie auth is automatic (the cell runs on the OWUI origin)."""
+    import re as _re
+    from js import fetch as _fetch, FormData as _FormData, Blob as _Blob
+    from pyodide.ffi import to_js as _to_js
+    d = await bridge_get("/image_b64", {"path": path, "max_bytes": max_bytes})
+    blob = _Blob.new([_to_js(base64.b64decode(d["b64"]))],
+                     _to_js({"type": d["mime"]}, dict_converter=js.Object.fromEntries))
+    fd = _FormData.new()
+    fd.append("file", blob, path.split("/")[-1] or "image")
+    r = await _fetch("/api/v1/files/",
+                     _to_js({"method": "POST", "body": fd}, dict_converter=js.Object.fromEntries))
+    txt = await r.text()
+    if r.status != 200:
+        return None, f"upload failed HTTP {r.status}: {txt[:200]}"
+    m = _re.search(r'"id"\s*:\s*"([0-9a-fA-F-]{36})"', txt)
+    if not m:
+        return None, "no file id in upload response: " + txt[:200]
+    return f"![{path}](/api/v1/files/{m.group(1)}/content)", d
 ```
 
 **First call:** `h = await bridge_get("/health")` — one call answers
