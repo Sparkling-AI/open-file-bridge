@@ -682,22 +682,18 @@ async function epImageB64(q) {
     const n = Math.floor(Number(v));
     return Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : dflt;
   };
-  // Default byte cap 48 KB (b64 line ≈ 64 k chars): Open WebUI's frontend
-  // TRUNCATES code-interpreter stdout keeping the TAIL somewhere between
-  // 66 k and 160 k chars (verified 2026-09-10: 66 k line uploaded+seen
-  // end-to-end; 160 k line came back as a partial fragment — no upload,
-  // no attachment), and even larger lines freeze the tab. Raise max_bytes
-  // explicitly only when the bytes are NOT printed back into a cell.
-  const maxBytes = clampParam(q.max_bytes, 10000, MAX_BINARY, 48000);
+  // Default byte cap 4 MB = app parity (auto-downscale when over). The
+  // extension additionally caps the long edge at 2000 px (EXIF-aware) —
+  // good for chat display; pass max_bytes lower for smaller echoes.
+  const maxBytes = clampParam(q.max_bytes, 10000, MAX_BINARY, 4000000);
   const maxEdge = clampParam(q.max_edge, 0, 8192, 2000);  // 0 disables the edge cap
   const r = await fsImageToDataUrl(file, { maxBytes, maxEdge });
   if (!r.ok) {
     return fsFail(413, {
       error: "image is " + file.size + " bytes; could not shrink under the "
            + maxBytes + "-byte cap",
-      hint: "pass a larger max_bytes (≤ 8 MB — only if NOT printing the "
-          + "data URL into a code cell; OWUI's UI hangs on giant stdout "
-          + "lines) or max_edge=0; use /read_b64 for ORIGINAL bytes",
+      hint: "pass a larger max_bytes (≤ 8 MB) or max_edge=0 (no resize); "
+          + "use /read_b64 for ORIGINAL bytes",
     });
   }
   await auditRow({ endpoint: "/image_b64", method: "GET", path: rg.relInRoot, status: 200, size: r.bytes });

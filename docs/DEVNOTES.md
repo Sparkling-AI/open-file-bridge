@@ -2360,3 +2360,65 @@ reload the OWUI tab (new /api/config), NEW chat, ask about
 IMG_9502.jpeg. Also note for MS-review/public deployments: the vision
 path REQUIRES this env var on the OWUI host — add to store listing /
 setup docs (session #26's "model setting" claim was wrong).
+
+## Stage-3 session #28: VISION PATH ABANDONED by decision — honest attach instruction instead (2026-09-11, ext 3.0.17 / skill 3.0.23-EXT)
+
+Dandan's verdict on the post-fix test: the model described IMG_9502
+(a clear photo of a car from the back) as a "somewhat blurry printed
+page/poster" — OCR-garble language, not vision. The upload leg WORKED
+(file 2b44c886 created by the cell, markdown line printed, worker
+executor, stderr clean) — but the image still never reached the
+model's vision input. THE FINAL WALL: OWUI attaches images to the
+model's vision ONLY when its own middleware uploads them WITH chat
+metadata (chat_id/message_id + insert_chat_files). A cell's direct
+POST /api/v1/files/ creates an ORPHAN file — no chat linkage — never
+attached. Linking it would require the cell to know chat_id/
+message_id (unavailable in the sandbox) or upstream OWUI changes.
+Three OWUI-internal walls total (stdout truncation, executor modes,
+orphan uploads) — decision: give up, document, revert.
+
+REVERTED (per Dandan):
+- SKILL-EXT 3.0.23-EXT: ofb_vision + _owui_token REMOVED from the
+  bootstrap; vision section = the honest rule: "code output is TEXT
+  only; if the task needs YOU to see a local image, ask the user to
+  ATTACH/UPLOAD it directly in the chat" + OCR for text + display
+  convention for showing the user. Rows restaged.
+- Endpoint default max_bytes back to 4 MB (app parity); 48 KB vision
+  cap gone; 413 hint simplified. KEPT (app-parity features, useful
+  for display): {mime,width,height,bytes,shrunk,orig_*,b64,data_url}
+  response shape, EXIF-aware resize (max_edge default 2000),
+  proportional shrink. ext 3.0.17 (behavior change = default cap).
+- KEPT INFRA (dormant, documented): relay ofbToken BC branch (harmless,
+  token never reaches the SW — reusable if OWUI ever links cell
+  uploads to chats); owui-filters/ CI Vision filter (belt-only; OWUI
+  natively attaches middleware-uploaded CI images — the filter still
+  helps the raw-data-URL case); ENABLE_PYODIDE_FILE_PERSISTENCE=true
+  on owui-test + rebuild_testenv.sh (the worker executor is strictly
+  better for OUR pipe: BroadcastChannel transport instead of the
+  iframe fallback, no "includes" stderr quirk) — Dandan should reload
+  his OWUI tab once to get the worker.
+
+LEARNINGS LEDGER (2026-09-10 → 09-11, sessions #17–#28) for future
+attempts (ours or upstream):
+1. OWUI code-interpreter stdout: giant single lines are truncated
+   (keeps tail, between 66k and 160k chars) or freeze the tab (≳600k);
+   the last stdout line is what the UI displays.
+2. Executor modes: default = opaque-origin IFRAME shim (no cookies/
+   BC/same-origin → authenticated cell fetches impossible); real
+   Worker only with server env ENABLE_PYODIDE_FILE_PERSISTENCE=true
+   (served via /api/config; NOT a model setting; anonymous /api/config
+   hides features).
+3. Cell-initiated file uploads succeed (cookie auth, worker mode) but
+   produce orphan files — never attached to the chat's vision input.
+   The one vision input path that works: the USER attaching the image.
+4. OWUI attaches middleware-uploaded CI images natively (stdout data-
+   URL line ≤ ~66k → upload → ![Output Image](/api/v1/files/…) →
+   attached) — size-fragile and executor-dependent; not a product path.
+5. pyodide cell gotchas: pyfetch mangles FormData (use raw js.fetch);
+   r.json() is dict-or-JsProxy by context (regex over r.text());
+   to_js(dict) → plain object (this build); the model INLINES its own
+   helpers instead of calling bootstrap functions — teach loudly
+   against it.
+6. If OWUI ever links cell uploads to chats (or exposes chat ids to
+   cells), ofb_vision becomes viable again — the whole design was
+   proven leg-by-leg (relay token → Bearer → 200; worker upload 200).

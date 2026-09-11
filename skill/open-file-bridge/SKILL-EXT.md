@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.22-EXT (extension backend)
+# Local File Bridge — skill v3.0.23-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -93,33 +93,17 @@ you got, say the photo is hard, and show it to the user —
 convention; big images auto-downscale, `shrunk` says so). The user can
 read a sign themselves faster than three more OCR passes.
 
-**Vision input — use `ofb_vision`, never print raw base64:** code
-output reaches you as TEXT, and OWUI **truncates/drops giant stdout
-lines** (a printed `data:image/...;base64,…` line of tens of KB simply
-vanishes — no upload, no attachment; whole chats have frozen). The
-bootstrap's `ofb_vision(path)` avoids stdout entirely: it fetches the
-image from the bridge (auto-resized: long edge ≤ 2000 px, ≤ 48 KB —
-`shrunk`/`orig_*` say when), uploads it to THIS chat's file store
-directly from the cell (cookie auth, same origin), and returns a SHORT
-markdown line for you to print — vision models then receive the image
-as a real attachment:
-
-```python
-md, info = await ofb_vision("photos/site.jpg")
-print(md)   # ONE short line — this is the vision attachment
-print(json.dumps({k: info.get(k) for k in ("width", "height", "shrunk")}))
-```
-
-If `md` is None (upload failed) or you still cannot see the image
-(no multimodal model, or this OWUI drops file attachments), fall back
-to OCR — and for one-off visual inspection (layout, charts,
-handwriting) ask the user to ATTACH the image to their chat message
-(the one input path every vision model consumes natively). `/pdf_text?
-mode=images` pages: upload each page the same way — `ofb_vision` takes
-only bridge paths, so write the page PNG to a temp file first, or OCR
-the PDF instead. Detail too coarse at 48 KB? Use OCR for text or ask
-the user to attach. Need ORIGINAL bytes (e.g. to embed into a
-document)? Use `/read_b64`, not `/image_b64`.
+**Vision input — the honest rule:** code output reaches you
+as TEXT only. You CANNOT see local images through the bridge, no
+matter what you print in a cell (OWUI never attaches cell output to
+your vision input — tried extensively; see DEVNOTES #19–#28). If the
+task truly needs YOU to look at a local image (layout, charts,
+handwriting, "what is this a picture of"), tell the user: **"please
+attach/upload the image directly in this chat"** — an attached upload
+is the one input path vision models actually consume. Meanwhile use
+OCR for text and the display convention above to SHOW the user the
+image. For ORIGINAL bytes (e.g. to embed into a document), use
+`/read_b64`, not `/image_b64`.
 
 ## Bootstrap (run once per session)
 
@@ -188,40 +172,6 @@ async def _elect_relay(timeout=0.25):
     except Exception: pass
     _relay_tag[0] = min(found) if found else None
 
-_owui_tok = [None]
-
-async def _owui_token(timeout=1.0):
-    # OWUI's own login token, fetched from the page's localStorage via the
-    # relay (the worker cannot read it). Needed because the cookie can be
-    # stale after browser restarts while the page stays logged in — cookie-
-    # auth uploads then 401. Cached; "" when unavailable.
-    if _owui_tok[0] is not None:
-        return _owui_tok[0]
-    _install()
-    if _bc is None or parent is not None:
-        _owui_tok[0] = ""
-        return ""
-    if _relay_tag[0] is None:
-        await _elect_relay()
-    if _relay_tag[0] is None:
-        _owui_tok[0] = ""
-        return ""
-    loop = asyncio.get_event_loop()
-    fut = loop.create_future()
-    rid = _next[0]; _next[0] += 1
-    _pending[rid] = fut
-    _bc.postMessage(to_js({"ofbToken": True, "id": rid,
-                           "to": _relay_tag[0]}))
-    tok = ""
-    try:
-        ev = await asyncio.wait_for(fut, timeout)
-        tok = str((ev.to_py().get("token") or "")).strip()
-    except Exception:
-        pass
-    _pending.pop(rid, None)
-    _owui_tok[0] = tok
-    return tok
-
 async def ofb_fetch(method, path, body=None, b64=False, timeout=60.0):
     _install()
     loop = asyncio.get_event_loop()
@@ -288,47 +238,6 @@ async def write_binary(path, data: bytes):
     return await bridge_post("/write_b64",
         {"path": path, "b64": base64.b64encode(data).decode()})
 
-async def ofb_vision(path, max_bytes=48000):
-    """VISION PATH: upload a local image to THIS OWUI's file store and
-    return (markdown_line, image_info). Print the markdown line as its
-    own stdout line — it is SHORT (no giant base64 stdout, which OWUI
-    truncates) and vision models receive the image as a real attachment.
-    Auth: Bearer via the page relay's token (cookies can be stale); needs
-    the WORKER executor (OWUI >= 0.11)."""
-    import re as _re
-    from js import fetch as _fetch, FormData as _FormData, Blob as _Blob
-    from pyodide.ffi import to_js as _to_js
-    if parent is not None or _bc is None:
-        return None, ("ofb_vision unavailable: cells are running in OWUI's "
-                      "sandboxed IFRAME, not the pyodide worker (no uploads "
-                      "possible from an opaque origin). Ask the user to enable "
-                      "'Pyodide file persistence' on this model in OWUI "
-                      "(Admin Panel > Models > this model), reload the page, "
-                      "and start a NEW chat; then use OCR or ask them to "
-                      "attach the image for now.")
-    d = await bridge_get("/image_b64", {"path": path, "max_bytes": max_bytes})
-    blob = _Blob.new([_to_js(base64.b64decode(d["b64"]))],
-                     _to_js({"type": d["mime"]}, dict_converter=js.Object.fromEntries))
-    fd = _FormData.new()
-    fd.append("file", blob, path.split("/")[-1] or "image")
-    init = {"method": "POST", "body": fd}
-    tok = await _owui_token()
-    if tok:
-        init["headers"] = {"Authorization": "Bearer " + tok}
-    r = await _fetch("/api/v1/files/",
-                     _to_js(init, dict_converter=js.Object.fromEntries))
-    txt = await r.text()
-    if r.status != 200:
-        hint = ("HTTP " + str(r.status) + ": " + txt[:160] +
-                (" — no relay token (old in-page relay?). If the Open File "
-                 "Bridge extension was just reloaded, the OWUI PAGE needs "
-                 "one refresh for the new relay; tell the user to refresh "
-                 "this page and ask again." if not tok else ""))
-        return None, "upload failed " + hint
-    m = _re.search(r'"id"\s*:\s*"([0-9a-fA-F-]{36})"', txt)
-    if not m:
-        return None, "no file id in upload response: " + txt[:200]
-    return f"![{path}](/api/v1/files/{m.group(1)}/content)", d
 ```
 
 **First call:** `h = await bridge_get("/health")` — one call answers
