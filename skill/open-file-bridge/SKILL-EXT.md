@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.21-EXT (extension backend)
+# Local File Bridge — skill v3.0.22-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -299,7 +299,13 @@ async def ofb_vision(path, max_bytes=48000):
     from js import fetch as _fetch, FormData as _FormData, Blob as _Blob
     from pyodide.ffi import to_js as _to_js
     if parent is not None or _bc is None:
-        return None, "ofb_vision needs OWUI's worker executor (>= 0.11)"
+        return None, ("ofb_vision unavailable: cells are running in OWUI's "
+                      "sandboxed IFRAME, not the pyodide worker (no uploads "
+                      "possible from an opaque origin). Ask the user to enable "
+                      "'Pyodide file persistence' on this model in OWUI "
+                      "(Admin Panel > Models > this model), reload the page, "
+                      "and start a NEW chat; then use OCR or ask them to "
+                      "attach the image for now.")
     d = await bridge_get("/image_b64", {"path": path, "max_bytes": max_bytes})
     blob = _Blob.new([_to_js(base64.b64decode(d["b64"]))],
                      _to_js({"type": d["mime"]}, dict_converter=js.Object.fromEntries))

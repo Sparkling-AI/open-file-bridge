@@ -2278,3 +2278,51 @@ REMAINING (Dandan, ~30 s): refresh the OWUI tab, new chat, same
 question — expect upload 200 + ![image](/api/v1/files/…) line + a
 visual description. After it passes, consider making the setup guide /
 reload ritual docs say "reload extension + REFRESH the OWUI page".
+
+## Stage-3 session #26: the REAL executor story — OWUI iframe shim vs worker (2026-09-11, skill 3.0.22-EXT)
+
+With Dandan's display on, drove his Chrome directly (computer-use;
+set_value on the OWUI textarea WORKS for composing messages — synthetic
+typing doesn't, and Enter-after-set_value needs a re-observe between).
+Diagnostic cell in his live chat, verbatim:
+{"executor": "iframe", "bc": false, "relay": false} — HIS CELLS RUN IN
+OWUI's IFRAME SHIM, not the pyodide worker. In an opaque-origin iframe:
+no cookies, no same-origin fetch, no BroadcastChannel → ofb_vision
+uploads 401 BY CONSTRUCTION (the stale-cookie theory was real but
+secondary — in the iframe NOTHING authenticates).
+
+OWUI's executor choice (bundle Cu_6R2Jb.js, verbatim):
+  features?.enable_pyodide_file_persistence ? new RealWorker() : new IframeShim()
+i.e. the REAL worker (same-origin, cookie+BC capable) is used ONLY when
+the model's meta.features.enable_pyodide_file_persistence is ON. His
+model had it unset → iframe shim → the whole 401 saga. (Why Sept-9
+worked: the flag must have been on then / different model config.)
+Additionally the iframe shim embeds the same runner code as the worker
+(the "reading 'includes'" stderr quirk appears in BOTH — not a
+discriminator), and my earlier "worker-verified" chrome-devtools-mcp
+tests were actually running in the iframe shim too (stdout/prints work
+fine there; only cell-initiated AUTHENTICATED fetches are impossible).
+
+Actions taken:
+- Enabled meta.features.enable_pyodide_file_persistence = true on his
+  local-file-access model (webui.db; verified it flows through
+  /api/models → info.meta.features).
+- In-sim harness (real relay.js + the exact shipped bootstrap + pyodide
+  on the OWUI origin, worker-simulated): _owui_token() returns the real
+  JWT and the Bearer upload returns 200 — every layer of the design is
+  proven EXCEPT the live end-to-end after the flag (his retest post-
+  flag still 401'd, BUT the model demonstrably inlined its own
+  ofb_vision again (output format "upload_status" ≠ the bootstrap's),
+  so the bootstrap+token path may not have been what failed; the
+  executor-flip confirmation cell never ran — message send flaked).
+- skill 3.0.22-EXT: ofb_vision's iframe guard now NAMES the fix
+  ("enable 'Pyodide file persistence' on this model, reload, NEW
+  chat") so the model relays the actual remedy instead of a vague
+  error. Rows restaged.
+
+Dandan's 1-minute verification (fresh chat after a page reload): ask
+about IMG_9502.jpeg; if it still 401s, check Admin Panel > Models >
+Local File Access shows the persistence toggle ON, then retry once
+more. The model must be nudged to call the BOOTSTRAP's ofb_vision, not
+inline its own (a recurring failure mode all day — consider teaching
+"NEVER redefine bootstrap helpers" more loudly in the skill).
