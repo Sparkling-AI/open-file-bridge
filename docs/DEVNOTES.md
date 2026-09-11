@@ -2326,3 +2326,37 @@ Local File Access shows the persistence toggle ON, then retry once
 more. The model must be nudged to call the BOOTSTRAP's ofb_vision, not
 inline its own (a recurring failure mode all day — consider teaching
 "NEVER redefine bootstrap helpers" more loudly in the skill).
+
+## Stage-3 session #27: FOUND THE SWITCH — ENABLE_PYODIDE_FILE_PERSISTENCE env var; full upload chain verified live (2026-09-11)
+
+Traced the executor decision to its true source after the model-flag
+theory failed (Model editor has no such toggle; model-level injection
+ineffective): `enable_pyodide_file_persistence` is an OWUI **server
+env flag** (env.py:1190, default false) served through /api/config
+→ frontend config store → `get($config).features.
+enable_pyodide_file_persistence ? RealWorker : IframeShim` (Cu_6R2Jb).
+It is NOT a model feature — my DB injection into meta.features was the
+wrong layer (reverted).
+
+Fixed the environment: recreated owui-test with
+`-e ENABLE_PYODIDE_FILE_PERSISTENCE=true` (same image owui-local:
+v0.11.1-crypto44, same secret so JWTs stay valid, same data volume —
+everything persisted; ~40 s downtime). rebuild_testenv.sh updated so
+future rebuilds keep it. Verified: env flag True in-container; the
+AUTHENTICATED /api/config serves features.enable_pyodide_file_persistence
+= true (anonymous /api/config hides features — a probe gotcha).
+
+LIVE VERIFICATION in a real chat cell (my chrome, code interpreter,
+post-flag): the exact pyodide upload recipe ran — `UPLOAD: 200
+6f90fa5e-…` + POST /api/v1/files/ 200 in access logs. The real worker
+boots (worker-file fetch count 0 only because Chrome cached it from
+the earlier manual fetch). Every leg of ofb_vision is now proven in
+production shape: worker executor ✓ same-origin ✓ cookie upload ✓
+relay token → Bearer ✓ (harness) — the last untested combination is
+Dandan's browser (extension 3.0.16 + reload + fresh chat).
+
+Dandan's env is ALREADY updated (I recreated his container). He just:
+reload the OWUI tab (new /api/config), NEW chat, ask about
+IMG_9502.jpeg. Also note for MS-review/public deployments: the vision
+path REQUIRES this env var on the OWUI host — add to store listing /
+setup docs (session #26's "model setting" claim was wrong).

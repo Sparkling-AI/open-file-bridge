@@ -111,6 +111,7 @@ else
     say "starting OWUI container on 127.0.0.1:$OWUI_PORT (image pull if needed)…"
     docker run -d --name "$OWUI_CONTAINER" -p 127.0.0.1:$OWUI_PORT:8080 \
       -e WEBUI_SECRET_KEY=owui-test-secret \
+      -e ENABLE_PYODIDE_FILE_PERSISTENCE=true \
       -v ${OWUI_CONTAINER}-data:/app/backend/data \
       ghcr.io/open-webui/open-webui:main >/dev/null
     for i in $(seq 1 40); do
