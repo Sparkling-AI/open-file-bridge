@@ -2678,3 +2678,21 @@ negatives/engines/confirm). His active row restaged to 3.0.28-EXT with
 his token (1122334455) preserved. NOTE: his earlier "still not
 working" round was likely THIS, not the token — the stale-relay and
 mismatch hardening from #34 stands but wasn't tonight's killer.
+
+
+## Stage-3 session #36: EXT skills gain the app's version-floor contract (2026-09-11, skill 3.0.29-EXT, ext untouched)
+
+Dandan: "app skills say 'Requires bridge ≥ 2.11 (checked at bootstrap)'
+— why don't the EXT skills?" Honest answer: they USED to (prose
+"≥ 3.0.1" + version archaeology), and the 3.0.25 paste-ready scrub
+over-collapsed it to "any 3.0.x-EXT" — losing the contract. The app's
+mechanism is a DOCUMENTED one-way floor the MODEL applies after the
+first /health (not code): older than min → say once "update the app",
+continue with what works; newer → never warn; much-newer → optionally
+suggest refreshing the skill. Mirrored verbatim with EXT facts: floor
+**3.0.1** (first relay with the BroadcastChannel worker transport —
+the honest minimum for the current bootstrap; string ids and the token
+field are backward-compatible through older relays), sender-gate 403s
+flagged as ≥ 3.0.18 behavior, update path = chrome://extensions reload
+(or CWS update). Bootstrap code unchanged (parses). Rows restaged
+3.0.29-EXT, active row with his token preserved.

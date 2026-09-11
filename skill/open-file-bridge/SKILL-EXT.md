@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.0.28-EXT (extension backend, no token)
+# Local File Bridge — skill v3.0.29-EXT (extension backend, no token)
 
 > **Variant picker (for whoever publishes this skill):** this is the
 > NO-TOKEN variant — publish it when the extension's 🔒 Security card
@@ -28,9 +28,14 @@ app to talk to). A slow TIMEOUT (no reply in ~30 s) usually means the
 elected relay's tab was closed mid-session — retry once (the bootstrap
 re-elects automatically).
 
-Requires the Open File Bridge Chrome extension (any `3.0.x-EXT` build;
-`GET /version` names the running one). The endpoint surface mirrors the
-desktop bridge app — every recipe below is complete on its own.
+> Requires the Open File Bridge extension ≥ **3.0.1** (checked on the
+> first /health below; newer extensions are always fine — the pipe is
+> backward-compatible). The sender-gate 403s (`security_locked` /
+> `origin_blocked` / `token_required`) exist only on ≥ 3.0.18; older
+> builds simply serve without the gate.
+
+The endpoint surface mirrors the desktop bridge app — every recipe
+below is complete on its own.
 
 ## What is different from the app-backed skill
 
@@ -276,7 +281,7 @@ async def write_binary(path, data: bytes):
 ```
 
 **First call:** `h = await bridge_get("/health")` — one call answers
-everything: extension alive, `version` (`3.0.x-EXT`), `addons`
+everything: extension alive, `version`, `addons`
 (`{pdf: true, ocr: true}` — bundled capability), `engine_alive`
 (false is NORMAL — engines are lazy; they auto-start the moment you
 call an engine endpoint, so do NOT treat it as unavailable), `roots`
@@ -289,6 +294,14 @@ self-heals), then treat it as a dead extension. The first call may
 instead return 403 `security_locked`/`origin_blocked`
 or 403 `token_required` — see the sender-gate bullet above for the
 exact one-shot recovery (user allows the site / pastes the token).
+Version rule (one-way floor, no lockstep): if `/health`'s `version` is
+OLDER than **3.0.1** (this skill's minimum), say once: "your Open File
+Bridge extension is older than this skill — update it (Chrome →
+chrome://extensions → reload the unpacked extension, or update from the
+Chrome Web Store)" — then continue with what works. Newer extensions
+are always fine; never warn about them. If the extension is MUCH newer
+than this skill (a whole minor version), optionally suggest re-copying
+the skill file from the GitHub repo — a hint, not a warning.
 
 **Permission preflight (same /health call):** every root carries a
 `perm` field. If ANY root shows `"perm": "prompt"` instead of

@@ -2,6 +2,19 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.0.29-EXT — 2026-09-11
+
+App-parity version floor: the EXT variants now carry the same
+"Requires bridge ≥ X" contract as the application skills — a header
+note (**extension ≥ 3.0.1**, the worker transport; newer is always
+fine, the pipe is backward-compatible) plus the one-way-floor rule on
+the first `/health`: older than 3.0.1 → tell the user once to update
+the extension, then continue with what works; never warn about newer;
+much-newer → hint at re-copying the skill. The 3.0.25 paste-ready scrub
+had collapsed the old "≥ 3.0.1" prose into a vague "any 3.0.x" — this
+restores the contract explicitly. Sender-gate 403s are noted as
+≥ 3.0.18 behavior (older builds simply serve without the gate).
+
 ## 3.0.28-EXT — 2026-09-11
 
 **Cross-worker request collision fixed** (live incident: with two OWUI

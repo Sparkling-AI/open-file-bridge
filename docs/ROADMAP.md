@@ -764,6 +764,14 @@ with the session _wid prefix and only RESPONSES (ok present, no
 method) resolve futures. Red/green proven: old bootstrap reproduces
 the exact steal; new W5 two-worker test passes 9/9.
 
+## Stage 3 (extension): app-parity version floor in the EXT skills (2026-09-11, skill 3.0.29-EXT)
+
+The EXT variants now carry the app skills' "Requires bridge ≥ X"
+contract: header note (extension ≥ 3.0.1, backward-compatible pipe)
+plus the one-way-floor rule on first /health (older → tell the user
+once to update, continue; newer → never warn; much-newer → refresh
+hint). The 3.0.25 scrub had collapsed this to a vague "any 3.0.x".
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
