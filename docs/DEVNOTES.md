@@ -2499,3 +2499,32 @@ will already sit under Recently blocked after the first blocked call)
 → optionally Generate + Save a token; if he sets one, he pastes it in
 chat once when the model asks. Both OWUI skill rows restaged to
 3.0.24-EXT same day.
+
+## Stage-3 session #30: onboarding — the Get-started card (2026-09-11, ext 3.0.19, skill untouched)
+
+**Gap (Dandan's ask).** The options page taught folder-picking and (since
+3.0.18) the site allowlist, but NOTHING about the Open WebUI side — a new
+user had no idea the bridge needs the SKILL published in OWUI plus the
+Code Interpreter enabled before any chat can talk to the extension. The
+repo README spells this out for the APP variant only (and lives outside
+the extension UI entirely).
+
+**Shipped: 🚀 Get-started card, first + open on options.html.** Five
+steps in one breath: (1) choose folder → anchors to the folders card;
+(2) allow the OWUI site → anchors to Security, names the `bridge locked`
+symptom; (3) install the skill — links the SKILL-EXT.md blob on GitHub
+(feat/stage3-extension) + repo root, gives the exact OWUI path
+(Workspace → Skills → Create → paste), admin/private-skill fork;
+(4) enable BOTH switches in a new chat — Code Interpreter + the skill
+(chat controls / $-mention), or the admin preset (Models: interpreter
+capability + default + attach skill; "both switches matter" mirrors the
+README's verified wording); (5) test with "list the files in my folder".
+Live status line (startstat, renderStart in beat + renderSec): ✓/○ for
+the two extension-side steps + a pointer that 3–4 happen in OWUI.
+
+**Known wrinkle:** the skill-file link points at the REMOTE branch,
+which still serves 3.0.5-EXT (29 local commits await Dandan's push) —
+after the next push the link serves current; move it to master when the
+branch merges (TODO 6b). Vision-checked via GLM-4.6V (clean checklist,
+no layout defects); smoke 5/5 (card first, links resolve, fresh +
+allowed-site status lines, zero console errors).

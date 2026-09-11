@@ -70,6 +70,26 @@ function fmtTTL(v) {
 // (fold-state restore lives in the DOMContentLoaded handler below — this
 // script loads from <head>, so details.sec does not exist yet at parse time)
 
+/* ---------------- get-started checklist status ---------------------------- */
+
+/** Steps 1-2 of the 🚀 card are verifiable from here (folder + site); the
+ *  Open WebUI-side steps (skill, interpreter) are instructions only. */
+async function renderStart() {
+  const el = document.getElementById("startstat");
+  if (!el) return;
+  try {
+    const roots = (lastHealth && lastHealth.roots) || [];
+    const origins = (await OFBIDB.get("kv", "allowed_origins")) || [];
+    const parts = [];
+    parts.push(roots.length ? "✓ folder connected" : "○ no folder yet");
+    parts.push(origins.length
+      ? "✓ site allowed (" + origins.length + ")"
+      : "○ no site allowed yet");
+    parts.push("→ steps 3–4 happen in Open WebUI (skill + code interpreter)");
+    el.textContent = parts.join(" · ");
+  } catch (e) { /* status is UX */ }
+}
+
 /* ---------------- heartbeat (/health every 5 s) ---------------------------- */
 
 let lastHealth = null; // {ok, roots:[{id,path,perm}], addons, ocr_lang, ...}
@@ -115,6 +135,7 @@ async function beat() {
     langSig = sig;
     renderLangs(r.data.ocr_langs_available || [], r.data.ocr_lang || "eng");
   }
+  renderStart();
 }
 
 /* ---------------- security card (fs-sec: allowlist + token) --------------- */
@@ -201,6 +222,7 @@ async function renderSec() {
   document.getElementById("tokenstat").textContent = token
     ? "✓ token required from every chat request"
     : "no token — the site list alone guards the bridge";
+  renderStart();
 }
 
 function genToken() {

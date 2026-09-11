@@ -56,6 +56,9 @@ code { background: #eee; padding: 2px 6px; border-radius: 4px; }
             background: #fff; flex-wrap: wrap; }
 .root-row .name { flex: 1; min-width: 12em; }
 #auditrows { white-space: pre; }
+.startlist { margin: 8px 0 0 0; padding-left: 22px; line-height: 1.65; }
+.startlist li { margin: 5px 0; }
+.mono { font-family: ui-monospace, monospace; font-size: 0.95em; }
 hr { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
 </style>
 <script src="fs-idb.js"></script>
@@ -66,6 +69,35 @@ hr { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
 <p class="hint" id="beatinfo">checking whether the extension is running…</p>
 <p>This extension lets <b>Open WebUI in your browser</b> read &amp; write files
 in <b>folders you choose</b> on this computer — no server, no network.</p>
+
+<details class="sec" id="sec-start" open>
+<summary>🚀 Get started</summary>
+<p class="hint">The extension alone is not enough — Open WebUI needs the
+bridge <b>skill</b> installed and its <b>code interpreter</b> on. Five steps,
+top to bottom:</p>
+<ol class="startlist">
+<li><b>Choose a folder</b> in <a href="#sec-folders">Shared folders</a> below —
+the only folder the AI can touch.</li>
+<li><b>Allow your Open WebUI site</b> in <a href="#sec-security">🔒 Security</a>
+below — until a site is added, the bridge refuses every request (the chat will
+say <code>bridge locked</code>).</li>
+<li><b>Install the skill in Open WebUI</b> — copy
+<a href="https://github.com/Sparkling-AI/open-file-bridge/blob/feat/stage3-extension/skill/open-file-bridge/SKILL-EXT.md" target="_blank" rel="noopener">the bridge skill file</a>
+(<span class="mono">SKILL-EXT.md</span>) from the
+<a href="https://github.com/Sparkling-AI/open-file-bridge" target="_blank" rel="noopener">GitHub repo</a>,
+then in Open WebUI open <span class="mono">Workspace → Skills → Create</span>,
+paste it, save. Regular user without Workspace access? Ask your admin to add
+it (or to enable user skill creation), and keep yours private.</li>
+<li><b>Turn both switches on in a NEW chat</b> — the <b>Code Interpreter</b>
+and the <b>bridge skill</b> (chat controls, or <span class="mono">$</span>-mention
+the skill). Admins can bake this into an assistant model
+(<span class="mono">Workspace → Models</span>: enable Code Interpreter,
+mark it <i>default</i>, attach the skill) — both switches matter.</li>
+<li><b>Test</b> — in a fresh chat ask <i>"list the files in my folder"</i>.
+After a browser restart it may ask you to reconnect the folder once.</li>
+</ol>
+<p class="hint" id="startstat"></p>
+</details>
 
 <details class="sec" id="sec-folders" open>
 <summary>📁 Shared folders</summary>

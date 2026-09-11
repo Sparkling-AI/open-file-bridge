@@ -699,6 +699,18 @@ the four Linux picker suites now call `sec_configure` (TODO 6b has the
 re-run note). Skill teaches the 403 shapes (`security_locked`,
 `origin_blocked`, `token_required`) with one-shot recoveries.
 
+## Stage 3 (extension): onboarding — Get-started card on the settings page (2026-09-11, ext 3.0.19)
+
+New-user gap closed: the options page now opens with a 🚀 Get-started
+card spelling out the WHOLE path — choose folder → allow the OWUI site
+(bridge-locked symptom named) → install the skill from the GitHub repo
+into OWUI (Workspace → Skills → Create, paste SKILL-EXT.md; admin vs
+private-skill forks) → enable Code Interpreter + the skill in a new
+chat (or bake both into an assistant model — "both switches matter") →
+test with "list the files in my folder". Steps 1–2 show live ✓/○
+status; the skill-file link is branch-scoped until the merge (TODO 6b).
+Vision-checked (GLM-4.6V) + smoke 5/5.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
