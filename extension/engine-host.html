@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Open File Bridge — engine host</title>
+<style>
+body { font-family: system-ui, sans-serif; margin: 2rem; color: #1a1a2e; }
+h2 { margin-top: 0; }
+#log { white-space: pre-wrap; background: #f4f4f8; padding: 1rem; border-radius: 8px;
+       font-family: ui-monospace, monospace; font-size: 0.85rem; }
+.roots { color: #555; margin-bottom: 1rem; }
+</style>
+<script src="fs-idb.js"></script>
+<script src="fs-core.js"></script>
+<script src="engine-host.js"></script>
+</head>
+<body>
+<h2>Open File Bridge — engine host</h2>
+<p class="roots">Granted folders: <span id="roots">…</span></p>
+<p>This background tab hosts the PDF/OCR engines (they load here, not in
+the service worker). Keep this tab open while the assistant works with
+PDFs or scanned files.</p>
+<div id="log"></div>
+</body>
+</html>

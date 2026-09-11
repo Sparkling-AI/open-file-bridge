@@ -678,6 +678,109 @@ Landscape (analysis, nothing implemented):
   markdown sanitizer may strip non-http links. Would live BESIDE the
   http /click as fallback.
 
+## Stage 3 (extension): sender security gate restored — origin allowlist + bridge token (2026-09-11, ext 3.0.18 / skill 3.0.24-EXT)
+
+The 2026-09-06 "token retired" posture left the pipe open to every
+website (relay injected on all https + localhost pages; the SW never
+checked WHO asked; reads and new-file writes are ungated by design —
+see DEVNOTES session #29). Restored the desktop app's two tiers with
+the enforcement point moved to the SW message listener
+(`extension/fs-sec.js`; match patterns cannot pin ports, so sender
+metadata is the only strict scheme://host:port check): tier 1 origin
+allowlist on browser-set sender metadata, tier 2 optional per-request
+bridge token (hash-compare; closes same-origin impostors on
+localhost/http), UNCONFIGURED = denied outright. Options page 🔒
+Security card manages both (blocked origins surface as one-click
+Allow). Trusted senders = own extension pages, discriminated by the
+`chrome-extension://` sender URL — NOT `sender.id` (content scripts
+carry it too; the first draft trusted every relay forward until
+sec_test caught it). New `tests/stage3/sec_test.py` 13/13 on the Mac;
+the four Linux picker suites now call `sec_configure` (TODO 6b has the
+re-run note). Skill teaches the 403 shapes (`security_locked`,
+`origin_blocked`, `token_required`) with one-shot recoveries.
+
+## Stage 3 (extension): onboarding — Get-started card on the settings page (2026-09-11, ext 3.0.19)
+
+New-user gap closed: the options page now opens with a 🚀 Get-started
+card spelling out the WHOLE path — choose folder → allow the OWUI site
+(bridge-locked symptom named) → install the skill from the GitHub repo
+into OWUI (Workspace → Skills → Create, paste SKILL-EXT.md; admin vs
+private-skill forks) → enable Code Interpreter + the skill in a new
+chat (or bake both into an assistant model — "both switches matter") →
+test with "list the files in my folder". Steps 1–2 show live ✓/○
+status; the skill-file link is branch-scoped until the merge (TODO 6b).
+Vision-checked (GLM-4.6V) + smoke 5/5.
+
+## Stage 3 (extension): paste-ready skill variants + single-site lock (2026-09-11, ext 3.0.20 / skill 3.0.25-EXT)
+
+Skill files are now directly copy-pasteable into OWUI: dev chatter
+replaced by a 3-line variant picker, all version archaeology scrubbed
+to behavior statements. TWO variants mirror the app's pattern —
+SKILL-EXT.md (no token; still self-heals via ofb_set_token if a token
+appears later) and NEW SKILL-EXT-TOKEN.md (`_TOKEN` pre-filled at
+publish time, zero chat friction), generated from the plain file with
+a verified 5-delta diff. The Security card now locks the bridge to
+exactly ONE site (kv allowed_site, legacy-list migration, modes
+site+token/site/token/UNLOCKED) — one bridge token guards one
+deployment, not several sites. The Get-started skill link adapts to
+the token state. sec_test 14/14, options smoke 6/6, worker_transport
+7/7 on the rewritten bootstrap.
+
+## Stage 3 (extension): site editor 3-state UI (2026-09-11, ext 3.0.21)
+
+Dandan's screenshot report: after setting a site the card still showed
+the empty placeholder input + "Set site", reading as nothing-set. Now
+three states: EMPTY (input + Set site), SET (site URL + Edit/Remove,
+no input), EDITING (prefilled input + Save; the editing flag survives
+re-renders so tab switches never clobber it). Click-through smoke 7/7
++ element-screenshot vision transcription.
+
+## Stage 3 (extension): EXT skill descriptions aligned with the app skills (2026-09-11, skill 3.0.26-EXT)
+
+Borrowed the application skills' description verbatim (concrete
+file-type trigger surface + MUST-CALL rule; only "extension" adapted)
+for both EXT variants — previously a generic "ANY file task" wording.
+Restage now writes content AND the description column together.
+
+## Stage 3 (extension): token-variant live failure diagnosed + hardened (2026-09-11, ext 3.0.22 / skill 3.0.27-EXT)
+
+Dandan's 5-execution flail after publishing the token variant: the
+publish flow (replace __BRIDGE_TOKEN__) verified CORRECT — his staged
+bootstrap passes a real-browser worker-transport e2e (4/4). Failure
+class is environmental: token mismatch in the extension's saved
+settings, a stale pre-reload relay that silently drops the token
+field, or a model hand-writing pipe code. All three now self-explain:
+bootstrap warning line in the skill + stale-relay remedy in the 403
+token_required hint.
+
+## Stage 3 (extension): cross-worker id collision on the BC pipe fixed (2026-09-11, skill 3.0.28-EXT)
+
+Dandan's logs nailed a race the suites never covered: two OWUI chats =
+two pyodide workers with overlapping integer ids on the broadcast
+"ofb-pipe" channel — one worker's REQUEST resolved the other's pending
+future (ofb_fetch "returned" the request; KeyError 'status' upstream;
+one tab works, the identical other fails). Bootstrap now stamps ids
+with the session _wid prefix and only RESPONSES (ok present, no
+method) resolve futures. Red/green proven: old bootstrap reproduces
+the exact steal; new W5 two-worker test passes 9/9.
+
+## Stage 3 (extension): app-parity version floor in the EXT skills (2026-09-11, skill 3.0.29-EXT)
+
+The EXT variants now carry the app skills' "Requires bridge ≥ X"
+contract: header note (extension ≥ 3.0.1, backward-compatible pipe)
+plus the one-way-floor rule on first /health (older → tell the user
+once to update, continue; newer → never warn; much-newer → refresh
+hint). The 3.0.25 scrub had collapsed this to a vague "any 3.0.x".
+
+## Stage 3 (extension): release prep — the whole line at 3.1.0 (2026-09-11)
+
+Extension (manifest + /health + /version) and both skill variants
+unified at 3.1.0; skill dependency = extension ≥ 3.1.0 (header note +
+one-way floor on first /health); all pre-release version archaeology
+removed from the skill bodies (nothing older was ever published). CWS
+zip rebuilt at 3.1.0 (48.4 MB, 80 files). sec_test 14/14 +
+worker_transport 9/9.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

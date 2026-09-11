@@ -1,0 +1,131 @@
+// Open File Bridge — service worker (Stage 3).
+//
+// SECURITY INVARIANT (STAGE3-PLAN §5): this worker is a NARROW PIPE,
+// never a general fetch proxy. With the loopback backend gone there is
+// NO network egress from the extension at all — a message chooses a
+// path within the user-granted folder, never a destination host.
+//  - Only messages of shape {ofb:true, id, method, path, body?} are
+//    accepted; the router runs against FileSystemHandles (fs-adapter).
+//  - SENDER GATE (fs-sec, 2026-09-11 — restores the app's boundary):
+//    origin allowlist (browser-set sender metadata) + optional bridge
+//    token, enforced BEFORE the router. UNCONFIGURED = DENIED. The
+//    token is the org-boundary tier the app shipped; both live in the
+//    settings page's 🔒 Security card.
+//  - Payload caps and concurrency caps mirror the page relay.
+
+importScripts("fs-idb.js", "fs-core.js", "fs-adapter.js", "fs-writes.js",
+  "fs-links.js", "fs-engine.js", "fs-confirm.js", "fs-sec.js");
+
+const MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB request payload cap
+const MAX_RESPONSE_BYTES = 64 * 1024 * 1024; // 64 MB response cap
+const MAX_INFLIGHT = 30;
+
+let inflight = 0;
+
+function swFail(id, error, status = 0) {
+  return { ofb: true, id, ok: false, status, error: String(error) };
+}
+
+async function handleOfbRequest(msg, sender) {
+  const id = msg.id;
+  const method = String(msg.method || "GET").toUpperCase();
+  const path = String(msg.path || "");
+
+  // ---- sender gate: origin allowlist + optional bridge token ----
+  // BEFORE shape/payload work — a rejected sender learns nothing else
+  const sec = await secGate(msg, sender);
+  if (sec) return sec;
+  const senderTabId = sender && sender.tab ? sender.tab.id : null;
+
+  // ---- shape gate: narrow pipe only ----
+  if (!/^\/[A-Za-z0-9_\-./?&=%+]*$/.test(path)) {
+    return swFail(id, "bad path", 0);
+  }
+  if (!["GET", "POST", "DELETE"].includes(method)) {
+    return swFail(id, "bad method", 0);
+  }
+  if (path.includes("..")) {
+    return swFail(id, "bad path", 0);
+  }
+  let bodyText = null;
+  if (msg.body !== undefined && msg.body !== null) {
+    if (typeof msg.body !== "string") return swFail(id, "body must be a string", 0);
+    if (msg.body.length > MAX_BODY_BYTES) return swFail(id, "body too large", 0);
+    bodyText = msg.body;
+  }
+  const wantB64 = msg.b64 === true;
+  if (inflight >= MAX_INFLIGHT) {
+    return swFail(id, "too many in-flight requests", 0);
+  }
+
+  inflight++;
+  try {
+    // trash expiry rides along (unawaited): throttled to once per 24 h
+    // internally, so this is free after the first call per SW lifetime
+    maybeSweepMaintenance().catch(() => {}); // trash TTL + audit cap
+    // out-of-band confirmation gate (destructive ops) — BEFORE the
+    // adapter; passes the requesting tab so the popup lands there
+    const gate = await confirmGate(method, path, bodyText, senderTabId);
+    if (gate) {
+      return { ofb: true, id, ok: false, status: 403, body: JSON.stringify(gate) };
+    }
+    const resp = await fsRoute(method, path, bodyText);
+    if (wantB64 && resp.bodyB64 !== undefined) {
+      if (resp.bodyB64.length > MAX_RESPONSE_BYTES) {
+        return swFail(id, "response too large", resp.status);
+      }
+      return { ofb: true, id, ok: resp.status === 200, status: resp.status, bodyB64: resp.bodyB64 };
+    }
+    if (wantB64) {
+      // caller asked for bytes but endpoint is textual — return the JSON
+      return { ofb: true, id, ok: resp.status === 200, status: resp.status, body: resp.body };
+    }
+    let body = resp.body || "";
+    if (body.length > MAX_RESPONSE_BYTES) {
+      return { ofb: true, id, ok: false, status: resp.status,
+        error: "response too large", truncated: true, body: body.slice(0, MAX_RESPONSE_BYTES) };
+    }
+    return { ofb: true, id, ok: resp.status === 200, status: resp.status, body };
+  } catch (e) {
+    return swFail(id, "adapter error", 0);
+  } finally {
+    inflight--;
+  }
+}
+
+// Toolbar icon: open the ONE settings page (same destination as
+// chrome://extensions → Options — Dandan's unification ask; setup.html
+// now just redirects there). No popup is declared, so this listener is
+// the only wiring.
+chrome.action.onClicked.addListener(() => {
+  chrome.tabs.create({ url: "options.html" });
+});
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (!msg || typeof msg !== "object") return;
+  // engine-host page heartbeat (P3/P4): mark engines alive
+  if (msg.ofbEngineHello === true) {
+    if (typeof fsEngineSetAlive === "function") fsEngineSetAlive(true);
+    sendResponse({ ok: true });
+    return;
+  }
+  // maintenance-sweep force hook (tests + diagnostics; not pipe-shaped;
+  // message name kept as ofbTrashSweep for the negatives-suite contract)
+  if (msg.ofbTrashSweep === true) {
+    maybeSweepMaintenance(msg.force !== false).then(sendResponse);
+    return true; // async sendResponse
+  }
+  // narrow pipe: only the exact OFB request shape
+  if (msg.ofb !== true || msg.id === undefined) return; // not ours: ignore
+  handleOfbRequest(msg, sender).then(sendResponse);
+  return true; // async sendResponse
+});
+
+// confirmation popup verdicts (content script confirm.js → SW)
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.ofbConfirmVerdict === true && msg.id) {
+    confirmVerdict(String(msg.id), String(msg.verdict || ""))
+      .then(sendResponse);
+    return true; // async sendResponse (confirmVerdict touches IndexedDB)
+  }
+});

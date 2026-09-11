@@ -2,6 +2,86 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.1.0-EXT — 2026-09-11 (release)
+
+First published line: everything unified at **3.1.0** — the extension
+(manifest + /health + /version) and both skill variants. The skill's
+dependency is now "extension ≥ **3.1.0**" (header note + the one-way
+floor on the first /health). All pre-release version archaeology is
+removed from the skill bodies ("gate 403s exist only on ≥ 3.0.18",
+"older extension builds bundle only 8 languages", the 3.0.1 floor) —
+no build older than 3.1.0 was ever published, so no reader can hold
+one.
+
+## 3.0.29-EXT — 2026-09-11
+
+App-parity version floor: the EXT variants now carry the same
+"Requires bridge ≥ X" contract as the application skills — a header
+note (**extension ≥ 3.0.1**, the worker transport; newer is always
+fine, the pipe is backward-compatible) plus the one-way-floor rule on
+the first `/health`: older than 3.0.1 → tell the user once to update
+the extension, then continue with what works; never warn about newer;
+much-newer → hint at re-copying the skill. The 3.0.25 paste-ready scrub
+had collapsed the old "≥ 3.0.1" prose into a vague "any 3.0.x" — this
+restores the contract explicitly. Sender-gate 403s are noted as
+≥ 3.0.18 behavior (older builds simply serve without the gate).
+
+## 3.0.28-EXT — 2026-09-11
+
+**Cross-worker request collision fixed** (live incident: with two OWUI
+chats open, "list my files" burned executions and failed in one tab
+while an identical tab worked). "ofb-pipe" is a broadcast
+BroadcastChannel: two pyodide workers (two tabs) both count request ids
+from 0, so the OTHER worker's REQUEST — same id, `ofb:true` — resolved
+this worker's pending future, and `ofb_fetch` "returned" the request
+itself (upstream `KeyError: 'status'`). The bootstrap now stamps every
+id with the session's `_wid` prefix (ids globally unique) and its
+message listener only lets RESPONSES (messages with `ok`, never
+`method`) resolve futures. Regression-proven both ways: the old
+bootstrap under a two-worker overlap reproduces the exact steal; the
+fixed one passes 9/9 including the new two-worker test.
+
+## 3.0.27-EXT — 2026-09-11
+
+Token-variant hardening after Dandan's "5 executions, no answer" run:
+the publish flow (replace `__BRIDGE_TOKEN__`) was verified CORRECT —
+his exact staged bootstrap + token passes a real-browser e2e through
+the worker transport. The failure class is environmental (token
+mismatch in the extension's settings, a stale relay from before an
+extension reload that silently DROPS the token field, or a model
+hand-writing its own pipe code). All three now self-explain: a
+warning line above the bootstrap ("run EXACTLY as written — hand-written
+copies fail the sender gate with 403 token_required; refresh the page
+after an extension update"), and the 403 `token_required` hint (ext
+3.0.22) names the stale-relay/refresh-page remedy.
+
+## 3.0.26-EXT — 2026-09-11
+
+The EXT variants' description now matches the application skills verbatim
+(concrete trigger surface — "Read, create, edit, search, convert, and
+organize documents and other files … Word, Excel, PowerPoint, PDF,
+image, archive, email, text, or code files. MUST-CALL before acting…"),
+with "through the Open File Bridge extension" as the only adaptation.
+Both variants share the same description, exactly as all four app
+variants do — which variant you publish is decided by the picker note
+in the body, not the description.
+
+## 3.0.25-EXT — 2026-09-11
+
+Paste-ready rewrite + TWO variants. The extension skill files are now
+directly copy-pasteable into OWUI (Workspace → Skills): a short variant
+picker at the top replaces the old developer-facing publishing notes,
+and all repo archaeology (setup-script notes, version-history asides)
+is gone — only model-operational content remains. NEW
+`SKILL-EXT-TOKEN.md` mirrors the app's token-variant pattern: publish
+it when the extension's 🔒 Security card has a bridge token set — the
+bootstrap ships with `_TOKEN` pre-filled (`__BRIDGE_TOKEN__`
+placeholder, filled at publish time), zero chat friction; publish the
+no-token `SKILL-EXT.md` otherwise (it still self-heals via
+`ofb_set_token` if a token appears later). Same release also renames
+the security mode to single-site semantics (`site+token` / `site` /
+`token` / UNLOCKED) matching extension 3.0.20, which locks the bridge
+to exactly ONE site.
 ## 2.11.2 — 2026-09-06
 
 Endpoint-table audit against the bridge source (every do_GET/do_POST

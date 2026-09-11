@@ -1,0 +1,261 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Open File Bridge — settings</title>
+<style>
+:root { --accent: #4a5fc1; --line: #c9cdd6; --control: 36px; }
+body { font-family: system-ui, sans-serif; max-width: 680px; margin: 40px auto;
+       padding: 0 20px; color: #222; }
+h2 { margin: 0 0 4px; }
+/* one control height for buttons, inputs and selects — rows line up flush */
+button { height: var(--control); padding: 0 18px; font-size: 14px; cursor: pointer;
+         border-radius: 8px; border: 1px solid var(--accent); background: var(--accent);
+         color: #fff; white-space: nowrap; }
+button:hover { filter: brightness(1.06); }
+button.secondary { background: #fff; color: var(--accent); }
+button.small { height: 30px; padding: 0 12px; font-size: 13px; border-radius: 7px; }
+input:not([type=checkbox]), select { height: var(--control); padding: 0 10px;
+       font-size: 14px; box-sizing: border-box; border: 1px solid var(--line);
+       border-radius: 8px; background: #fff; color: inherit; }
+input:not([type=checkbox]):focus, select:focus, textarea:focus {
+       outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
+/* inputs sized to their content, not the card width */
+#linkttl { width: 150px; }
+#ratelimitw, #ratelimitmb { width: 100px; }
+textarea { width: 100%; max-width: 440px; min-height: 104px; padding: 8px 10px;
+       font-size: 13px; line-height: 1.5; font-family: ui-monospace, monospace;
+       box-sizing: border-box; border: 1px solid var(--line); border-radius: 8px;
+       background: #fff; }
+/* one row pattern: [label] [control] [Save] — uniform gap, centered */
+.btnrow { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin: 10px 0; }
+.btnrow .hint { margin: 0; }
+/* checkbox list as an aligned grid, not a ragged flex-wrap */
+#langbox { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr));
+           gap: 8px 14px; align-items: center; font-size: 15px; }
+#langbox label { white-space: nowrap; cursor: pointer; overflow: hidden;
+                 text-overflow: ellipsis; }
+#langbox input[type=checkbox] { width: auto; margin: 0 6px 0 0; vertical-align: middle; }
+.ok { color: #0a7d32; font-weight: bold; }
+.hint { color: #666; font-size: 14px; }
+.warn { color: #b00; font-weight: bold; }
+details.sec { background: #f4f6f8; padding: 14px 18px; border-radius: 8px; margin: 16px 0; }
+details.sec > summary { cursor: pointer; list-style: none; display: flex;
+       align-items: center; gap: 10px; font-weight: bold; font-size: 1.17em;
+       user-select: none; }
+details.sec > summary::-webkit-details-marker { display: none; }
+details.sec > summary::after { content: '▸'; font-size: .8em; color: #999;
+       margin-left: auto; transition: transform .15s ease; }
+details.sec[open] > summary { margin-bottom: 8px; }
+details.sec[open] > summary::after { transform: rotate(90deg); }
+details.sec[open] > *:not(summary) { animation: secopen .18s ease; }
+@keyframes secopen { from { opacity: 0; transform: translateY(-2px); }
+                     to { opacity: 1; transform: none; } }
+.panel { background: #fff; border: 1px solid #ddd; border-radius: 6px; padding: 10px 14px; }
+code { background: #eee; padding: 2px 6px; border-radius: 4px; }
+.root-row { display: flex; gap: 8px; align-items: center; padding: 8px 12px;
+            border: 1px solid #ddd; border-radius: 8px; margin-top: 8px;
+            background: #fff; flex-wrap: wrap; }
+.root-row .name { flex: 1; min-width: 12em; }
+#auditrows { white-space: pre; }
+.startlist { margin: 8px 0 0 0; padding-left: 22px; line-height: 1.65; }
+.startlist li { margin: 5px 0; }
+.mono { font-family: ui-monospace, monospace; font-size: 0.95em; }
+hr { border: none; border-top: 1px solid #ddd; margin: 24px 0; }
+</style>
+<script src="fs-idb.js"></script>
+<script src="options.js"></script>
+</head>
+<body>
+<h2>Open File Bridge <span id="beat" style="font-size:18px;color:#999">●</span></h2>
+<p class="hint" id="beatinfo">checking whether the extension is running…</p>
+<p>This extension lets <b>Open WebUI in your browser</b> read &amp; write files
+in <b>folders you choose</b> on this computer — no server, no network.</p>
+
+<details class="sec" id="sec-start" open>
+<summary>🚀 Get started</summary>
+<p class="hint">The extension alone is not enough — Open WebUI needs the
+bridge <b>skill</b> installed and its <b>code interpreter</b> on. Five steps,
+top to bottom:</p>
+<ol class="startlist">
+<li><b>Choose a folder</b> in <a href="#sec-folders">Shared folders</a> below —
+the only folder the AI can touch.</li>
+<li><b>Allow your Open WebUI site</b> in <a href="#sec-security">🔒 Security</a>
+below — until a site is set, the bridge refuses every request (the chat will
+say <code>bridge locked</code>).</li>
+<li><b>Install the skill in Open WebUI</b> — copy
+<a id="skillfile" href="https://github.com/Sparkling-AI/open-file-bridge/blob/feat/stage3-extension/skill/open-file-bridge/SKILL-EXT.md" target="_blank" rel="noopener">the bridge skill file</a>
+(<span class="mono" id="skillfilename">SKILL-EXT.md</span>) from the
+<a href="https://github.com/Sparkling-AI/open-file-bridge" target="_blank" rel="noopener">GitHub repo</a>,
+then in Open WebUI open <span class="mono">Workspace → Skills → Create</span>,
+paste it, save. Regular user without Workspace access? Ask your admin to add
+it (or to enable user skill creation), and keep yours private.</li>
+<li><b>Turn both switches on in a NEW chat</b> — the <b>Code Interpreter</b>
+and the <b>bridge skill</b> (chat controls, or <span class="mono">$</span>-mention
+the skill). Admins can bake this into an assistant model
+(<span class="mono">Workspace → Models</span>: enable Code Interpreter,
+mark it <i>default</i>, attach the skill) — both switches matter.</li>
+<li><b>Test</b> — in a fresh chat ask <i>"list the files in my folder"</i>.
+After a browser restart it may ask you to reconnect the folder once.</li>
+</ol>
+<p class="hint" id="startstat"></p>
+</details>
+
+<details class="sec" id="sec-folders" open>
+<summary>📁 Shared folders</summary>
+<p class="hint">Only these folders are exposed — nothing else on this computer.
+After a browser restart the assistant may report <code>permission-needed</code>
+— press Reconnect (the folder is not re-picked).</p>
+<div class="btnrow">
+<button id="pick" class="secondary">Choose folder…</button>
+</div>
+<p class="ok" id="folderstatus"></p>
+<div id="roots"></div>
+</details>
+
+<details class="sec" id="sec-security" open>
+<summary>🔒 Security</summary>
+<p class="hint">Only the <b>one site</b> below can talk to the bridge —
+every other website is refused, and until a site is set <b>nothing</b> is
+served. Set it to the address your Open WebUI runs on; scheme, host and
+port must match exactly (<code>https://chat.example.com</code>,
+<code>http://127.0.0.1:8080</code>). Setting a new site replaces the
+old one.</p>
+<div class="btnrow" id="siterow">
+<input id="siteadd" type="text" placeholder="https://your-open-webUI-address" style="flex:1;min-width:220px">
+<button id="siteaddbtn" class="secondary">Set site</button>
+</div>
+<div id="siteview"></div>
+<p class="warn" id="sitestat" style="margin:6px 0 0 0"></p>
+<div id="deniedrows"></div>
+<p class="hint" id="secmodeinfo"></p>
+<div class="btnrow" style="margin-top:10px">
+<label class="hint" for="bridgetoken" style="white-space:nowrap">Bridge token</label>
+<input id="bridgetoken" type="text" placeholder="not set — optional second lock" style="flex:1;min-width:220px" autocomplete="off" spellcheck="false">
+<button id="tokenset" class="secondary">Save</button>
+<button id="tokengen" class="secondary">Generate</button>
+<button id="tokencopy" class="secondary">Copy</button>
+</div>
+<p class="hint" id="tokenstat"></p>
+<p class="hint" style="margin-top:2px">With a token set, the chat must
+also present it — this stops a <i>fake</i> page impersonating your
+Open WebUI address (possible for local/http addresses). When the
+assistant asks, paste the token <b>once</b> in chat; it is never echoed
+back. Leave empty to rely on the site lock alone.</p>
+<p class="hint">Always on, not configurable: credential-looking files
+(<code>.env</code>, <code>id_rsa</code>, <code>*.pem</code>, …) are refused;
+every overwrite keeps the previous version; deletes go to the trash (30-day expiry).</p>
+<p class="hint" id="secstatus"></p>
+<div class="btnrow" style="margin-top:4px">
+<label class="hint" for="confirmscope" style="white-space:nowrap">Confirm before</label>
+<select id="confirmscope">
+<option value="all">delete &amp; overwrite</option>
+<option value="destructive">delete only</option>
+<option value="off">nothing (no confirmations)</option>
+</select>
+<span class="hint" id="confirmstat"></span>
+</div>
+<p class="hint" style="margin-top:2px">Destructive requests pop up an
+Approve/Deny card <b>inside the chat page</b>; the assistant retries
+automatically after you approve.</p>
+</details>
+
+<details class="sec" id="sec-ocr" open>
+<summary>🔤 OCR language</summary>
+<p class="hint" id="engstat"></p>
+<div class="btnrow">
+<button id="engbtn" class="secondary">Open engine tab</button>
+<span class="hint">Manual fallback — engines start by themselves when
+first needed.</span>
+</div>
+<label style="display:flex;align-items:flex-start;gap:10px;margin:6px 0 2px;cursor:pointer">
+<input type="checkbox" id="engauto" style="width:auto;margin-top:3px">
+<span><b>Auto-start the engines when needed</b> — nothing opens and no
+action is needed; the first call takes a few seconds extra. When off,
+the assistant asks you to start them.
+<span class="hint" id="engautostat"></span></span>
+</label>
+<p class="hint">For reading scanned PDFs / photos — tick one or more
+(applies immediately):</p>
+<div id="langbox" class="panel"></div>
+<p class="hint" id="langs"></p>
+</details>
+
+<details class="sec" id="sec-links" open>
+<summary>⏳ Link lifetime</summary>
+<p class="hint">How long the chat-answer file links keep working after the
+assistant posts them. The clock starts when each link is created.</p>
+<div class="btnrow">
+<select id="linkttl">
+<option value="3600">1 hour</option>
+<option value="86400">1 day</option>
+<option value="604800">7 days</option>
+<option value="2592000">30 days</option>
+<option value="7776000">90 days</option>
+<option value="31536000">1 year</option>
+</select>
+<span class="hint" id="ttlinfo"></span>
+</div>
+</details>
+
+<details class="sec" id="sec-safety" open>
+<summary>🛟 Safety &amp; recovery</summary>
+<p class="hint">Nothing the AI changes is unrecoverable — how to restore
+or find deleted files:</p>
+<div class="btnrow">
+<button id="openguide">📖 Recovery guide</button>
+</div>
+<p class="hint">Write-rate brake — stops runaway mass edits:</p>
+<div class="btnrow">
+<input id="ratelimitw" type="number" min="1" max="10000" value="20">
+<label class="hint" for="ratelimitw">writes / minute</label>
+<input id="ratelimitmb" type="number" min="1" max="2048" value="50">
+<label class="hint" for="ratelimitmb">MiB / minute</label>
+<button id="saverate">Save limits</button>
+</div>
+<p class="hint" id="ratestat"></p>
+<label style="display:flex;align-items:center;gap:10px;margin-top:10px;cursor:pointer">
+<input type="checkbox" id="readonlybox" style="width:auto">
+<span><b>Read-only mode</b> — block <i>all</i> writes to every shared folder
+(the AI can read and analyze, never modify). <span class="hint" id="rostat"></span></span>
+</label>
+</details>
+
+<details class="sec" id="sec-ignore" open>
+<summary>🚫 Ignore patterns</summary>
+<p class="hint">Files matching these patterns are invisible to the AI and
+writes to them are refused. One per line, gitignore-style:
+<code>*.zip</code>, <code>secrets/</code> (anywhere), <code>/build</code>
+(top level only). The preview below updates after saving.</p>
+<textarea id="ignorepats" rows="4" placeholder="*.zip&#10;.secrets&#10;node_modules/"></textarea>
+<div class="btnrow">
+<button id="saveignore">Save patterns</button>
+<span class="hint" id="ignstat"></span>
+</div>
+<p class="hint">Always ignored (built in, not editable):
+<b>.DS_Store</b> · <b>._*</b> · <b>Thumbs.db</b> · <b>desktop.ini</b> ·
+<b>.ofb-snapshots/</b> · <b>.ofb-trash/</b> · <b>.ofb-chunks/</b></p>
+</details>
+
+<details class="sec" id="sec-preview" open>
+<summary><span style="flex:1">👁 What the AI can see</span>
+<button id="pvrefresh" class="small" type="button">↻ Refresh</button></summary>
+<p class="hint">Exactly what the AI sees when listing your folders —
+auto-refreshes every 5&nbsp;s. Nothing here is editable; change the
+folders above instead.</p>
+<div id="preview" class="panel hint" style="max-height:340px;overflow:auto;font-family:ui-monospace,monospace;
+font-size:13px;color:#333;text-align:left"></div>
+<p class="hint" id="previnfos"></p>
+</details>
+
+<details class="sec" id="sec-audit" open>
+<summary>🕓 Recent activity</summary>
+<p class="hint">Newest first; the log keeps the most recent 1000.</p>
+<div id="auditrows" class="panel hint">…</div>
+</details>
+
+<hr>
+<p class="hint" id="footerinfo">Status: extension mode</p>
+<p class="hint">The extension runs with your browser — there is nothing to stop
+or quit. Remove or reconnect folders above, or disable the extension on
+<code>chrome://extensions</code>.</p>
+</body>
+</html>

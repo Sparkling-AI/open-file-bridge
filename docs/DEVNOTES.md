@@ -1212,3 +1212,1570 @@ App binary unchanged from 2.11.0 — this release ships the skill fixes
 installers; only the version string moved (src VERSION + Windows
 AppVersion). Follows the v2.10.1 precedent of tagging skill-carried
 patches; skill/bridge version coupling stays one-way (SKILL_MIN 2.11).
+## Stage-3 session #5: engines (P3+P4) + negatives (P1b) + CWS pass (P2b) + skill 3.0-EXT (P5) (2026-09-06)
+
+Engine architecture landed (all verdicts from real-browser runs through the
+real sandbox→relay→SW pipe, tests/stage3/engines_test.py — 13/13 PASS):
+
+- **pdfium = PDF READER only** (text + page render). Its SAVE side is
+  unusable in the @hyzyla 2.1.13 build: FPDF_SaveAsCopy needs a wasm-table
+  function pointer; `addFunction` is NOT exported and `WebAssembly.Function`
+  is not shipped in production Chromium (probed both — dead ends, don't
+  retry). Page-surgery exports (ImportPages/Page_New/CreateTextObj) exist
+  but without Save they're useless.
+- **pdf-lib 1.17.1 (vendored UMD, MIT, 525KB) = PDF WRITER**: /pdf_op
+  split/merge/rotate output + searchable-PDF assembly.
+- **tesseract.js 7 `outputs:{pdf:true}`** = the /ocr_pdf writer: its
+  TessPDFRenderer emits image + invisible-text-layer pages; pdf-lib merges.
+  Cross-engine proof: pdfium getText on the tesseract output returns the
+  probe terms ("E2E INVOICE 997 … 44000 SEK").
+- **`gzip:false` + absolute chrome-extension:// langPath** (both
+  first-class tesseract.js options): plain .traineddata files from
+  vendor/tessdata-fast/ — NO gz packaging needed.
+
+Three extension-platform blockers found & fixed (each cost a probe):
+
+1. **Extension-page CSP blocks WebAssembly.instantiate** ("neither
+   'wasm-eval' nor 'unsafe-eval'…script-src 'self'"). The tesseract core
+   aborts INSIDE its worker, so the page-level promise never rejects —
+   it HANGS (no console error at the call site; only worker console
+   errors). Fix: manifest `content_security_policy.extension_pages:
+   "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"` — the
+   MV3-sanctioned wasm keyword (Chrome 103+), no remote code.
+2. **tesseract.js spawns its worker via a blob URL that importScripts
+   the real path** — blob importScripts is blocked in extension context.
+   Fix: `workerBlobURL: false` (worker loads directly from the
+   extension URL).
+3. **chrome.runtime.sendMessage STRUCTURED-CLONES and DROPS File
+   objects** — the engine page received an empty "/input" (tesseract:
+   "Image file /input cannot be read"). Fix: the SW packs inputs as
+   base64 strings (`packOne` in fs-engine.js), outputs come back as
+   base64 too (`__writeFile.b64`), written through the guarded write
+   path (snapshot-first + rate breaker + audit) in the SW.
+
+Also found: **`epMovedRead` was CALLED BUT NEVER DEFINED** (lost in the
+session-#8 file split; node --check cannot catch undefined identifiers —
+same class as the const-reassign bug). /docx_read & friends returned
+status 0 "adapter error". Now implemented with app-parity validation
+(resolveGuarded + getFileFor inside try/catch → 404/403 before the 501
+moved+recipe reply). Static-check lesson: before CWS submit, run an
+undefined-identifier scan (acorn/lint), not just node --check.
+
+P1b negatives (tests/stage3/negatives_test.py) — 11 cells + disk
+evidence PASS: evil-destination 400, foreign url/port fields dropped,
+PUT refused, path-outside-roots refused, sensitive floor 403×3,
+zip-slip 400 (whole-archive abort, nothing extracted), snapshot-on-disk
+(real copy under .ofb-snapshots/<ts>/), readonly-root 403 (host flips
+the IDB root row), moved-endpoint 501+moved, /convert 501, rate breaker
+429 at ~19 writes. Test-order lesson: alphabetically-sorted cells put
+the rate-breaker BEFORE later write cells — name it zz_* so it runs
+last (the breaker poisons the write budget for the whole SW lifetime).
+
+P2b CWS pass: manifest storage-only + wasm-unsafe-eval CSP verified,
+all referenced pages/scripts exist (guide.html + guide.js added — the
+/guide endpoint pointed at a page that did not exist), du 52MB / zip
+26.4MB / 58 files, all required entries verified inside the zip
+(dist-stage3/, gitignored — regenerate with zip -qr from extension/).
+
+Skill 3.0-EXT (skill/open-file-bridge/SKILL-EXT.md): extension IS the
+backend (no app/token), permission_needed → Reconnect → "Allow on every
+visit" = persistent (steer users there explicitly), engine_needed →
+open engine tab, OCR all-caps diacritic caveat, moved-endpoint Pyodide
+recipes with bundled wheels, /convert user-message wording, writes
+immediate + snapshot-first.
+
+macOS first-manual-load bug (2026-09-06, Dandan's real Chrome 152):
+"Choose / manage folders…" on options.html was a dead click — no tab, no
+picker. Root cause: **options.js wired #save/#setup at module level
+while loading from <head>** (classic script, body not parsed yet) →
+`null.onclick` TypeError killed the whole script before its
+DOMContentLoaded handlers registered → #setup never wired AND the page
+never loaded settings (on-screen proof: #auditrows stuck at "…", inputs
+empty). Platform-independent — Linux was equally broken; the stage3
+suites never click the options page (they drive setup.html directly),
+which is why the green runs missed it. setup.js documents this exact
+hazard in a comment; options.js was the one page that missed the
+pattern. Fix: both onclick assignments moved inside the page's existing
+DOMContentLoaded listener (grep-audit: setup/guide/open/engine-host
+were already correct).
+
+Same session, second dead end fixed: the toolbar action is titled
+"Open File Bridge — choose folder" but the manifest declares no popup
+and sw.js had no chrome.action.onClicked — the icon did nothing.
+sw.js now opens setup.html on click.
+
+Verification (Dandan's browser, in place, extension reloaded via
+chrome://extensions): options page now loads (20/50/eng defaults,
+"No folder connected yet", "no activity yet"), #setup opens
+setup.html, #pick opens the native macOS open panel ("Select where
+this site can save changes"); cancelled — folder choice left to
+Dandan. Independently confirmed in Playwright "Chrome for Testing"
+1208 on macOS: picker opens from the extension page, cancel resolves
+as AbortError and the page shows "Folder selection cancelled."
+
+Automation lessons: branded Chrome 152 ignores --load-extension (load
+via the chrome://extensions UI, or use Chromium/Chrome-for-Testing
+builds); osascript System Events needs assistive access — the
+AX route (open_panel window + Select/Cancel buttons) is the reliable
+picker probe on this Mac. node --check cannot catch this bug class
+(DOM timing, not syntax) — head <script> pages MUST wire DOM in
+DOMContentLoaded or use defer. dist-stage3 zip rebuilt after the fix.
+
+Local OWUI test wiring (2026-09-06): the owui-test stack (127.0.0.1:8788)
+is plain HTTP, which "matches": ["https://*/*"] never injects into — the
+relay was silently absent on local OWUI. manifest.json content_scripts
+now also match http://127.0.0.1/* and http://localhost/* (match patterns
+carry no port, so every local port is covered; this changes only WHERE
+the relay injects — no new permissions, the SW stays the boundary).
+OPEN PRODUCT QUESTION for the CWS manifest: the LAN topology in the
+store listing is presumably plain http too — does the shipped manifest
+need broader http matching? Left for Dandan.
+
+SKILL-EXT 3.0 staged surgically into owui-test's webui.db (skill row id
+'open-file-bridge', content replaced 28444 -> 9449 chars, updated_at
+unix int; replaced the app-era 2.11.2 token variant). Extension-mode
+needs no token, so no runtime embedding this time.
+
+Pipe verified in Chrome-for-Testing on http://127.0.0.1: sandboxed
+srcdoc iframe postMessage /health -> relay -> SW -> fsRoute -> back:
+HTTP 200 {"version":"3.0.0-EXT","addons":{"pdf":true,"ocr":true},
+"hint":"no folder chosen yet"} — the expected no-grant answer. Relay
+injection on http worked after the manifest change (content-script
+isolated world: main-world evaluate CANNOT see __ofbRelayInstalled —
+probe the pipe, not the flag).
+
+Harness gotcha that burned 30 min: srcdoc assigned as an ELEMENT
+PROPERTY must close its script with a literal </script> — the "<\/script>"
+escape (correct inside a JS template literal) leaves the tag unclosed,
+the script never runs, and the symptom is a silent pipe timeout.
+
+First real-OWUI extension chat (2026-09-07, Dandan's "list my local files"):
+three findings. (1) The listing "failure" was the documented permission
+gate — /health showed perm:"prompt" (the in-place extension reload for
+the loopback-manifest commit resets the session grant), and GET /list
+answers 403 {permission_needed:true, hint: Reconnect} exactly per plan
+§4.3. User action: setup page → Reconnect → "Allow on every visit".
+(2) REAL BUG in SKILL-EXT 3.0 bootstrap, caught by the model's first
+cell (AttributeError: data): ofb_fetch/ofb_fetch_b64 returned
+ev.data.to_py() while on_message stores the ALREADY-unwrapped event
+data in the future — double-unwrap. The session-2 e2e harness had
+ev.to_py(); SKILL-EXT.md drifted when written. Fixed to ev.to_py(),
+H1 bumped 3.0.1-EXT, both OWUI rows restaged (Dandan had manually
+published the body as skill id 'local-file-bridge-ext', is_active=1,
+per the skill's own publishing note; the surgically-updated
+'open-file-bridge' row sits is_active=0 — left as he set it).
+(3) OWUI-side display noise, not ours: cells printing MULTIPLE lines
+showed only the LAST line in the chat transcript, plus a recurring JS
+stderr 'Cannot read properties of undefined (reading includes)' — the
+model never saw its /list 403 (first loop iteration!) and burned cells
+guessing nonexistent endpoints (/ls /dir /entries → correct 404s).
+/list is the correct endpoint; engines/negatives suites already cover
+it. If multi-line stdout keeps vanishing in OWUI chats, prefer one
+json.dumps per cell.
+
+Skill 3.0.2-EXT (2026-09-07, Dandan's suggestion turned two-part): the
+403->Reconnect teaching already existed, but the real chat never SAW
+the 403 (OWUI last-stdout-line-only quirk). Added (1) a PERMISSION
+PREFLIGHT on the first /health — roots[].perm == "prompt" → STOP and
+tell the user toolbar icon → Reconnect → "Allow on every visit", wait
+for confirmation before any other call; (2) a diagnostics rule: ONE
+print(json.dumps(...)) per cell, because OWUI drops all but the last
+stdout line. DB rows left for Dandan's manual paste (his stated
+workflow) — they still hold 3.0.1-EXT until he pastes 3.0.2-EXT.
+
+## Stage-3 session #6: one settings page (toolbar icon == Options) (2026-09-07)
+
+Dandan's ask: the extension's two entries showed two different pages —
+toolbar icon opened setup.html (pick/reconnect only), Options opened
+options.html (folders list + rate limits + audit) — while the desktop
+app's settings page (PICKER_HTML) has 7 cards. Unified: **options.html
+is now the single dashboard**, porting the app page's look (same CSS
+vocabulary: details.sec cards with ▸ rotation, .btnrow, ok/hint/warn,
+fold-state in localStorage `ofb.folded`) and its sections with
+extension semantics:
+
+- 📁 Shared folders — pick (#pick id kept: the stage3 suites wait on
+  it) + root rows (Reconnect / Enable-Disable writes / Remove).
+- 🔒 Security — no origin/token inputs (retired): explains the browser
+  permission gate + relay gates + the always-on floors instead.
+- 🔤 OCR language — checkbox grid (bundled top-8) + free text,
+  two-way sync, saves through the SW's POST /ocr/lang (validation
+  parity); engine line + Open-engine-tab button.
+- 🚫 Ignore patterns — NEW editor (the kv `ignore_global` existed but
+  NOTHING applied or edited it before). fs-core's allIgnorePatterns
+  is now async and merges ignore_global; /list /search
+  /directory_tree + resolveGuarded all await it. This also makes the
+  fs-core 404 hint "ignore patterns are editable in the Open File
+  Bridge settings page" TRUE for the first time.
+- ⏳ Link lifetime — NEW select (same 6 choices as the app) → kv
+  link_ttl (fs-links already read it; default 7 days).
+- 🛟 Safety & recovery — guide button (guide.html), rate limits
+  (writes/min + MiB/min), and a NEW global Read-only checkbox (kv
+  `readonly_global`): resolveGuarded's forWrite path 403s with the
+  same "read-only mode is active" shape as per-root readonly.
+- 👁 What the AI can see — the app's preview card: /directory_tree
+  through the SW PIPE (engine aliveness + one router instance live in
+  the SW — a page-local fsRoute would report its own dead engine
+  state), collapsible folders with open-state preserved across the
+  5 s auto-refresh, lock messages for no-root / perm-prompt.
+- 🕓 Recent activity — the old audit card, kept.
+
+sw.js action.onClicked → options.html (was setup.html); setup.html is
+now a meta-refresh redirect (no script — CSP) so old deep links and
+guide wording keep working; setup.js deleted (merged into options.js).
+manifest action title "— settings". /health now reports
+`engine_alive` (FS_ENGINE_ALIVE heartbeat) so the page can say "engine
+tab not running" honestly — `addons` means BUNDLED, not running (the
+smoke initially showed "PDF ready · OCR ready" with no tab open; wrong
+signal, fixed). guide.html "Pick folder" → "Choose folder…" to match
+the button label.
+
+SKILL-EXT 3.0.2-EXT → 3.0.3-EXT: one wording fix (permission
+preflight said the toolbar icon "opens the setup page"). Stage3 suites
+(spike1/engines/negatives) repointed setup.html → options.html; they
+still wait on #pick, which the unified page keeps (wired synchronously
+inside DOMContentLoaded, ahead of the first await — the a1b8c8d
+head-script lesson). No manifest version bump (3.0.0 unreleased; the
+CWS zip is rebuilt per change).
+
+Verification on this Mac (stage3 suites need Linux/Xvfb — not run
+here): headless Chrome-for-Testing 1208 with the real extension
+loaded: page loads with ZERO console errors; heartbeat
+"Running · v3.0.0-EXT · security: extension · no folder chosen yet";
+every save path round-trips through the SW pipe (ignore_global
+["*.zip","secret-folder/"] lands in /state, ttl 30 days, rate 33/50,
+readonly true, ocr lang swe+eng); fold persistence works; GLM-4.6V
+render review: 9 sections in order, no layout defects. Picker-driven
+paths (grant → tree preview, reconnect) still need the Linux suites —
+next run there should confirm n1-n12 + engines 13/13 unchanged.
+
+## Stage-3 session #6b: extension icon = the app's brand icon (2026-09-07)
+
+Dandan's ask: same icon as the app, or a similar one. Answer: the same —
+the extension had NO icon declared (Chrome showed the generic puzzle
+placeholder). Generated extension/icons/icon-{16,32,48,128,256}.png from
+docs/brand/icon-512.png (the approved C-folder + B-badge final, also the
+.ico/.icns source; `sips --resampleHeightWidth`), wired into manifest
+`icons` (incl. 256 for the CWS listing) + `action.default_icon` (16/32/
+48/128). GLM-4.6V legibility review on light+dark toolbar strips: folder
+recognizable at 16px, no downscale halos, badge detail shrinks but
+identity holds — same tradeoff the app's own 16px .ico entry makes, so
+brand-consistent; no simplified 16px variant needed. Extension still
+loads clean in Chrome-for-Testing with the icons present; zip rebuilt
+(63 entries incl. the 5 PNGs + icons/ dir).
+
+## Stage-3 session #7: worker transport — OWUI 0.11's pyodide WORKER executor (2026-09-09)
+
+Symptom: real OWUI chats ("list files") hung to "Execution Time Limit
+Exceeded" while the extension was loaded, the folder granted, and the
+tab refreshed. Systematic elimination:
+
+1. Extension healthy — a fresh 127.0.0.1 tab in Dandan's own Chrome
+   answered /health in 0.0 s with roots granted (verdict page
+   /tmp/ofb-debug/page.html pattern); content scripts injected.
+2. The OWUI tab itself failed even after reload — not a stale relay.
+3. Ground truth from his owui-local bundle (v0.11.1-crypto44): python
+   cells execute in a pyodide WORKER (CodeBlock + execute_code tool;
+   shared-worker executor with an iframe-sandbox FALLBACK — chunk
+   Cu_6R2Jb.js exports the iframe factory `mm()`). In a worker
+   `from js import parent` ImportError-kills the cell at line 2
+   (reproduced with his pyodide v314.0.3 — which, note, rejects CLASSIC
+   workers, module only). The tool runner then shows its own 60 s
+   "Execution Time Limit Exceeded" instead of the ImportError, which is
+   why this looked like a transport hang rather than a crash. The skill
+   only ever worked in real chats when the iframe fallback executor ran
+   (matches the 2026-09-07 real-chat 403 observation).
+
+Fix (this session):
+- extension/relay.js — new worker pipe: BroadcastChannel("ofb-pipe")
+  listener alongside the window pipe. Workers have no parent window but
+  CAN use BroadcastChannel (same-origin); content scripts share the page
+  origin, so the relay hears them. Per-worker ELECTION: every relay
+  answers an {ofbHello, workerId} with its random tag; the worker keeps
+  the smallest tag and addresses requests {to: tag} so exactly ONE relay
+  forwards (two OWUI tabs must never run a write twice). Security: the
+  channel is same-origin = the page's own scripts, which could already
+  ride the window pipe (isDescendantIframe matches the page's own
+  window; a hostile page can proxy via its own iframes) — no new
+  capability. Both sendMessage call sites now also catch the orphaned
+  content-script throw ("Extension context invalidated") and answer
+  fast instead of hanging the caller to its timeout (long-standing
+  minor bug, found during the hunt).
+- SKILL-EXT.md 3.0.5-EXT → 3.0.6-EXT — bootstrap guards
+  `from js import parent` (ImportError → None), installs BOTH listeners
+  (window + BroadcastChannel) and picks the transport per call:
+  parent.postMessage in an iframe executor, elected-relay
+  BroadcastChannel in a worker. Fast-fails with actionable messages
+  ("no relay answered" / "no transport available") instead of a 60 s
+  timeout; a timeout resets the election (dead tab self-heal).
+  ofb_fetch_b64 is now a thin wrapper (b64 flag) — less duplicated
+  bootstrap code for models to copy.
+- Version bumps: manifest + FS_VERSION 3.0.0 → 3.0.1 (transport
+  capability the skill gates on: "requires extension ≥ 3.0.1"). The
+  "no manifest bump while unreleased" convention from #5/#6 was for
+  cosmetic changes; a capability the skill negotiates needs the stamp.
+- STAGE3-PLAN "relay.js byte-for-byte" invariant amended (§diag + §P6)
+  with the why; TODO §6b records the Linux-suite rerun debt.
+
+Verification (this Mac, real extension from the repo tree):
+tests/stage3/worker_transport_test.py — NEW, Mac-safe (no Xvfb, no
+folder grant needed): extracts the bootstrap VERBATIM from SKILL-EXT.md
+and runs it (a) in a module worker → /health 200 in 0.27 s incl.
+election, body honest ("no folder chosen yet" — scratch profile),
+(b) with a second relay page open → exactly one reply envelope per
+request (election, no duplicate forwards), (c) hello/relay handshake
+observed on the channel, (d) iframe regression: same bootstrap in a
+srcdoc+allow-scripts sandbox answers via parent.postMessage in 0.0 s.
+7/7 green. Harness notes: pyodide dist fetched from the running OWUI
+(like spike1); the scratch server needs CORS (OWUI itself serves
+/pyodide with access-control-allow-origin: null for its opaque-origin
+sandbox) and ThreadingHTTPServer once several pages load the 10 MB wasm
+concurrently; pyodide in an opaque srcdoc needs an ABSOLUTE indexURL
+(its own location.href is about:srcdoc).
+
+OWUI restage: SKILL-EXT 3.0.6-EXT staged to both rows (staged skill +
+Dandan's manual local-file-bridge-ext) via webui.db, updated_at unix
+int — no container restart.
+
+## Stage-3 session #7b: blocking confirmations — the approve-retry LOOP (2026-09-09, later same day)
+
+Dandan's report: overwrite → popup → Approve → "approved" → model
+retries → a NEW popup → forever. Root cause: v1 stored verdicts ONLY
+in the SW's CONFIRM_PENDING map — MV3 SWs die after ~30 s idle, so the
+Approve click usually woke a FRESH worker with an empty map; the click
+was answered "unknown or expired" but confirm.js ignored the response
+and the card still said "✓ Approved". Every retry raised a fresh ask.
+
+Redesign per Dandan's spec (ext 3.0.2 / skill 3.0.7-EXT):
+- fs-confirm: the gated request now BLOCKS on the verdict for
+  CONFIRM_WAIT_MS = 20 s (chosen under the relay's 120 s id TTL, the
+  skill's 60 s cell timeout, OWUI's 60 s executor limit, and the SW's
+  ~30 s idle window, leaving ~40 s for the write). Approve in time →
+  the SAME call executes and returns the real result. Deny → 403
+  denied. No click → 403 {confirmation_required, timed_out: true} with
+  a retry-once hint; the ask STAYS armed so a LATE approve grants the
+  next identical retry (single-use, 5-min TTL).
+- Persistence: asks/verdicts now live in IndexedDB (fs-idb v2, new
+  "confirm" store) — SW death can never eat an approval again.
+  fs-idb connections also close on versionchange now: an options tab
+  holding a v1 connection would otherwise BLOCK the v2 upgrade forever
+  (his options tab was open — would have hung /health on upgrade).
+- sw.js: confirmVerdict is async (IDB) — the verdict listener returns
+  true and answers via .then(sendResponse).
+- confirm.js: honest settle (a rejected verdict shows "⚠ not recorded
+  — ask again in chat" instead of lying "✓ Approved"), plus a live
+  countdown for the 20 s window; meta text updated.
+- Skill 3.0.7-EXT: the confirm section now teaches the one-call flow
+  (approve in time = same call returns the result; timed_out = tell
+  the user, retry ONCE; late clicks still count).
+- confirm_test.py updated to the new contract: NEW c0 (driver approves
+  MID-WAIT from the SW → same call returns 200), c1 expects
+  timed_out, c5's deny now happens mid-wait on the cell's own ask.
+  Linux/Xvfb only — NOT run on this Mac (recorded in TODO §6b).
+
+Verification on this Mac: worker_transport_test 7/7 (regression, incl.
+the fs-idb v2 bump). LIVE end-to-end in Dandan's Chrome (ext reloaded
+to 3.0.2, fresh chat, real popup): "append a line to link-smoke.txt" →
+popup appeared → DANDAN clicked Approve himself (the real-user path;
+the AX-driven click raced his and lost with a stale-element error) →
+the SAME execute_code returned {"ok": true, "written":
+"/link-smoke.txt", "bytes": 35, "snapshot": {...5-byte original}} →
+model confirmed the append. No retry round trip. Side observation:
+the closed-shadow card DOES expose its Approve/Deny buttons to macOS
+accessibility. OWUI rows restaged to 3.0.7-EXT.
+
+## Stage-3 session #9: invisible engines (offscreen) + the engine_alive misread fix (2026-09-09)
+
+Trigger: Dandan's OCR test — the model found the parking image, then asked
+him to open the engine tab WITHOUT ever calling /ocr. Root cause chain:
+(1) auto-open already existed (34fe464, default ON, background tab), so
+the extension was fine; (2) the SKILL documents /health fields but not
+engine_alive (added session #6 for the settings page) — the model saw the
+undocumented "engine_alive": false next to "addons": {pdf:true,ocr:true}
+and concluded OCR was unavailable; (3) the skill's only engine guidance
+was the 409 fallback wording, which the model mirrored verbatim. His ask:
+skip asking the user entirely — run OCR invisibly.
+
+Why not ON the OWUI page (his first idea): page CSP governs content-script
+wasm/blob-workers (the Stage-3 gotchas that forced extension pages);
+engine files would need web_accessible_resources; the engine page also
+holds the folder-grant session alive. Right mechanism: OFFSCREEN DOCUMENT
+(chrome.offscreen, MV3's built-in hidden background page):
+
+- extension/engine-offscreen.html — loads the SAME fs-idb/fs-core/
+  engine-host.js chain (engine-host.js guards every getElementById, so it
+  runs with no DOM). engine-host.html tab stays as manual fallback.
+- fs-engine.js: engineEnsureTab → engineEnsureHost — offscreen-first
+  (reasons ["BLOBS"], justification names the wasm engines; single-
+  document error treated as success), tab fallback if the API is absent.
+  Both the cold path and the stale-heartbeat retry now use it.
+  engineNeededBody wording: auto-start normally handles it — retry once;
+  user opens the engine tab from settings only if it persists.
+- manifest: + "offscreen" permission, minimum_chrome_version "109",
+  version 3.0.3. fs-core FS_VERSION 3.0.3-EXT.
+- /health gains engine_alive_hint ("false is NORMAL before the first
+  engine call — engines auto-start (invisibly)…") so even a model that
+  never read the skill cannot misread the field.
+- SKILL-EXT 3.0.8-EXT: "Engines start themselves — never ask the user":
+  engines lazy-start on the first engine call, engine_alive:false is the
+  normal resting state and NOT a blocker, 409 → retry once then settings
+  fallback; /health field list documents engine_alive explicitly;
+  requires-extension note now explains 3.0.1–3.0.2 = tab auto-start vs
+  ≥3.0.3 = invisible.
+- options page: toggle renamed "Auto-start the engines when needed"
+  (#engauto id kept — engines_test waits on it), engstat idle text now
+  "auto-starts on the first PDF/OCR call (nothing to open)"; guide.html
+  engine section rewritten (auto-start is the norm, tab is fallback).
+- engines_test e13 upgraded: after the auto-start cell the driver asserts
+  NO engine-host tab exists in the context — a tab means the offscreen
+  path failed and fell back; verdict fails with an explicit note.
+
+Verified headless Chrome-for-Testing 1208: engineEnsureHost() called IN
+the service worker creates the offscreen doc; its hello flips
+/health engine_alive to true within seconds; an ofbEngine RPC for
+'no.such.op' is answered "engine not loaded" (listener live) while
+'pdf.text' answers a payload error (engine-impl.js IMPORTED + handler
+registered in the offscreen doc); zero engine-host tabs; settings-page
+smoke clean (3.0.3-EXT, new engstat, no console errors). Linux suites
+still pending (as with all picker-driven paths); the full wasm op path
+is covered there by e13. Live check for Dandan after reload: the OWUI
+chat should now just DO the OCR (first call ~5–15 s slower); also watch
+that the offscreen host keeps the folder-grant session alive the way the
+tab did (untested headless — no grant in the smoke).
+
+## Stage-3 session #10: five OCR-round bugs from Dandan's parking-sign chat (2026-09-09)
+
+His transcript (model reading a Swedish parking sign) exposed five real
+bugs in one flow; the popup was the headline:
+
+1. **False-alarm overwrite confirmation** — the model called POST
+   /ocr_pdf (the searchable-PDF WRITER) with the image as input and NO
+   out; fs-confirm's `b.out || b.path` fallback treated the INPUT as the
+   write target and asked to "overwrite parking_images….jpg" (Dandan
+   denied — right instinct; even approved, engineCall's next check 400s
+   "missing out", so nothing could have written). Fix: engine write ops
+   (/pdf_op /ocr_pdf) gate on `out` ONLY; restores keep `path` (it IS
+   their target). confirm_test A3 unit added.
+2. **/image_info 500 "imageInfoFromHeader is not defined"** — the header
+   parser was never ported to the extension (only the call site
+   existed). Ported from the app (file_bridge.py:1691): PNG/GIF/BMP/
+   WebP(VP8/VP8L/VP8X)/JPEG SOFn walk + EXIF orientation + effective
+   dims; head slice 128 → 64 KB to match. engines_test e14 asserts it
+   on a real fixture.
+3. **POST /ocr → 404 "unknown engine endpoint"** — engine endpoints are
+   method-locked but the fall-through hid it; the model went
+   endpoint-guessing. fsEngineRoute now 405s with the contract
+   ("/ocr is GET-only — use GET /ocr?path=…&lang=… (URL-encode '+' as
+   %2B)") for all four endpoints. e14 covers it.
+4. **500 "engine not loaded: ocr" right after auto-start** — engine-host
+   hello'd at DOMContentLoaded, seconds before engine-impl.js finished
+   registering (alive=true but handlers empty). The first hello now
+   fires only after registration; not-alive stays the safe resting
+   state. Smoke asserts an IMMEDIATE post-alive ocr RPC hits the
+   registered handler.
+5. **URL-encoded lang silently fell back to eng** — the model properly
+   sent swe%2Beng; parseQueryString is deliberately raw and nothing
+   decoded lang → sanitizeLangs rejected "swe%2Beng" → eng fallback →
+   garbage OCR of the Swedish sign (his final answer was mostly
+   "10-19, unclear"). Fix: decode q.lang/body.lang via unquoteComp at
+   the engine routing boundary. engines_test e15 asserts lang=="swe+eng"
+   AND the åäö/digit probes on swe.png with the encoded form.
+
+ext 3.0.4 / skill 3.0.9-EXT (version-string touch-up only). Headless
+smoke: all five PASS (gate unit no-out→null / asked=out.pdf; crafted
+PNG parses 256x200; 405 both directions; immediate RPC = domain error
+not "engine not loaded"; decode primitive; zero engine-host tabs).
+Linux suites pending as always; e14/e15 + confirm A3 cover the rest
+there.
+
+## Stage-3 session #11: efficiency round from the good parking-sign chat (2026-09-09)
+
+The re-test worked end-to-end (swe+eng applied, engines invisible, no
+popup) in 6 cells — the log still showed three things worth fixing:
+
+1. **Router-wide method-aware 405.** POST /image_info and GET /link
+   still fell to the generic 404 "unknown endpoint" (only ENGINE
+   endpoints had the method teaching). fsRoute's fall-through now
+   checks a derived endpoint→method table (GET set incl. moved reads;
+   POST set incl. moved writes + /link) and 405s with the contract.
+   Verified matrix: POST /image_info, GET /link, GET /write, POST
+   /read, DELETE /list all teach; /files stays an honest 404. This
+   closes the extension-side twin of app docs/TODO.md §6 (405-hint).
+2. **OCR small-image upscale (the real quality win).** ocrImage fed the
+   raw blob to tesseract — real-world sign photos OCR as near-garbage
+   at every language. Now images with short side < 800 px are upscaled
+   to ~1200 px (max ×3, high-quality smoothing, OffscreenCanvas) before
+   recognize; PDF pages (200 dpi renders) are untouched. A/B through
+   the REAL engines headless: a 400×300 canvas sign read
+   "p | 10-19 | (10-19) | 1 april | TIMAVGIFT" — identical to the
+   1600×1200 control, +0.3 s. WATCH on the next Linux run: e7/e8/e10/
+   e15 fixtures under 800 px short side now take the upscale path —
+   if any probe flips, tune the threshold (not the assertions).
+3. **Skill 3.0.10-EXT efficiency teachings** (all from observed model
+   behavior): method cheat + "/list is THE listing endpoint — /files
+   /ls /dir /entries do not exist, don't discovery-scan"; NEVER print
+   inside a loop (cell 6's per-iteration prints made the model's own
+   /image_b64 result invisible to it — OWUI last-line quirk); 405
+   joins the error shapes; /image_b64 → data-URL markdown display
+   convention (was missing from SKILL-EXT entirely); OCR flow: report
+   the best read + SHOW the image instead of burning cells re-trying
+   languages.
+
+Automation lesson: playwright 1.58 ServiceWorker.evaluate SILENTLY
+returns undefined for function-form expressions ((x) => …) — string
+expressions only (cost a debugging cycle in the A/B script).
+
+ext 3.0.5 / skill 3.0.10-EXT; OWUI rows restaged; e14 extended (POST
+/image_info + GET /link 405 asserts); zip rebuilt.
+
+## Stage-3 session #12: confirmation/recovery UX from Dandan's tests 1+2 (2026-09-09)
+
+Two asks from live testing of the confirm + recovery flows:
+
+1. **Expired popups no longer squat in the corner.** A timed-out card
+   used to sit there with dead buttons (and a late Approve lingered
+   with "can retry" text). confirm.js's countdown tick now flips the
+   card at zero to "approval window closed — nothing was changed; ask
+   again in chat" and removes it after 1.6 s. Late-click semantics
+   change with it: there is no late click anymore — the assistant's
+   one retry raises a FRESH ask, which is the cleaner flow (new popup,
+   full 20 s window). The SW-side late-grant path stays (harmless).
+2. **Restores say restore.** /versions/restore + /trash/restore get
+   their own op tag "restore" (same gating as overwrite, scope "all"):
+   popup header "Restore previous version — approval needed", summary
+   "restore old version of notes.md (<ts>)" / "restore deleted gone.txt"
+   — no more "overwrite notes.md" for a restore.
+3. **POST /versions/read {path, ts}** — read a snapshot WITHOUT
+   restoring (Dandan's model restored just to read the old version;
+   the restore then asked to overwrite). ts is validated against the
+   snapshot-stamp shape (^YYYYMMDD-HHMMSS-xx$, traversal-proof), the
+   snapshot tree is walked by handle like epRestore (it is
+   ignore-listed so resolveGuarded can't address it), text by default
+   (MAX_READ cap + truncated flag) or "b64": true (MAX_BINARY cap).
+   Reads never ask for approval. Registered in ROUTE_POST; taught in
+   skill 3.0.11-EXT ("do NOT restore just to read").
+
+Tests: confirm_test A4 (restore tag + wording units), c7
+(versions/read end-to-end: approved overwrite → snapshot → read old
+content, live file untouched), c8 (card lifecycle: present mid-wait,
+data-ofb-cards back to 0 after expiry — the old B_popup_card_rendered
+relied on the lingering card and would now fail, so it moved onto c8's
+fresh ask). Headless: label units + versions/read contract matrix
+(400/400/400-traversal/503) + settings smoke clean. ext 3.0.6-EXT;
+OWUI rows restaged; zip rebuilt.
+
+## Stage-3 session #13: restart cycle verified GOOD (Dandan, 2026-09-10)
+
+Full Chrome exit → restart → OWUI → "list my files" worked DIRECTLY:
+no Reconnect, no permission bubble. This is the persistent-grant happy
+path: Dandan chose "Allow on every visit" during an earlier reconnect,
+and Chrome stores that per-extension+folder — queryPermission returns
+"granted" across browser restarts, so the skill's preflight sees
+perm:"granted" and proceeds. The offscreen engine host needs to keep
+nothing alive in this mode.
+
+The two permission paths are now BOTH live-verified:
+- persistent grant ("Allow on every visit") + browser restart → works
+  directly (this test, 2026-09-10);
+- session grant ("Allow this time") or EXTENSION RELOAD (chrome://
+  extensions → reload resets the grant even when persistent) → perm
+  "prompt" → skill preflight stops → Reconnect → "Allow on every
+  visit" (verified 2026-09-07 + 2026-09-09). Expect one reconnect
+  after every extension update Dandan loads in place.
+
+## Stage-3 session #14: recovery guide at app parity + 30-day-claim fix (2026-09-10)
+
+Dandan: the extension's guide.html was a stub next to the app's
+docs/recovery-guide.html (which documents storage locations and the
+chat workflows for listing/restoring versions). Rewrote it at full
+parity — same 10-section structure (protection table, restore version,
+trash, messed-up walkthrough, batch regret, rate brake, safety
+settings, storage limits, troubleshooting, FAQ) with EXTENSION-TRUE
+facts where the models differ:
+
+- Snapshots/trash live INSIDE each shared folder (.ofb-snapshots/,
+  .ofb-trash/, .ofb-chunks/), hidden from the AI by the ignore floor —
+  so the guide teaches the Finder/Explorer manual recovery path
+  (copy the file out of .ofb-snapshots/<ts>/ yourself), which the app
+  deliberately can't offer (its store is outside the folder).
+- The approval cards are documented as the extra safety net the app
+  doesn't have (creates never ask; restores worded as restores).
+- Reading an old version without restoring (POST /versions/read) is
+  the documented "peek" step in the walkthrough.
+- Storage limits: 8 MB/file snapshot cap (same as app), but NO
+  auto-expiry/pruning exists in the extension — guide says "kept until
+  you delete them; the AI can't (those folders are invisible to it)".
+
+That last point exposed an inherited-wording bug: options.html claimed
+a "30-day trash" in three places (app-true, extension-false — no
+expiry code exists). All three fixed to honest wording. Bumped ext
+3.0.7 (guide ships in the zip). Render-verified headless: 10 sections,
+version stamp 3.0.7-EXT, zero console errors; GLM-4.6V review clean
+(no breakage; density matches the app guide by design). Skill
+untouched (its trash wording was already claim-free) — no restage.
+
+## Stage-3 session #15: trash auto-expiry + bigger guide type (2026-09-10)
+
+Dandan's two asks:
+
+1. **Trash auto-expiry (30 days, app parity; ext 3.0.8).** MV3 SWs have
+   no reliable timers, so the sweep is OPPORTUNISTIC: sw.js fires
+   maybeSweepTrash() unawaited on pipe traffic, throttled once per 24 h
+   (in-memory check first — free after the first call per SW lifetime —
+   then a kv stamp across restarts). Entry age comes from the directory
+   NAME (tsStamp shape, local time; regex-matched, rollover dates land
+   in the future = kept — conservative direction only); unparseable
+   names are never touched. removeEntry recursive per stale dir,
+   audited as op trash-expiry. Snapshots are NOT pruned (they are the
+   undo net; the 8 MB/file cap is their limit). sw.js also answers a
+   non-pipe {ofbTrashSweep, force} message — the test hook. NOTE:
+   omitted force === force (only explicit false throttles) — bit me in
+   the smoke before I re-tested.
+   negatives_test n13: craft 1999-stale + yesterday-fresh trash dirs ON
+   DISK, force the sweep from the extension page, assert stale gone +
+   fresh file intact; folded into the verdict (and root restored to
+   readwrite after n8's flip).
+2. **Guide type up.** body 16→18px / line-height 1.65, h1-h3, code/pre/
+   table/hint scaled with it. Retention text updated everywhere the
+   guide/options described manual-only retention: trash = 30-day
+   auto-expiry (FAQ entry added), snapshots = kept until you empty
+   them. GLM-4.6V: comfortably readable, no regressions.
+
+Verified headless: parser units (valid→epoch, garbage→null,
+rollover→future-kept), forced sweep {removed:0} on a root-less profile,
+explicit force:false → {skipped:"throttled"}. Guide renders 10 sections
+at 18px, zero console errors.
+
+Session #15b (2026-09-10): Dandan's layout ask — the 🚫 Ignore
+patterns card moved to sit directly above 👁 What the AI can see (was
+between OCR language and Link lifetime). Better pairing: the patterns
+drive exactly what the preview below shows. ext 3.0.9, smoke green.
+
+## Stage-3 session #16: audit log capped at 1000 rows (2026-09-10)
+
+Dandan's ask: keep the most recent 1000 audit rows, trimmed by the same
+opportunistic once-a-day sweep. maybeSweepTrash → maybeSweepMaintenance
+(trash TTL + audit cap; sw.js hook message name ofbTrashSweep kept for
+the negatives contract). auditTrimOver: VERSIONLESS raw IDB open,
+getAllKeys, one IDBKeyRange.upperBound delete of everything older than
+the newest 1000 (autoIncrement keys are monotonic); trimmed count
+audited as op audit-trim. options.html card says "keeps the most
+recent 1000".
+
+BONUS BUG this uncovered: options.js's audit reader opened the DB
+pinned at version 1 — since fs-idb went v2 (confirmation round), that
+open throws VersionError, so Dandan's Recent activity card has been
+showing "audit unavailable" since 2026-09-09 (fresh-profile smokes
+masked it via a v1-creation race). Fixed: versionless open (readers
+never request upgrades). auditTrimOver follows the same rule.
+
+negatives n14: seed 1005 rows (single tx, oldest marked), force the
+sweep, assert oldest-gone / newest-kept / count bounded + trim row.
+Headless: seeded 1005 → sweep {removed:0, auditTrimmed:5} → count 1001
+(1000 + the trim's own row), card renders rows, zero console errors.
+ext 3.0.10.
+
+## Stage-3 session #17: vision-input truth ported to SKILL-EXT (2026-09-10)
+
+Dandan asked whether the skill teaches that the ONE real vision path
+is the user attaching the image to their chat message. Answer was
+split: app SKILL.md + SKILL-TOKEN.md carried the "Truth about vision
+input" paragraph; SKILL-EXT.md did NOT — it taught the display
+convention (/image_b64 + data-URL markdown echo) and the OCR-garble
+fallback, but never the attach escalation, so an extension-mode model
+had no taught answer for "I actually need to SEE this."
+
+Ported the paragraph verbatim after the display-convention paragraph
+in the OCR notes (both referenced endpoints exist in the extension —
+/image_b64 and /pdf_text?mode=images, engine-impl renders pages as
+png_b64 at RASTER_SCALE 2). No extension code change; skill-only bump,
+app untouched. skill 3.0.12-EXT; both OWUI rows restaged (table is
+`skill` in this OWUI — has its own is_active column; frontmatter
+stripped for Dandan's manual local-file-bridge-ext row, full file for
+the open-file-bridge row; updated_at unix int, no restart).
+
+## Stage-3 session #18: OCR languages to app parity (21) + alphabetical order (2026-09-10)
+
+Two asks from Dandan in one arc. First: reorder the language lists
+alphabetically (his "pdf ticker" — the lists the MODEL sees; the options
+tick-boxes were already name-sorted since the unified settings page).
+Second, after a sizing sanity check: bring the bundled set to app
+parity.
+
+Sizing verdict first (drove the go decision): CWS hard limit is 2 GB,
+package went 52 → 94 MB (31 → 74 MB of traineddata) — no rejection
+risk; nothing OCR loads at browser start (engines lazy, offscreen doc
+spins up on first engine call); several OWUI tabs never multiply the
+engine (single offscreen doc + relay election; tabs only add relay
+scripts). Bundling ≠ loading: a worker fetches only the langs named in
+its lang string. The one dead byte: osd.traineddata (10.6 MB, the
+biggest single file) is bundled but NOTHING in the extension references
+it — kept for now (dropping it wasn't asked; it's a free −10.6 MB if we
+ever want it, and the app bundles it too).
+
+Changes (ext 3.0.11 / skill 3.0.13-EXT):
+- 13 fast models copied src/tessdata → extension/vendor/tessdata-fast
+  (fin hun pol est rus lit lav ita jpn chi_tra por kor ara; byte-
+  identical to the app's — same fast variants, quality parity by
+  construction).
+- FS_OCR_LANGS (fs-engine) + ENG_OCR_LANGS (engine-impl) → 21 langs in
+  alphabetical code order; /health's ocr_langs_available and
+  /ocr/config's available now come out sorted (the options tick-boxes
+  keep name-sorting at render, unchanged).
+- options.js LANG_NAMES +13 names (wording matches the app page).
+- SKILL-EXT: bundled-langs line now the 21-lang alphabetical list with
+  an "older builds have 8 — trust /health" note; H1 3.0.13-EXT; stale
+  "`/version` reports 3.0.6-EXT" refreshed to 3.0.11-EXT.
+- engines_test e11 now asserts avail == 21 AND avail == sorted(avail).
+- Static checks green (suite itself is X11-only, Linux run pending,
+  TODO 6b): node --check on all touched JS; arrays ↔ 21 non-osd files
+  exact both ways; alphabetical; every code passes sanitizeLangs'
+  ^[a-zA-Z_]{2,8}$ (chi_sim/chi_tra are exactly 8); eng==fs arrays;
+  LANG_NAMES covers all 21.
+
+Both OWUI rows restaged to 3.0.13-EXT (same recipe as session #17).
+Dandan's live check after reloading the unpacked ext: options page
+tick list shows 21, chat /health lists them alphabetically.
+
+## Stage-3 session #19: OFB CI Vision filter — models SEE code-output images (2026-09-10)
+
+Dandan's ask after the vision-input study: build Option A — a no-fork
+OWUI Filter that closes the code-interpreter vision gap. The study
+(found in his owui-test 0.11.1 container) showed OWUI already has
+~90% of the machinery: stdout data-URL lines are uploaded + rewritten
+to ![Output Image](/api/v1/files/<id>/content); convert_output_to_
+messages(flatten_tool_images=True) already emits a synthetic USER
+message with image_url parts ("Here are the images from the tool
+results above") — but ONLY for native tool_call outputs, never for
+code-interpreter items, whose output reaches the model as text inside
+<code_interpreter_output> tags.
+
+NEW: owui-filters/ofb_ci_vision.py — global filter, ~200 lines,
+stock-OWUI 0.11+, no fork/patching. Inlet scans the LAST assistant
+message's <code_interpreter_output> sections for BOTH forms (the
+rewritten /api/v1/files/<id>/content refs AND raw data URLs printed
+anywhere in the output text — the JSON-embedded case OWUI's full-line
+rewrite misses, which is exactly what his parking-sign chat produced),
+resolves them to data URLs (file refs via Files.get_file_by_id +
+Storage.get_file IN-PROCESS, owner-checked: requesting user or admin
+only — the HTTP API enforces that and the filter must not weaken it),
+and appends a [ofb-ci-vision]-marked synthetic user message with
+image_url parts. Strips its own earlier synthetic messages from
+history (base64 token hygiene); valves: max_images=3, max_image_mb=8,
+inject_for_all_models (no server-side vision flag exists in 0.11 —
+gate is opt-out only via explicit capabilities.vision=False). Any
+internal error → passthrough (inlet exceptions fail the whole chat).
+
+Verified:
+- Unit 15/15 in-container (owui-filters/ofb_ci_vision_test.py; docker
+  cp + PYTHONPATH=/app/backend): no-op on plain chats, both attachment
+  forms, dedupe, label from markdown alt, stale-marker strip, caps,
+  size gate, vision=False gate, error passthrough, outside-CI ignored.
+- Staged via admin API (functions/create + toggle + toggle/global —
+  no DB surgery, no restart) into owui-test.
+- INTEGRATION, real model: uploaded the actual parking-sign jpg, sent
+  a request shaped like a real CI continuation (assistant message with
+  <code_interpreter_output> containing the file ref) to local-file-
+  access (vision=True) — the model described VISUAL details never
+  present in the text: blue sign, "1 tim", "10–19", red 10–19 text,
+  no-play/ball-games sign. docker logs show the filter fired
+  ("attached 1 image(s) from code output"). Regression: plain chat
+  unaffected.
+- NOTE the flip this causes in skill truth: with the filter installed,
+  printing d["data_url"] as its OWN stdout line in the cell (then the
+  json summary LAST — last-line display quirk) gives a vision model
+  direct visual input on its next turn. SKILL-EXT 3.0.14-EXT replaces
+  the "Truth about vision input" paragraph with "Vision input — three
+  honest paths" (print-in-cell w/ filter / OCR / ask-user-to-attach);
+  both OWUI rows restaged.
+
+Remaining for Dandan: one live UI test — fresh chat, code interpreter
+on, "look at the parking sign image and describe it" (no OCR words);
+expect the model to fetch /image_b64, print the data URL, and describe
+the sign visually. If his OWUI model skips the print, the skill
+teaching needs a nudge.
+
+## Stage-3 session #19: options page — ticks/selects apply immediately (2026-09-10)
+
+Dandan's diagnosis: a tick that shows but isn't stored is a lie. The
+page itself already proved the immediate-apply pattern (read-only
+toggle, engine auto-start, confirm-scope select all save on change with
+no button); the four remaining Save buttons were the inconsistency.
+Decision (his call after my per-control assessment): OCR language ticks
+and the link-lifetime select go immediate; rate limits and ignore
+patterns KEEP their explicit Save (number inputs have invalid
+intermediate states; a half-edited pattern set silently active can hide
+files from the AI).
+
+Changes (ext 3.0.12 / skill 3.0.15-EXT):
+- OCR card: "Save language" button gone; every tick/untick POSTs the
+  full current set immediately (each intermediate state is complete and
+  valid). The free-text input is now a READ-ONLY summary of the stored
+  set — the worst fake-state offender was typing ("sw" looks like a
+  choice, stores nothing); as a readout it always shows truth. Unticking
+  the last box is refused client-side with the stored set re-ticked
+  (endpoint already 400s "bad lang" on empty — store can't corrupt).
+  The langDirty/langSig heartbeat clobber-guard is deleted — with
+  nothing unsaved, the 5 s beat re-rendering from /health is always
+  safe; the sig check now only avoids DOM churn.
+- Link lifetime: "Save" button gone; select applies on change, same as
+  confirm-scope. refresh() sets the value programmatically (fires no
+  change event), so no save loop.
+- SKILL-EXT: the "/version reports 3.0.11-EXT on current builds" line
+  went stale at EVERY ext bump — reworded once to name the running
+  build as the source of truth with 3.0.12-EXT as the writing-time
+  snapshot. That plus the H1 stamp is why skill 3.0.15-EXT (3.0.14 was
+  taken by the parallel CI-vision-filter round, fb47476, which landed
+  between this session's code edits and its commit).
+
+Static checks: node --check both JS files; every getElementById target
+exists in the HTML; no savelang/savettl/langDirty references anywhere;
+tests unaffected (engines_test only waits on #engauto, untouched).
+Both OWUI rows restaged to 3.0.15-EXT. Dandan reloads the unpacked ext
+to see it: ticks save on click, lifetime saves on select.
+
+## Stage-3 session #20: options-page text diet (2026-09-10)
+
+Dandan's asks: drop the eng+swe read-only box and the tesseract-syntax
+paragraph, drop the "origin lock and token" security sentence, and trim
+UI copy generally. Plus his question: WHY "only the OWUI page's own
+code-interpreter sandbox can reach the bridge"?
+
+That sentence turned out to OVERCLAIM. What's actually true (relay.js
+header + sw.js): the relay content script injects into EVERY matching
+page (all https + localhost), and it accepts bridge requests only from
+(1) postMessage by descendant iframes OF THAT SAME PAGE (frame-tree
+walk; cross-origin walk failure rejects) or (2) the same-origin
+BroadcastChannel "ofb-pipe" (worker transport) — other windows/tabs
+cannot post INTO a page's relay. But the service worker does NOT check
+the sender's origin (sw.js handleOfbRequest takes senderTabId only for
+the confirm gate), and relay.js's own header admits "a hostile page can
+proxy through its own iframes — no new capability is granted". So the
+real boundary is NOT "only OWUI's sandbox"; it's the SW-side gates
+applied to whatever request arrives: per-op folder-grant re-check,
+folder confinement, ignore floor (credentials refused), rate brake,
+confirm cards, read-only mode. The UI sentence was replaced with the
+defensible claim: "Every read and write is re-checked against the
+folder grant stored in this browser before it runs."
+
+Removed (Dandan's explicit asks): the ocrlang read-only box (the ✓
+status line under the ticks is the readout now; JS tracks langSaved as
+the truth set for the empty-tick guard — syncBoxes deleted) + its CSS
+rule, and the whole "Ticks combine automatically in tesseract
+syntax…" paragraph (the combo-langs teaching lives in the skill, where
+the model needs it — the user just ticks boxes).
+
+Trimmed (duplications and restatements): header intro second sentence
+(duplicated the Security card), confirm-card paragraph's
+overwrite/trash tail (stated verbatim one paragraph above), link
+lifetime "a longer lifetime means … clickable for longer" (restated the
+first sentence), Safety card's overwrite/trash detail + "opens the
+guide for your installed version" + rate-brake parenthetical, ignore
+patterns "not listed, not readable, and … at any depth" compaction,
+preview card "Folders are collapsible / while this tab is visible",
+activity-card "older rows are trimmed daily". Engine texts shortened
+("Manual fallback — engines start by themselves when first needed";
+engauto loses the "hidden background document" mechanics).
+
+VERSION NOTE: no ext bump in this commit — a parallel session has an
+uncommitted /image_b64 downscale feature that already stamped manifest
++ fs-core to 3.0.13 in the working tree; this text round rides into
+that bump instead of colliding (second interleaving today; always
+check git log + working-tree manifest before stamping).
+
+## Stage-3 session #20: /image_b64 resizes big images before b64 (2026-09-10)
+
+Dandan's follow-up on the CI-vision arc: small images work, but big
+ones take too long as base64 — resize FIRST in the extension, then
+encode. Wrong to fix in the filter: resizing at the source shrinks
+every hop (cell stdout, event round-trip, OWUI upload, filter re-
+encode, provider request) AND cuts vision token cost (providers charge
+by resolution). Bonus: this round also closed a parity LIE — EXT
+/image_b64 returned bare {path,size,b64} while SKILL-EXT claimed
+"same shapes as the app" (app: {mime,width,height,bytes,shrunk,
+data_url} + max_bytes auto-downscale via pymupdf). Dandan's live
+"works for small images" only worked because the model improvised the
+data: prefix onto b64.
+
+Changes (ext 3.0.13 / skill 3.0.16-EXT — 3.0.15 taken by session #19's
+commit ae3edfb; the follow-up text round 5cb0b0f rode this same ext
+3.0.13 stamp by agreement):
+- fs-core.js: fsImageToDataUrl(file, {maxBytes, maxEdge}) — EXIF-aware
+  decode (createImageBitmap imageOrientation:"from-image"), byte-
+  identical passthrough under BOTH caps, else OffscreenCanvas redraw
+  (high-quality smoothing) + re-encode (original mime; gif/bmp→png;
+  over-cap png/webp retries jpeg 0.85; halve loop, 64px floor = app
+  parity); undecodable bytes degrade to raw passthrough (app's
+  no-pymupdf behavior). Browser codecs — no engine, no addon, runs in
+  the SW.
+- fs-adapter.js epImageB64: params max_bytes (50k–8MB, dflt 4MB = app
+  parity) + max_edge (0–8192, dflt 2000, 0=off); response now
+  {path,mime,width,height,bytes,shrunk,orig_*,b64,data_url} — b64 kept
+  for compat, data_url is the vision/display contract.
+- Verified on the Mac (chrome-devtools-mcp evaluate, real fs-core.js
+  served over http): 10/10 — worst-case 41 MB 12MP noise PNG →
+  2000×1500 jpeg 1.58 MB in 759 ms; byte-identical passthrough under
+  caps; byte-driven-only shrink (edge under cap); fake-bytes raw
+  passthrough; hand-crafted EXIF Orientation=6 jpeg (3000×2000 stored)
+  resized as PORTRAIT 1333×2000 (from-image works); max_edge=0
+  disables; data_url decodes with matching dims. Real photos compress
+  far easier than noise, so 759 ms is the pessimistic bound.
+- SKILL-EXT vision paragraph + OCR display convention updated (auto-
+  resize facts, tune via max_edge/max_bytes, /read_b64 for ORIGINAL
+  bytes); both OWUI rows restaged to 3.0.16-EXT.
+
+Pipe-level (Linux X11 suite) rerun still owed by the stage3 backlog;
+the endpoint's response-shape change is additive (b64 kept) so old
+recipes keep working. PDF mode=images pages can still be big (png_b64
+at RASTER_SCALE 2) — resize there is future work if it bites.
+
+## Stage-3 session #21: the 4-minute "hang" — OWUI UI dies on big stdout lines (2026-09-10)
+
+Dandan's live test of the vision path on IMG_9502.jpeg (4284×4284,
+4.1 MB): chat froze >4 min on the third execute_code. The extension
+audit showed /image_b64 → 200 at 922633 B (the RESIZED output — the
+resize itself was fine), and docker logs showed total silence after
+it: no upload, no continuation call. Two parallel sessions both
+stamped #19/#20 today — numbering is officially a mess, this is
+session #21.
+
+Debug trail:
+1. Resize ruled out: same image through the real fs-core.js in a
+   service worker (chrome-devtools-mcp + a registered /sw.js) —
+   683 ms, same 922633 B output.
+2. OWUI logs: pyodide loaded 20:52:52, extension answered 20:53:01,
+   then NOTHING server-side. The result never returned from the
+   browser to the backend (event_caller awaiting forever; an earlier
+   "session not owned or disconnected" socket warning was a red
+   herring from a page reload).
+3. REPRODUCED WITHOUT THE EXTENSION in the MCP-controlled Chrome:
+   asked the model (code interpreter on) to print one 1.2 M-char
+   line. The page's MAIN THREAD BLOCKED — even trivial synchronous
+   evaluate_script timed out. pyodide's stdout capture is per-line
+   (worker appends self.stdout += line), so the killer is whatever
+   the OWUI main thread does with a giant stdout line after the
+   worker posts it back (suspects: socket payload processing,
+   sanitizer/highlighter, or Svelte rendering — not worth
+   localizing precisely in minified code).
+4. Bisect on the REAL chat pipeline: 300 k-char line ✓ fast;
+   600 k-char line ✓ fast ("DONE600"); 1.2 M ✗ frozen tab. The
+   hazard zone starts somewhere between 600 KB and 1.2 MB of ONE
+   stdout line. Dandan's 922 KB image → 1.23 M-char b64 line = deep
+   in the kill zone.
+
+Fix (ext 3.0.14 / skill 3.0.17-EXT): keep printed data URLs under
+the boundary. epImageB64 default max_bytes 4 MB → 350 KB (explicit
+larger values still allowed up to 8 MB — the hint says only for
+bytes NOT printed into a cell); SKILL-EXT vision snippet now passes
+max_bytes=350000 explicitly (older exts default 4 MB, so explicit
+protects them) and the resize paragraph documents the hazard. His
+exact image under the new default: 1000×1000 jpeg, 282 KB, 377
+k-char line, 727 ms — verified through the real fs-core.js in-page.
+
+Filter untouched (the hang is upstream of it). Two test chats left
+in his OWUI ("Printing Repeated Characters" — dead tab, closed;
+"Large Output Generation"). The OWUI-side proper fix (chunk/emit
+giant stdout without blocking) would be an upstream issue — noted
+for the community-publishing backlog.
+
+## Stage-3 session #22: the REAL ceiling — OWUI truncates cell stdout at ~66k–160k chars (2026-09-10)
+
+Dandan's retest of the vision path (ext 3.0.14, max_bytes=350000): no
+freeze anymore (376 k-char line returned, model answered — session #21's
+fix held), but NO upload, NO filter attachment; the model saw only the
+summary line and correctly asked the user to attach per the skill
+fallback. New stderr "Cannot read properties of undefined (reading
+'includes')" turned out to be the KNOWN benign quirk (OWUI's worker
+fires a stray no-code execution: He(id, undefined, files) →
+code.includes throws; recorded 2026-09-07) — red herring.
+
+Controlled sweeps in the MCP Chrome (real chats, code interpreter, NO
+extension), two-line print: data URL line FIRST, summary LAST:
+- 250-char real PNG: FULL CHAIN ✓ — middleware uploaded, rewrote to
+  ![Output Image](/api/v1/files/…), filter attached, model SAW it
+  ("the attached image is black" — my hand-rolled red PNG reads dark;
+  attachment perception is the proof).
+- 65,842-char real PNG (noise 128²): FULL CHAIN ✓ — upload_file_handler
+  logged, file 062ca397 created, model answered (a) ![Output Image](
+  (b) SUMMARY-DONE (c) YES attached.
+- 160,426-char real PNG (noise 200²): DEAD — model's first line
+  "Neither" = a PARTIAL base64 fragment: the frontend TRUNCATES the
+  returned stdout KEEPING THE TAIL somewhere between 66 k and 160 k
+  chars. No upload (line no longer starts with data:), no filter match,
+  no attachment. This is exactly Dandan's 376 k failure shape (his
+  giant line dropped/mangled; summary survived; model inferred dims
+  from orig_* and asked to attach).
+- "A"*66k padding probe was INVALID: OWUI's upload decodes/validates
+  image bytes — garbage base64 is silently rejected (no rewrite) even
+  at small sizes. Bisect with REAL images only.
+- matplotlib in-cell generation path is dead in his env (worker
+  preload lacks numpy/matplotlib; package load fails) — prompt-embedded
+  base64 was the workaround (paste via DataTransfer + ClipboardEvent
+  into the contenteditable, CORS scratch server on :8899).
+
+Also: session #21's "600 k safe" ceiling was the RENDERER-freeze
+boundary only; the effective envelope for printed lines is the
+TRUNCATION boundary, far lower. Working envelope: line ≤ 64 k chars.
+
+Fix (ext 3.0.15 / skill 3.0.18-EXT): default max_bytes 350000 → 48000
+(floor 10000; theoretical worst line 64,023 chars < the 65,842 proven
+GOOD datapoint). Resize loop upgrade: blind halving → proportional
+shrink (scale *= max(0.5, min(1, 0.95·sqrt(cap/actual)))) — his 4284²
+photo now lands 376×376 @ 45 KB / 60,367-char line in ~800 ms (was
+250×250 @ 22 KB with halving). Skill: snippet max_bytes 48000, text
+teaches the hard ceiling + OCR/attach fallbacks for detail beyond 48 KB.
+Rows restaged. NOTE for future: if OWUI ever raises the truncation
+limit, revisit the 48 KB default (it caps vision detail at ~400–700 px
+for dense photos).
+
+## Stage-3 session #23: ofb_vision — cell-side upload kills the stdout problem class (2026-09-10, skill 3.0.19-EXT)
+
+Dandan's retest of the 48 KB cap (ext 3.0.15): the print contract
+STILL failed in his Chrome — the 60,482-char data-URL line never
+reached the backend (no upload, no attachment; model correctly fell
+back to OCR per the skill teaching). Controlled sweeps in the MCP
+Chrome complicated the size story: single-cell prints up to 65,842
+chars went through the FULL chain (upload → rewrite → native attach —
+NB: the ofb_ci_vision filter fired exactly ONCE ever; OWUI 0.11.1
+attaches uploaded CI images NATIVELY, the filter is now belt-only),
+his 60k multi-cell run dropped, and a 2-short-line upload cell ALSO
+lost stdout while sleep+print cells survived — OWUI's frontend has
+env/state-dependent stdout-return flakiness (shared singleton pyodide
+worker, falsy-check ack capture, stray no-code executions) that we
+cannot reliably fix from outside. VERDICT: stop depending on big (or
+even medium) stdout lines at all.
+
+NEW DESIGN — the cell uploads the image itself: pyodide runs on the
+OWUI origin, so a same-origin fetch to POST /api/v1/files/ carries the
+user's cookie auth (verified: 200 + id, no Bearer). Mechanics proven
+against the real endpoint from pyodide:
+- GET bytes via pyfetch; blob = JsBlob.new([to_js(bytes)], {type})
+  (dict_converter=js.Object.fromEntries); FormData.append; POST via
+  RAW js.fetch — pyfetch MANGLES FormData bodies (400 "error parsing
+  the body");
+- response parse by REGEX over await r.text() — `await r.json()`
+  yields a dict in some contexts and a JsProxy in others (cost two
+  debugging rounds: j["id"] KeyError vs j.id AttributeError); never
+  call .json() here.
+
+SKILL-EXT 3.0.19-EXT: bootstrap gains `ofb_vision(path,
+max_bytes=48000)` → bridge /image_b64 (resize+cap) → direct upload →
+returns ("![path](/api/v1/files/<id>/content)", info); the cell prints
+ONE SHORT line (immune to truncation AND the freeze) and vision models
+get the image as a real attachment natively. Vision section rewritten
+around it; giant-base64 prints now explicitly FORBIDDEN; OCR/ask-user
+fallbacks kept; /pdf_text images pages → OCR or write-to-tempfile
+workaround. Rows restaged. ext UNCHANGED (3.0.15 — b64+mime already in
+the response).
+
+Verification of the exact shipped recipe: pyodide (OWUI's own
+/pyodide/, in-page) → status=200 + id extracted (regex) — twice.
+End-to-end through a real chat remains Dandan's live test (my
+chat-level attempts kept tripping on model paraphrase of long code;
+his environment has the real bridge anyway). OWUI flakiness notes for
+the community-publishing backlog: stdout truncation (66k–160k, keeps
+tail), stdout loss in long-await cells, stray no-code worker
+executions ("reading 'includes'" stderr), native CI-image attachment
+(undocumented).
+
+## Stage-3 session #24: the 401 — stale cookie; relay now hands the Bearer token (2026-09-11, ext 3.0.16 / skill 3.0.20-EXT)
+
+Dandan's ofb_vision live test: the model DID call it (even reconstructed
+the helper inline — bootstrap was run; bridge_get existed), and the
+EXTENSION side was perfect (its own probe shows /image_b64 → 376×376,
+45,258 B, shrunk: true, full new shape). The upload was the failure:
+access logs show POST /api/v1/files/ → **401**. Root cause: OWUI auth
+takes Bearer-header FIRST, cookie second; the cell could only rely on
+the cookie, and the token cookie is stale/expired after his browser
+restarts while the page stays logged in off localStorage's Bearer (my
+tests passed because my MCP chrome had signed in fresh minutes before).
+Cookie auth is not durable — the cell needs the real token, but the
+pyodide worker cannot read localStorage.
+
+Fix (three pieces):
+- relay.js (BC branch): reserved message {ofbToken: true, id, to: tag} —
+  the ELECTED relay answers {ok: true, token: <localStorage.token,
+  quotes stripped>} directly. Security: the BC channel is same-origin —
+  page scripts can read their own localStorage anyway (the relay
+  header already documents this stance); the token NEVER crosses to
+  the extension SW. Verified in isolation against the real relay.js
+  (chrome-stubbed page, hello-election + token request over a real
+  BroadcastChannel → tag rf45…, token stripped correctly).
+- SKILL-EXT bootstrap: _owui_token() — ofbToken request through the
+  existing _pending/future machinery, cached, "" when no relay/iframe
+  transport; ofb_vision now sends Authorization: Bearer + falls back
+  to cookie, and hard-guards on the WORKER executor (iframe-sandbox
+  cells are cross-origin — upload can never work there).
+- ext 3.0.16 (relay.js changed — Dandan must RELOAD the unpacked ext;
+  the page also needs one refresh so the new relay.js injects), skill
+  3.0.20-EXT, rows restaged. Bootstrap syntax-checked (194 lines).
+
+## Stage-3 session #25: live 401 repro in Dandan's Chrome; relay staleness confirmed as the missing step (2026-09-11, skill 3.0.21-EXT)
+
+Per Dandan's ask ("make the end-to-end test yourself"), drove HIS daily
+Chrome via computer-use (AX only — no Screen Recording permission, so
+no raster): sent the exact IMG_9502.jpeg question in a fresh chat.
+LIVE REPRO: three POST /api/v1/files/ 401s at 22:27 (model retrying
+the upload). Then chrome://extensions confirmed the extension IS
+3.0.16 — so the ofbToken relay branch exists, but the OWUI tab was
+opened BEFORE the ext reload and content scripts do NOT hot-swap on
+extension reload → the page still ran the 3.0.15 relay → ofbToken
+unanswered (1s timeout) → "" token → cookie-only → stale cookie → 401.
+The missing step all along: ONE PAGE REFRESH after reloading the
+extension (never taught anywhere).
+
+The final in-his-browser verification (refresh + rerun) hit automation
+walls: OWUI's rich-text editor ignores synthetic typing when a
+container AX node holds focus (two sends produced no completions POST;
+one earlier send went to a DevTools console prompt I'd opened as a
+probe vehicle — closed; also cleaned up a stray Google-search
+navigation of his tab and killed my separate E2E Chrome, whose native
+directory-picker automation also failed: AX single/double-click and
+Cmd+Shift+G don't drive NSOpenPanel reliably from this transport; a
+javascript:-in-omnibox probe got percent-encoded into a search).
+
+Hardening shipped (skill 3.0.21-EXT): ofb_vision's upload-failure
+return now says WHY when there was no relay token — "old in-page
+relay — if the extension was just reloaded, refresh this OWUI page
+once and ask again" — so the model relays the fix to the user instead
+of flailing. Rows restaged.
+
+REMAINING (Dandan, ~30 s): refresh the OWUI tab, new chat, same
+question — expect upload 200 + ![image](/api/v1/files/…) line + a
+visual description. After it passes, consider making the setup guide /
+reload ritual docs say "reload extension + REFRESH the OWUI page".
+
+## Stage-3 session #26: the REAL executor story — OWUI iframe shim vs worker (2026-09-11, skill 3.0.22-EXT)
+
+With Dandan's display on, drove his Chrome directly (computer-use;
+set_value on the OWUI textarea WORKS for composing messages — synthetic
+typing doesn't, and Enter-after-set_value needs a re-observe between).
+Diagnostic cell in his live chat, verbatim:
+{"executor": "iframe", "bc": false, "relay": false} — HIS CELLS RUN IN
+OWUI's IFRAME SHIM, not the pyodide worker. In an opaque-origin iframe:
+no cookies, no same-origin fetch, no BroadcastChannel → ofb_vision
+uploads 401 BY CONSTRUCTION (the stale-cookie theory was real but
+secondary — in the iframe NOTHING authenticates).
+
+OWUI's executor choice (bundle Cu_6R2Jb.js, verbatim):
+  features?.enable_pyodide_file_persistence ? new RealWorker() : new IframeShim()
+i.e. the REAL worker (same-origin, cookie+BC capable) is used ONLY when
+the model's meta.features.enable_pyodide_file_persistence is ON. His
+model had it unset → iframe shim → the whole 401 saga. (Why Sept-9
+worked: the flag must have been on then / different model config.)
+Additionally the iframe shim embeds the same runner code as the worker
+(the "reading 'includes'" stderr quirk appears in BOTH — not a
+discriminator), and my earlier "worker-verified" chrome-devtools-mcp
+tests were actually running in the iframe shim too (stdout/prints work
+fine there; only cell-initiated AUTHENTICATED fetches are impossible).
+
+Actions taken:
+- Enabled meta.features.enable_pyodide_file_persistence = true on his
+  local-file-access model (webui.db; verified it flows through
+  /api/models → info.meta.features).
+- In-sim harness (real relay.js + the exact shipped bootstrap + pyodide
+  on the OWUI origin, worker-simulated): _owui_token() returns the real
+  JWT and the Bearer upload returns 200 — every layer of the design is
+  proven EXCEPT the live end-to-end after the flag (his retest post-
+  flag still 401'd, BUT the model demonstrably inlined its own
+  ofb_vision again (output format "upload_status" ≠ the bootstrap's),
+  so the bootstrap+token path may not have been what failed; the
+  executor-flip confirmation cell never ran — message send flaked).
+- skill 3.0.22-EXT: ofb_vision's iframe guard now NAMES the fix
+  ("enable 'Pyodide file persistence' on this model, reload, NEW
+  chat") so the model relays the actual remedy instead of a vague
+  error. Rows restaged.
+
+Dandan's 1-minute verification (fresh chat after a page reload): ask
+about IMG_9502.jpeg; if it still 401s, check Admin Panel > Models >
+Local File Access shows the persistence toggle ON, then retry once
+more. The model must be nudged to call the BOOTSTRAP's ofb_vision, not
+inline its own (a recurring failure mode all day — consider teaching
+"NEVER redefine bootstrap helpers" more loudly in the skill).
+
+## Stage-3 session #27: FOUND THE SWITCH — ENABLE_PYODIDE_FILE_PERSISTENCE env var; full upload chain verified live (2026-09-11)
+
+Traced the executor decision to its true source after the model-flag
+theory failed (Model editor has no such toggle; model-level injection
+ineffective): `enable_pyodide_file_persistence` is an OWUI **server
+env flag** (env.py:1190, default false) served through /api/config
+→ frontend config store → `get($config).features.
+enable_pyodide_file_persistence ? RealWorker : IframeShim` (Cu_6R2Jb).
+It is NOT a model feature — my DB injection into meta.features was the
+wrong layer (reverted).
+
+Fixed the environment: recreated owui-test with
+`-e ENABLE_PYODIDE_FILE_PERSISTENCE=true` (same image owui-local:
+v0.11.1-crypto44, same secret so JWTs stay valid, same data volume —
+everything persisted; ~40 s downtime). rebuild_testenv.sh updated so
+future rebuilds keep it. Verified: env flag True in-container; the
+AUTHENTICATED /api/config serves features.enable_pyodide_file_persistence
+= true (anonymous /api/config hides features — a probe gotcha).
+
+LIVE VERIFICATION in a real chat cell (my chrome, code interpreter,
+post-flag): the exact pyodide upload recipe ran — `UPLOAD: 200
+6f90fa5e-…` + POST /api/v1/files/ 200 in access logs. The real worker
+boots (worker-file fetch count 0 only because Chrome cached it from
+the earlier manual fetch). Every leg of ofb_vision is now proven in
+production shape: worker executor ✓ same-origin ✓ cookie upload ✓
+relay token → Bearer ✓ (harness) — the last untested combination is
+Dandan's browser (extension 3.0.16 + reload + fresh chat).
+
+Dandan's env is ALREADY updated (I recreated his container). He just:
+reload the OWUI tab (new /api/config), NEW chat, ask about
+IMG_9502.jpeg. Also note for MS-review/public deployments: the vision
+path REQUIRES this env var on the OWUI host — add to store listing /
+setup docs (session #26's "model setting" claim was wrong).
+
+## Stage-3 session #28: VISION PATH ABANDONED by decision — honest attach instruction instead (2026-09-11, ext 3.0.17 / skill 3.0.23-EXT)
+
+Dandan's verdict on the post-fix test: the model described IMG_9502
+(a clear photo of a car from the back) as a "somewhat blurry printed
+page/poster" — OCR-garble language, not vision. The upload leg WORKED
+(file 2b44c886 created by the cell, markdown line printed, worker
+executor, stderr clean) — but the image still never reached the
+model's vision input. THE FINAL WALL: OWUI attaches images to the
+model's vision ONLY when its own middleware uploads them WITH chat
+metadata (chat_id/message_id + insert_chat_files). A cell's direct
+POST /api/v1/files/ creates an ORPHAN file — no chat linkage — never
+attached. Linking it would require the cell to know chat_id/
+message_id (unavailable in the sandbox) or upstream OWUI changes.
+Three OWUI-internal walls total (stdout truncation, executor modes,
+orphan uploads) — decision: give up, document, revert.
+
+REVERTED (per Dandan):
+- SKILL-EXT 3.0.23-EXT: ofb_vision + _owui_token REMOVED from the
+  bootstrap; vision section = the honest rule: "code output is TEXT
+  only; if the task needs YOU to see a local image, ask the user to
+  ATTACH/UPLOAD it directly in the chat" + OCR for text + display
+  convention for showing the user. Rows restaged.
+- Endpoint default max_bytes back to 4 MB (app parity); 48 KB vision
+  cap gone; 413 hint simplified. KEPT (app-parity features, useful
+  for display): {mime,width,height,bytes,shrunk,orig_*,b64,data_url}
+  response shape, EXIF-aware resize (max_edge default 2000),
+  proportional shrink. ext 3.0.17 (behavior change = default cap).
+- KEPT INFRA (dormant, documented): relay ofbToken BC branch (harmless,
+  token never reaches the SW — reusable if OWUI ever links cell
+  uploads to chats); owui-filters/ CI Vision filter (belt-only; OWUI
+  natively attaches middleware-uploaded CI images — the filter still
+  helps the raw-data-URL case); ENABLE_PYODIDE_FILE_PERSISTENCE=true
+  on owui-test + rebuild_testenv.sh (the worker executor is strictly
+  better for OUR pipe: BroadcastChannel transport instead of the
+  iframe fallback, no "includes" stderr quirk) — Dandan should reload
+  his OWUI tab once to get the worker.
+
+LEARNINGS LEDGER (2026-09-10 → 09-11, sessions #17–#28) for future
+attempts (ours or upstream):
+1. OWUI code-interpreter stdout: giant single lines are truncated
+   (keeps tail, between 66k and 160k chars) or freeze the tab (≳600k);
+   the last stdout line is what the UI displays.
+2. Executor modes: default = opaque-origin IFRAME shim (no cookies/
+   BC/same-origin → authenticated cell fetches impossible); real
+   Worker only with server env ENABLE_PYODIDE_FILE_PERSISTENCE=true
+   (served via /api/config; NOT a model setting; anonymous /api/config
+   hides features).
+3. Cell-initiated file uploads succeed (cookie auth, worker mode) but
+   produce orphan files — never attached to the chat's vision input.
+   The one vision input path that works: the USER attaching the image.
+4. OWUI attaches middleware-uploaded CI images natively (stdout data-
+   URL line ≤ ~66k → upload → ![Output Image](/api/v1/files/…) →
+   attached) — size-fragile and executor-dependent; not a product path.
+5. pyodide cell gotchas: pyfetch mangles FormData (use raw js.fetch);
+   r.json() is dict-or-JsProxy by context (regex over r.text());
+   to_js(dict) → plain object (this build); the model INLINES its own
+   helpers instead of calling bootstrap functions — teach loudly
+   against it.
+6. If OWUI ever links cell uploads to chats (or exposes chat ids to
+   cells), ofb_vision becomes viable again — the whole design was
+   proven leg-by-leg (relay token → Bearer → 200; worker upload 200).
+
+## Stage-3 session #29: sender security gate RESTORED — origin allowlist + bridge token (2026-09-11, ext 3.0.18 / skill 3.0.24-EXT)
+
+**Trigger.** Dandan asked how extension security works after the origin
+lock removal, then read relay.js/sw.js and put it plainly: with the
+extension on, ANY website can talk to the pipe — is the whole granted
+folder readable? Answer, verified in code: yes. The relay rides every
+https + localhost page, a page is trivially its own "descendant iframe"
+(self-post), BroadcastChannel is same-origin, and the SW never checked
+WHO asked (tier-2 token retired 2026-09-06, §5.2). Reads and new-file
+writes are ungated by design — only destructive ops raise the
+confirmation card. Blast radius was "one granted folder", but that
+folder was silently readable by every site on the internet.
+
+**Dandan's call:** restore the app's boundary — allowlist like the
+application, plus the token ("for local service or http sites it is
+possible to pretend" — right instinct, refined below).
+
+**Design (extension/fs-sec.js, enforced in sw.js handleOfbRequest
+BEFORE shape/payload work):**
+- Tier 1 origin allowlist: strict scheme://host:port from browser-set
+  sender metadata (`sender.origin` else `new URL(sender.url).origin`).
+  Match patterns CANNOT pin ports (and `http://127.0.0.1/*` spans every
+  port), so the SW listener is the only enforcement point that works.
+  Message fields are never trusted for identity.
+- Tier 2 bridge token (opt-in): per-request `token` field,
+  hash-then-compare (SHA-256 digests, length-uniform) — the app's
+  org-boundary semantics: user pastes once in chat on 403
+  token_required, model never echoes. Closes the tier-1 residual:
+  same-origin impostors (local process binds 127.0.0.1:<owui-port>
+  when the service is down; plain-http LAN page injection). It does
+  NOT defend code injection into the REAL page — injected JS sees
+  whatever the page holds; that honesty is in the fs-sec header.
+- UNLOCKED (neither tier set) denies everything with a self-naming 403
+  (`security_locked` + the origin to allow) — the app's production
+  hard-fail parity. Upgrades land here: Dandan's next chat 403s until
+  he allows 127.0.0.1:8788 once (options card shows blocked origins as
+  one-click Allow rows, kv ring `denied_origins`, 8 rows / 1 h).
+- Trusted senders: the extension's OWN pages. Discriminator =
+  `sender.url` starts with `chrome-extension://`. **NOT `sender.id
+  === chrome.runtime.id`** — the first draft used exactly that and
+  sec_test's P0 caught it live returning 200: CONTENT SCRIPTS also
+  carry sender.id = the extension id (they ARE the extension from the
+  browser's viewpoint), so every relay forward was "trusted". The
+  sender-gate bug class is new; the discriminator note is now in both
+  fs-sec.js and the plan §5.2 amendment.
+- Options 🔒 Security card: add/remove origins (URL-normalized,
+  https:// prefix default), Recently-blocked Allow rows, token
+  input + Save/Generate/Copy. /state gained `allowed_origins`,
+  `security` mode, `token_required`; /health `security` + `locked`.
+
+**Skill 3.0.24-EXT:** bootstrap carries `_TOKEN`/`ofb_set_token` and
+stamps `token` on every request when set; 403 shapes documented with
+the one-shot recoveries (allow the site / paste once, never echo).
+`Requires extension ≥ 3.0.18`.
+
+**Tests.** New `tests/stage3/sec_test.py` — no picker, no X driver, no
+pyodide: plain page JS self-post (a legit relay client) + SW-context
+units. 13/13 on the Mac (chrome-for-testing headed): UNLOCKED deny
+names the origin, options page trusted while UNLOCKED, origin-allow →
+200, token missing/wrong → 403 token_required, right token → 200,
+/state tiers, evil-sender unit + denied ring, originless sender
+denied, own-extension sender trusted. The four Linux suites got
+`spike1.sec_configure(...)` (origin + `TEST_TOKEN`) after their picker
+flows; worker_transport allows origin-only (its bootstrap runs
+verbatim from SKILL-EXT.md — which now token-stamps only when
+_TOKEN is set, so it stays token-free). spike1's harness bootstrap
+gained `ofb_set_token` mirroring the skill. NOTE for the Linux re-run
+ticket: all four picker suites now REQUIRE sec_configure or every cell
+403s — the call is already inserted.
+
+**Deployment for Dandan's env (his Chrome, manual once):** reload the
+unpacked ext → options → Security → allow http://127.0.0.1:8788 (it
+will already sit under Recently blocked after the first blocked call)
+→ optionally Generate + Save a token; if he sets one, he pastes it in
+chat once when the model asks. Both OWUI skill rows restaged to
+3.0.24-EXT same day.
+
+## Stage-3 session #30: onboarding — the Get-started card (2026-09-11, ext 3.0.19, skill untouched)
+
+**Gap (Dandan's ask).** The options page taught folder-picking and (since
+3.0.18) the site allowlist, but NOTHING about the Open WebUI side — a new
+user had no idea the bridge needs the SKILL published in OWUI plus the
+Code Interpreter enabled before any chat can talk to the extension. The
+repo README spells this out for the APP variant only (and lives outside
+the extension UI entirely).
+
+**Shipped: 🚀 Get-started card, first + open on options.html.** Five
+steps in one breath: (1) choose folder → anchors to the folders card;
+(2) allow the OWUI site → anchors to Security, names the `bridge locked`
+symptom; (3) install the skill — links the SKILL-EXT.md blob on GitHub
+(feat/stage3-extension) + repo root, gives the exact OWUI path
+(Workspace → Skills → Create → paste), admin/private-skill fork;
+(4) enable BOTH switches in a new chat — Code Interpreter + the skill
+(chat controls / $-mention), or the admin preset (Models: interpreter
+capability + default + attach skill; "both switches matter" mirrors the
+README's verified wording); (5) test with "list the files in my folder".
+Live status line (startstat, renderStart in beat + renderSec): ✓/○ for
+the two extension-side steps + a pointer that 3–4 happen in OWUI.
+
+**Known wrinkle:** the skill-file link points at the REMOTE branch,
+which still serves 3.0.5-EXT (29 local commits await Dandan's push) —
+after the next push the link serves current; move it to master when the
+branch merges (TODO 6b). Vision-checked via GLM-4.6V (clean checklist,
+no layout defects); smoke 5/5 (card first, links resolve, fresh +
+allowed-site status lines, zero console errors).
+
+## Stage-3 session #31: paste-ready skill + token variant + SINGLE-site lock (2026-09-11, ext 3.0.20 / skill 3.0.25-EXT)
+
+**Dandan's three asks:** (1) SKILL-EXT.md wasn't copy-paste ready —
+dev-facing chatter (PUBLISHING NOTE, version archaeology, DEVNOTES
+refs) mixed into what should be the OWUI skill's description+body;
+(2) with the token tier back, mirror the app's variant pattern — one
+skill for no-token, one with the token pre-embedded; (3) the Security
+card allowed MULTIPLE sites, which "doesn't make sense — one bridge
+token is for one deployment".
+
+**Skill rewrite (3.0.25-EXT):** body scrubbed to model-operational
+content only — the publishing note became a 3-line variant picker
+(plain vs token, which to publish when), version-history asides
+(3.0.1/3.0.3/3.0.5/3.0.11/3.0.18 callouts) collapsed into behavior
+statements, "see DEVNOTES #19–#28" and observed-date anecdotes dropped,
+the dangling "see standard skill's recipe" comment made self-contained,
+strict-mode mentions dropped (no EXT strict variant). NEW
+SKILL-EXT-TOKEN.md generated FROM the plain file by script (5 intended
+deltas only: description marker, H1, variant note, token_required
+recovery wording "token was rotated", and the bootstrap's
+`_TOKEN = ["__BRIDGE_TOKEN__"]`) — diff verified to contain nothing
+else. Both bootstraps ast-parse; worker_transport 7/7 runs the
+rewritten plain bootstrap verbatim through both transports. OWUI rows
+restaged — BOTH rows now carry the no-token BODY (the old
+surgical-row-with-frontmatter distinction dropped; frontmatter's only
+consumer was a human copying from the DB).
+
+**Single-site lock (ext 3.0.20):** fs-sec tier 1 is now ONE site (kv
+`allowed_site`; migration reads a 3.0.18-era `allowed_origins` list's
+first entry, and setting a site deletes the legacy key). Modes renamed
+`site+token` / `site` / `token` / UNLOCKED. /state exposes
+`allowed_origin` (the one site) — the `allowed_origins` array is gone.
+Options Security card: one input + Set site/Remove, denied rows say
+"Use this site" and clicking REPLACES. Get-started step 3's skill link
+ADAPTS: with a bridge token set it points at SKILL-EXT-TOKEN.md (and
+names why). Tests: sec_test 14/14 (new P4c proves the legacy list is
+ignored once allowed_site is set), options smoke 6/6 (incl. the
+adaptive link flip), spike1.sec_configure sets allowed_site.
+
+## Stage-3 session #32: site editor 3-state UI (2026-09-11, ext 3.0.21)
+
+**Dandan's bug report (screenshot):** after setting a site, the Security
+card still showed the EMPTY input with its placeholder next to a
+"Set site" button — the set site was only mentioned in a small line
+below, so the card read as "nothing set yet". His spec: input only
+when unset; when set show the URL + Edit + Remove; Edit reopens the
+input.
+
+**Shipped:** three states in options.html/options.js — EMPTY
+(input + "Set site"), SET (🔒 <site> — the only site that can use the
+bridge + Edit + Remove, input row HIDDEN), EDITING (input prefilled +
+focused/selected, button reads "Save"; Enter still saves). A module
+`siteEditing` flag survives renderSec re-renders so a tab-switch
+(visibilitychange fires renderSec) never clobbers a half-finished
+edit; the denied-rows "Use this site" click and Remove both reset it.
+Removed the standalone Remove button (lives in the set-state row now —
+nothing to remove when empty). The old ✓-status line folded INTO the
+view row; #sitestat is error-only. Click-through smoke 7/7 on real
+DOM states (empty → set via real click → edit prefilled → replace via
+Save → remove → startstat flips); GLM-4.6V transcription of an
+element-scoped screenshot confirms the rendering (first full-page
+vision pass HALLUCINATED card copy that doesn't exist — element
+screenshots, not full pages, for card-level checks).
+
+
+## Stage-3 session #33: EXT skill descriptions aligned with the app skills (2026-09-11, skill 3.0.26-EXT, ext untouched)
+
+Dandan: "the skill descriptions are not aligned with application
+skills. I think application skills are better, please borrow them."
+The app variants' description (identical across all four) leads with
+the CONCRETE trigger surface — "Read, create, edit, search, convert,
+and organize … Word, Excel, PowerPoint, PDF, image, archive, email,
+text, or code files. MUST-CALL before acting: sandbox file APIs cannot
+reach that folder; only a successful bridge response confirms the
+work." — while the EXT files had a generic "MUST-CALL before ANY file
+task" wording. Borrowed verbatim; the single adaptation is "through
+the Open File Bridge extension". Both EXT variants now share ONE
+description (app convention; the variant picker in the body decides
+which file to publish). NOTE: the OWUI rows' description COLUMN
+already carried the app-style text (Dandan set it manually at row
+creation) — the files were the outliers; restage now sets content AND
+description together so they can never drift again.
+
+
+## Stage-3 session #34: token-variant live failure — flow verified, stale-relay trap named (2026-09-11, ext 3.0.22 / skill 3.0.27-EXT)
+
+**Report:** Dandan published SKILL-EXT-TOKEN.md the intended way
+(generate token → replace __BRIDGE_TOKEN__ → stage), then "list my
+files" ran 5 code executions without answering. **Flow check:** app
+parity confirmed — the app's solo-setup README says "replace
+__ORG_TOKEN__ with your token"; EXT is designed identically. **His
+staged row inspected:** valid python, `_TOKEN = ["1122334455"]`
+(hand-typed custom value, not Generate). **E2E proof:** extracted his
+bootstrap VERBATIM from webui.db and ran it through a real module
+worker (BC transport) against ext 3.0.21 with site + same token
+configured — /health 200, token accepted, /list honest 503 (harness
+profile has no folder). 4/4. So skill + flow + gate + relay token
+passthrough all work; the failure was environmental. The three
+candidates (all → 403 token_required on every call → model retries →
+flail): (1) extension's SAVED token ≠ skill token (typed twice by
+hand; Save button easy to miss — Generate alone does NOT store),
+(2) STALE RELAY: an OWUI tab from before an extension reload keeps the
+OLD relay, which forwards only {ofb,id,method,path,body,b64} and
+silently DROPS the new `token` field — extension reload without page
+refresh now breaks the token tier SPECIFICALLY (site tier still
+passes: origin is right), a new failure mode of the known
+content-scripts-don't-hot-swap trap, (3) the model hand-writing pipe
+code without the token (recurring inline-the-bootstrap disease). Chat
+rows in webui.db held ONLY user turns (assistant stream never
+persisted) — no cell output to autopsy; diagnosis is by elimination +
+verified-mechanism. **Hardening:** skill 3.0.27-EXT adds a warning
+line above the bootstrap (run EXACTLY as written; refresh the page
+after an extension update); ext 3.0.22's 403 token_required hint names
+the stale-relay/refresh remedy. His active row restaged to 3.0.27-EXT
+WITH his token preserved (token-variant body + substitution); the
+inactive row got the plain body + description. sec_test 14/14 on
+3.0.22.
+
+
+## Stage-3 session #35: FOUND IT — cross-worker id collision on "ofb-pipe" (2026-09-11, skill 3.0.28-EXT, ext untouched)
+
+**Dandan's second report, WITH logs, cracked it.** Failing log: cell 2's
+diagnostic printed the REQUEST itself — `{"ofb":true,"id":1,"method":
+"GET","path":"/health","token":...,"to":"r5d..."}` — i.e. the future
+resolved with the outgoing message; upstream bridge_get died
+`KeyError: 'status'`. A "working log on same version" existed → race,
+not version. **Mechanism:** two OWUI chats open = two pyodide workers;
+BroadcastChannel is BROADCAST; both workers count ids from 0. Worker
+B's REQUEST (id 1, ofb:true) arrives at worker A's _on_msg while A is
+pending on its own id 1 → A's future resolves with B's request. The
+relay/SW are blameless (relay broadcasts responses to the whole channel
+by design; SW treats ids opaquely). OWUI's worker runner does NOT echo
+(bundle pyodide.worker-Dq63i-DV.js: unknown message types →
+console.warn only; the shim class m post()s INTO the iframe, never
+re-posts out). **Fix (skill bootstrap, both variants):** (1) ids carry
+the session's _wid prefix → globally unique across workers; (2) _on_msg
+only resolves futures for RESPONSES (`"ok" in dd`, `method` present →
+ignore) — belt for the response-flavor collision (B's RESPONSE to its
+id-1 could otherwise satisfy A's id-1 with wrong data). **Proof:**
+red — old bootstrap reconstructed by reversing the two edits, two
+workers overlapped on one relay: `[A] {ok:true, status:200}` and
+`[B] {ok:null, status:null, method:"GET"}` = Dandan's exact failure;
+green — new worker_transport W5 (two workers, overlapping fires):
+both get their own `w<wid>-0` responses, 9/9. spike1's harness
+bootstrap synced (same guard + h-prefixed ids; flows into
+negatives/engines/confirm). His active row restaged to 3.0.28-EXT with
+his token (1122334455) preserved. NOTE: his earlier "still not
+working" round was likely THIS, not the token — the stale-relay and
+mismatch hardening from #34 stands but wasn't tonight's killer.
+
+
+## Stage-3 session #36: EXT skills gain the app's version-floor contract (2026-09-11, skill 3.0.29-EXT, ext untouched)
+
+Dandan: "app skills say 'Requires bridge ≥ 2.11 (checked at bootstrap)'
+— why don't the EXT skills?" Honest answer: they USED to (prose
+"≥ 3.0.1" + version archaeology), and the 3.0.25 paste-ready scrub
+over-collapsed it to "any 3.0.x-EXT" — losing the contract. The app's
+mechanism is a DOCUMENTED one-way floor the MODEL applies after the
+first /health (not code): older than min → say once "update the app",
+continue with what works; newer → never warn; much-newer → optionally
+suggest refreshing the skill. Mirrored verbatim with EXT facts: floor
+**3.0.1** (first relay with the BroadcastChannel worker transport —
+the honest minimum for the current bootstrap; string ids and the token
+field are backward-compatible through older relays), sender-gate 403s
+flagged as ≥ 3.0.18 behavior, update path = chrome://extensions reload
+(or CWS update). Bootstrap code unchanged (parses). Rows restaged
+3.0.29-EXT, active row with his token preserved.
+
+
+## Stage-3 session #37: release prep — everything at 3.1.0, archaeology out (2026-09-11, ext 3.1.0 / skill 3.1.0-EXT)
+
+Dandan's release cleanup: bump the whole line to **3.1.0** (manifest,
+FS_VERSION, both skill H1s), skill dependency "extension ≥ 3.1.0"
+(header blockquote + one-way floor), and remove never-published version
+statements — the "sender-gate 403s exist only on ≥ 3.0.18" clause, the
+"older extension builds bundle only 8 languages" hedge (kept the live
+/health pointer), the 3.0.1 floor. Sweep verified: zero "3.0.x"
+mentions remain in either skill body. sec_test 14/14 + worker_transport
+9/9 on 3.1.0. CWS zip rebuilt: dist-stage3/open-file-bridge-extension-
+3.1.0.zip (48.4 MB, 80 files, manifest version verified inside, unzip
+-t clean). Rows restaged 3.1.0-EXT (active = token variant with his
+1122334455). NOT changed (observed, out of scope): /version still
+serves skill_min "2.11" — an app-line concept; revisit if the /version
+note's setup_owui.py wording confuses extension users.

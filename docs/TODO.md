@@ -106,6 +106,46 @@ Bridge must be running during chats. Non-technical users will forget.
       (skill 2.11.1 teaches the workaround; the bridge hint would fix any
       client in one round trip)
 
+## 6b. Stage 3 (extension) follow-ups
+
+- [ ] Re-run the Linux stage-3 suites (spike1/engines/negatives/confirm,
+      Xvfb) after the 2026-09-09 worker-transport relay change — the
+      Mac-runnable `tests/stage3/worker_transport_test.py` (7/7) covers
+      both transports and the election, but the picker-driven paths and
+      the engines/confirm suites were not re-run on this machine.
+      The 2026-09-10 language expansion (ext 3.0.11) also needs that
+      engines run: e11 now asserts 21 langs in alphabetical order, and
+      no new-lang OCR (rus/jpn/…) has been exercised live yet — only
+      static checks ran on the Mac. UPDATE 2026-09-11 (sender gate, ext
+      3.0.18): all four picker suites now call `spike1.sec_configure`
+      after the picker (origin + TEST_TOKEN; worker_transport is
+      origin-only) — the new `sec_test.py` (13/13 Mac) covers the gate
+      itself; the Linux re-run must confirm the four still pass WITH
+      the gate on.
+- [ ] Onboarding copy beyond the options card: README still documents
+      only the APP setup (no extension section — it should also name the
+      TWO skill variants, SKILL-EXT.md vs SKILL-EXT-TOKEN.md); the CWS
+      store listing (chat-only draft) needs the same skill +
+      code-interpreter steps; when feat/stage3-extension merges to
+      master, repoint the Get-started card's skill-file links
+      (options.html SKILL_FILE_BASE, currently branch-scoped) — until
+      the next push those links serve the OLD skill (3.0.5-EXT on the
+      remote).
+- [ ] Dandan's Chrome, once, after loading ext 3.0.18: options → 🔒
+      Security → allow `http://127.0.0.1:8788` (one click under
+      Recently blocked) and optionally Generate+Save a bridge token
+      (paste in chat once when the model asks).
+- [x] CWS zip rebuilt at release prep (2026-09-11):
+      `dist-stage3/open-file-bridge-extension-3.1.0.zip` — 48.4 MB
+      compressed / 80 files / manifest 3.1.0 verified inside. Actual
+      CWS upload still pending Dandan's store step.
+- [ ] confirm_test.py was rewritten for the 2026-09-09 blocking-confirmation
+      contract (c0 approve-mid-wait, c1 timed_out, c5 deny-mid-wait) but
+      only runs on Linux/Xvfb — first run there must confirm it green.
+- [ ] osd.traineddata (10.6 MB) sits in the extension bundle unreferenced
+      by any code — drop it or wire it into orientation detection,
+      Dandan's call (app bundles it too, so parity keeps it for now).
+
 ## 7. CI gaps
 
 - [x] Windows/macOS smoke tests in Actions — done 2026-08-28: every matrix

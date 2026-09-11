@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Open File Bridge — Recovery &amp; Safety Guide</title>
+<style>
+body { font-family: system-ui, -apple-system, sans-serif; max-width: 760px;
+       margin: 0 auto; padding: 28px 22px 60px; color: #1c2430;
+       font-size: 18px; line-height: 1.65; }
+h1 { font-size: 1.6rem; margin: .2em 0 .3em; }
+h2 { font-size: 1.3rem; margin-top: 2em; border-bottom: 2px solid #e8ecf1;
+     padding-bottom: 6px; }
+h3 { font-size: 1.12rem; margin: 1.4em 0 .4em; }
+p { margin: .6em 0; }
+code { background: #eef1f5; padding: 2px 6px; border-radius: 4px; font-size: .95em;
+       font-family: ui-monospace, monospace; }
+pre { background: #f6f8fa; border: 1px solid #e2e7ee; border-radius: 8px;
+      padding: 12px 14px; overflow-x: auto; font-size: .93em; line-height: 1.5; }
+pre code { background: none; padding: 0; }
+blockquote { border-left: 4px solid #4a5fc1; background: #f2f6ff; margin: 1em 0;
+             padding: 10px 16px; border-radius: 0 8px 8px 0; }
+blockquote p { margin: .3em 0; }
+.warn { border-left-color: #c2500d; background: #fdf4ec; }
+table { border-collapse: collapse; width: 100%; margin: 1em 0; font-size: .98em; }
+th, td { border: 1px solid #dde3ea; padding: 8px 10px; text-align: left;
+         vertical-align: top; }
+th { background: #f4f6f8; }
+.hint { color: #5a6675; font-size: .95em; }
+ul, ol { margin: .5em 0 .9em; padding-left: 1.4em; }
+li { margin: .3em 0; }
+a { color: #2456c4; }
+.answer { color: #0a7d32; font-weight: 600; }
+.toc { background: #f4f6f8; border-radius: 8px; padding: 14px 20px; margin: 1.2em 0; }
+</style>
+</head>
+<body>
+
+<h1>🛟 Open File Bridge — Recovery &amp; Safety Guide</h1>
+<p class="hint">Extension mode, version-matched to extension
+<span id="ver">…</span>. What to do when the AI changed something you
+didn't want — every write is recoverable.</p>
+
+<div class="toc">
+<b>Contents</b>
+<ol>
+<li><a href="#how-it-works">How your files are protected</a></li>
+<li><a href="#restore-snapshot">Restore an older version of a file</a></li>
+<li><a href="#find-deleted">Find a deleted file (trash)</a></li>
+<li><a href="#ai-messed-up">“The AI messed up my file!” — walkthrough</a></li>
+<li><a href="#regret-batch">“I regret the whole edit” — many files</a></li>
+<li><a href="#rate-breaker">The write-rate brake</a></li>
+<li><a href="#safety-settings">Safety settings</a></li>
+<li><a href="#storage">Where snapshots &amp; trash live, and their limits</a></li>
+<li><a href="#troubleshooting">Extension troubleshooting</a></li>
+<li><a href="#faq">FAQ</a></li>
+</ol>
+</div>
+
+<h2 id="how-it-works">1. How your files are protected</h2>
+
+<p>Every change the AI makes goes through the same safety nets — <b>no
+change is ever unrecoverable</b>:</p>
+
+<table>
+<tr><th>What the AI does</th><th>What the bridge does first</th><th>How you undo it</th></tr>
+<tr><td>Overwrite / edit a file</td><td>Copies the current version to the <b>version history</b> (a “snapshot”)</td><td><a href="#restore-snapshot">Restore an older version</a></td></tr>
+<tr><td>Delete a file</td><td>Moves it to the <b>trash</b> — nothing is erased</td><td><a href="#find-deleted">Find a deleted file</a></td></tr>
+<tr><td>Restore an old version</td><td>Snapshots the <i>current</i> version first (restoring is itself undoable)</td><td>Same as a restore — pick a newer timestamp</td></tr>
+<tr><td>Mass-edit many files</td><td>Each file is snapshotted individually + the <b>write-rate brake</b> caps the pace</td><td>Restore each file</td></tr>
+</table>
+
+<p>On top of all that, the extension <b>asks you first</b>: deletes,
+overwrites of existing files, restores and bulk operations pop an
+<b>Approve / Deny card</b> into the chat page and wait for your click.
+Creating a brand-new file never asks (nothing is at risk).</p>
+
+<blockquote>
+<p><b>The one-liner to remember:</b> in chat, just say —</p>
+<p><i>“Show me the previous versions of <code>&lt;file&gt;</code> and restore the one
+from before the AI's edit.”</i></p>
+</blockquote>
+
+<h2 id="restore-snapshot">2. Restore an older version of a file</h2>
+
+<p>Every overwrite keeps the previous content. Easiest way back — ask in
+chat:</p>
+<pre><code>Show me the saved versions of reports/summary.docx
+</code></pre>
+<p>The assistant lists them (newest first), e.g.</p>
+<pre><code>20260906-143205-a1b2   reports/summary.docx   14 KB
+20260906-091511-c3d4   reports/summary.docx   11 KB
+</code></pre>
+<p>To <b>look</b> at an old version without changing anything:</p>
+<pre><code>Show me the content of version 20260906-091511-c3d4
+</code></pre>
+<p>When you've picked, restoring replaces the live file — you'll get one
+approval card (<b>Restore previous version</b>) to click:</p>
+<pre><code>Restore 20260906-091511-c3d4 of reports/summary.docx
+</code></pre>
+<p><span class="answer">That's it.</span> The current content is snapshotted
+on the way in, so even the restore can be undone the same way.</p>
+
+<h3>No chat needed — do it in Finder / Explorer</h3>
+<p>Unlike the desktop app, the extension keeps snapshots <b>inside your
+shared folder</b>, in a hidden <code>.ofb-snapshots/</code> directory
+(the AI can't see it, but you can):</p>
+<pre><code>&lt;your shared folder&gt;/.ofb-snapshots/20260906-143205-a1b2/reports/summary.docx
+</code></pre>
+<p>Open the timestamp folder from <i>before</i> the bad edit and copy the
+file back yourself — that bypasses the chat entirely.</p>
+
+<h2 id="find-deleted">3. Find a deleted file (trash)</h2>
+
+<p>“Delete” never erases — the file moves to <code>.ofb-trash/</code>
+inside your shared folder (hidden from the AI; entries auto-expire
+after 30 days). In chat:</p>
+<pre><code>What's in the trash? I'm looking for a file I deleted yesterday.
+</code></pre>
+<p>then</p>
+<pre><code>Restore the trash entry 20260905-180033-77aa of notes/old-draft.md
+</code></pre>
+<p>Or fish it out yourself from
+<code>&lt;your shared folder&gt;/.ofb-trash/&lt;timestamp&gt;/</code>.</p>
+
+<blockquote class="warn">
+<p><b>Two small rules:</b></p>
+<p>• Trash-restore <b>refuses</b> if a file with that name already exists
+again — it will never itself overwrite something.</p>
+<p>• The trash catches AI/chat deletions. If <i>you</i> delete a file in
+Finder / Explorer, that's outside the bridge — use your OS trash.</p>
+</blockquote>
+
+<h2 id="ai-messed-up">4. “The AI messed up my file!” — walkthrough</h2>
+
+<ol>
+<li><b>Don't panic-edit the file</b> — the old content is already safe in
+the version history (it was snapshotted <i>before</i> the AI's write).</li>
+<li>In chat: <i>“Show me the saved versions of reports/summary.docx.”</i></li>
+<li>Peek at a candidate: <i>“Show me the content of the second one.”</i>
+(reading an old version never touches the live file).</li>
+<li><i>“Restore that one.”</i> → click <b>Approve</b> on the restore card.
+The messed-up version is snapshotted on the way in, so you can change
+your mind.</li>
+</ol>
+
+<h2 id="regret-batch">5. “I regret the whole edit” — many files</h2>
+<p>When a task touched many files, each one still has its own snapshot.
+In chat:</p>
+<pre><code>The last task rewrote several files. For each of:
+  contracts/acme.md, contracts/beta.md, reports/q3.docx
+list the versions and restore each to the version from before today's task.
+</code></pre>
+<p class="hint">Each restore asks for approval, so a 20-file batch means
+20 quick clicks — deliberate friction. For very large batches, your own
+folder backup is still the gold standard; the version history is a
+safety net, not a backup product.</p>
+
+<h2 id="rate-breaker">6. The write-rate brake (why writes suddenly stop)</h2>
+
+<p>If the AI starts writing unusually fast (typically a stuck loop), the
+bridge <b>refuses further writes for up to a minute</b> instead of
+hammering your folder. You'll see an error in chat like:</p>
+
+<blockquote><p><i>write-rate circuit breaker: 21 writes / 130 KiB in the
+last 60 s (limits 20 / 50 MiB). STOP and ask the user to confirm the
+mass edit before continuing.</i></p></blockquote>
+
+<p><b>What to do:</b> nothing is broken and nothing was half-written.</p>
+<ul>
+<li>reply in chat to <b>confirm you want the mass edit</b> and let it
+continue, or</li>
+<li>tell the AI to stop and review what was written (each write is
+snapshotted anyway), or</li>
+<li>raise the limits in the extension's settings page → 🛟 Safety &amp;
+recovery card.</li>
+</ul>
+
+<h2 id="safety-settings">7. Safety settings</h2>
+
+<p>Click the Open File Bridge toolbar icon (it opens the settings
+page):</p>
+<ul>
+<li><b>🛟 Safety &amp; recovery</b> — writes/minute and MiB/minute brake
+limits (defaults 20 / 50), and <b>Read-only mode</b>: a master switch
+that blocks <i>every</i> write when you want the AI to analyze but never
+modify.</li>
+<li><b>🛟 Safety &amp; recovery → approval scope</b> — which operations
+pop the Approve card: everything (default), only destructive ones
+(deletes), or none.</li>
+<li><b>📁 Shared folders → Disable writes</b> — a per-folder write block
+(the AI can read that folder but never change it).</li>
+<li><b>🚫 Ignore patterns</b> — files matching these are invisible to the
+AI and writes to them are refused.</li>
+</ul>
+
+<h2 id="storage">8. Where snapshots &amp; trash live, and their limits</h2>
+
+<ul>
+<li><b>Location</b> — inside each shared folder, in hidden directories
+the AI can never see or read: <code>.ofb-snapshots/</code>,
+<code>.ofb-trash/</code> and <code>.ofb-chunks/</code> (in-flight large
+writes). You can browse them in Finder / Explorer at any time.</li>
+<li><b>Per-file cap</b> — files over 8&nbsp;MB are not snapshotted (the
+write still happens; the response says <code>skipped: "too_large"</code>).</li>
+<li><b>Retention</b> — trash entries are removed automatically after
+<b>30 days</b> (the check runs about once a day while you use the
+assistant). Snapshots in <code>.ofb-snapshots/</code> are kept
+<b>until you delete them</b> — they are the undo history, so nothing
+prunes them automatically; to reclaim space, empty that folder
+yourself (the AI can't — it's invisible to it, by design).</li>
+<li><b>Survives restarts</b> — the stores are plain folders on your disk;
+they outlive the browser and extension updates.</li>
+</ul>
+
+<h2 id="troubleshooting">9. Extension troubleshooting</h2>
+
+<h3>“permission needed” error</h3>
+<p>The browser requires you to re-confirm folder access after the
+extension was reloaded/updated or when a grant expires.</p>
+<div class="toc"><ol>
+<li>Click the Open File Bridge toolbar icon (it opens the settings
+page).</li>
+<li>Press <b>Reconnect</b> on the folder — the folder is NOT re-picked.</li>
+<li>On the browser's permission bubble choose <b>“Allow on every
+visit”</b> — that choice is persistent (no ask after future restarts).
+With it, full browser restarts need no reconnect at all.</li>
+</ol></div>
+
+<h3>“engine_needed” error</h3>
+<p>PDF text extraction, PDF operations and OCR run inside the extension
+itself — not on any server. The engines normally <b>start automatically
+and invisibly</b> the first time the assistant uses them; you should
+never need to do anything. If a 409 <code>engine_needed</code> error
+persists anyway: click the toolbar icon, check <b>Auto-start the
+engines when needed</b> (OCR card) is ticked, then press <b>Open engine
+tab</b> (manual fallback) and keep that tab open.</p>
+
+<h3>“no shared folder configured”</h3>
+<div class="toc"><ol>
+<li>Click the toolbar icon (it opens the settings page).</li>
+<li>Choose a folder with <b>Choose folder…</b> — files outside that
+folder are never accessible.</li>
+</ol></div>
+
+<h3>Writes refused (403)</h3>
+<div class="warn" style="border-left:4px solid #c2500d;background:#fdf4ec;padding:10px 16px;border-radius:0 8px 8px 0;">
+The folder may be read-only, writes were disabled for it, or global
+Read-only mode is on — all visible in the settings page.</div>
+
+<h3>Legacy formats (.doc, .xls)</h3>
+<p>Open the file in your office app (Word / Excel / LibreOffice) and
+save it as <code>.docx</code> / <code>.xlsx</code> — then the assistant
+can read and edit it.</p>
+
+<h2 id="faq">10. FAQ</h2>
+
+<h3>The AI overwrote a 20 MB file — where's my snapshot?</h3>
+<p>Above the 8 MB per-file cap the write succeeds but is not
+snapshotted. Keep large files out of the shared folder or rely on your
+own backup for them.</p>
+
+<h3>Can the AI restore versions by itself?</h3>
+<p>Only when you ask — and each restore shows you an approval card
+first, so it can't swap file versions without a click from you.</p>
+
+<h3>Is the version history a backup?</h3>
+<p>No. It lives in the same folder, is capped (8 MB/file), and prunes
+nothing automatically. It's an undo net for AI edits — pair it with a
+real backup for irreplaceable data.</p>
+
+<h3>When does the trash empty itself?</h3>
+<p>Entries older than 30 days are swept automatically about once a day
+(whenever the assistant is active). Snapshots are never auto-deleted —
+they hold your undo history.</p>
+
+<h3>Do the snapshots survive a browser restart?</h3>
+<p>Yes — they're plain folders on disk inside your shared folder.</p>
+
+<h3>Who can reach my files?</h3>
+<p>Only the Open WebUI page in your browser, through the extension's
+narrow pipe, within folders you granted — and every browser permission
+prompt was yours. No server, no network egress, no token to leak.</p>
+
+<hr>
+<p class="hint">Open File Bridge — recovery guide, extension mode
+(v3.0.8+). The desktop app's guide (different storage model) lives at
+<a href="https://github.com/Sparkling-AI/open-file-bridge/blob/master/docs/recovery-guide.html">docs/recovery-guide.html on GitHub</a>.</p>
+
+<script src="fs-core.js"></script>
+<script src="guide.js"></script>
+</body>
+</html>
