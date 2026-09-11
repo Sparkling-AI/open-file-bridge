@@ -1,9 +1,9 @@
 ---
 name: open-file-bridge
-description: "MUST-CALL before ANY file task (TOKEN variant — the bridge token is pre-embedded below). User's real files are reachable ONLY via the Open File Bridge extension — call this skill first and run its Bootstrap exactly as written. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
+description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.0.25-EXT (extension backend, TOKEN variant)
+# Local File Bridge — skill v3.0.26-EXT (extension backend, TOKEN variant)
 
 > **TOKEN variant — publish this only when the extension's 🔒 Security
 > card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`

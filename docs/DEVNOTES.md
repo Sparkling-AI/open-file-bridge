@@ -2592,3 +2592,22 @@ Save → remove → startstat flips); GLM-4.6V transcription of an
 element-scoped screenshot confirms the rendering (first full-page
 vision pass HALLUCINATED card copy that doesn't exist — element
 screenshots, not full pages, for card-level checks).
+
+
+## Stage-3 session #33: EXT skill descriptions aligned with the app skills (2026-09-11, skill 3.0.26-EXT, ext untouched)
+
+Dandan: "the skill descriptions are not aligned with application
+skills. I think application skills are better, please borrow them."
+The app variants' description (identical across all four) leads with
+the CONCRETE trigger surface — "Read, create, edit, search, convert,
+and organize … Word, Excel, PowerPoint, PDF, image, archive, email,
+text, or code files. MUST-CALL before acting: sandbox file APIs cannot
+reach that folder; only a successful bridge response confirms the
+work." — while the EXT files had a generic "MUST-CALL before ANY file
+task" wording. Borrowed verbatim; the single adaptation is "through
+the Open File Bridge extension". Both EXT variants now share ONE
+description (app convention; the variant picker in the body decides
+which file to publish). NOTE: the OWUI rows' description COLUMN
+already carried the app-style text (Dandan set it manually at row
+creation) — the files were the outliers; restage now sets content AND
+description together so they can never drift again.

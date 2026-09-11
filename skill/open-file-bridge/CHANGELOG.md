@@ -2,6 +2,17 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.0.26-EXT — 2026-09-11
+
+The EXT variants' description now matches the application skills verbatim
+(concrete trigger surface — "Read, create, edit, search, convert, and
+organize documents and other files … Word, Excel, PowerPoint, PDF,
+image, archive, email, text, or code files. MUST-CALL before acting…"),
+with "through the Open File Bridge extension" as the only adaptation.
+Both variants share the same description, exactly as all four app
+variants do — which variant you publish is decided by the picker note
+in the body, not the description.
+
 ## 3.0.25-EXT — 2026-09-11
 
 Paste-ready rewrite + TWO variants. The extension skill files are now

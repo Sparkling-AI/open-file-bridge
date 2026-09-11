@@ -735,6 +735,13 @@ no input), EDITING (prefilled input + Save; the editing flag survives
 re-renders so tab switches never clobber it). Click-through smoke 7/7
 + element-screenshot vision transcription.
 
+## Stage 3 (extension): EXT skill descriptions aligned with the app skills (2026-09-11, skill 3.0.26-EXT)
+
+Borrowed the application skills' description verbatim (concrete
+file-type trigger surface + MUST-CALL rule; only "extension" adapted)
+for both EXT variants — previously a generic "ANY file task" wording.
+Restage now writes content AND the description column together.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
