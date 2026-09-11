@@ -2,6 +2,21 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.0.28-EXT — 2026-09-11
+
+**Cross-worker request collision fixed** (live incident: with two OWUI
+chats open, "list my files" burned executions and failed in one tab
+while an identical tab worked). "ofb-pipe" is a broadcast
+BroadcastChannel: two pyodide workers (two tabs) both count request ids
+from 0, so the OTHER worker's REQUEST — same id, `ofb:true` — resolved
+this worker's pending future, and `ofb_fetch` "returned" the request
+itself (upstream `KeyError: 'status'`). The bootstrap now stamps every
+id with the session's `_wid` prefix (ids globally unique) and its
+message listener only lets RESPONSES (messages with `ok`, never
+`method`) resolve futures. Regression-proven both ways: the old
+bootstrap under a two-worker overlap reproduces the exact steal; the
+fixed one passes 9/9 including the new two-worker test.
+
 ## 3.0.27-EXT — 2026-09-11
 
 Token-variant hardening after Dandan's "5 executions, no answer" run:

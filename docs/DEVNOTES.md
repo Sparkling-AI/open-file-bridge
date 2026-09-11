@@ -2646,3 +2646,35 @@ the stale-relay/refresh remedy. His active row restaged to 3.0.27-EXT
 WITH his token preserved (token-variant body + substitution); the
 inactive row got the plain body + description. sec_test 14/14 on
 3.0.22.
+
+
+## Stage-3 session #35: FOUND IT — cross-worker id collision on "ofb-pipe" (2026-09-11, skill 3.0.28-EXT, ext untouched)
+
+**Dandan's second report, WITH logs, cracked it.** Failing log: cell 2's
+diagnostic printed the REQUEST itself — `{"ofb":true,"id":1,"method":
+"GET","path":"/health","token":...,"to":"r5d..."}` — i.e. the future
+resolved with the outgoing message; upstream bridge_get died
+`KeyError: 'status'`. A "working log on same version" existed → race,
+not version. **Mechanism:** two OWUI chats open = two pyodide workers;
+BroadcastChannel is BROADCAST; both workers count ids from 0. Worker
+B's REQUEST (id 1, ofb:true) arrives at worker A's _on_msg while A is
+pending on its own id 1 → A's future resolves with B's request. The
+relay/SW are blameless (relay broadcasts responses to the whole channel
+by design; SW treats ids opaquely). OWUI's worker runner does NOT echo
+(bundle pyodide.worker-Dq63i-DV.js: unknown message types →
+console.warn only; the shim class m post()s INTO the iframe, never
+re-posts out). **Fix (skill bootstrap, both variants):** (1) ids carry
+the session's _wid prefix → globally unique across workers; (2) _on_msg
+only resolves futures for RESPONSES (`"ok" in dd`, `method` present →
+ignore) — belt for the response-flavor collision (B's RESPONSE to its
+id-1 could otherwise satisfy A's id-1 with wrong data). **Proof:**
+red — old bootstrap reconstructed by reversing the two edits, two
+workers overlapped on one relay: `[A] {ok:true, status:200}` and
+`[B] {ok:null, status:null, method:"GET"}` = Dandan's exact failure;
+green — new worker_transport W5 (two workers, overlapping fires):
+both get their own `w<wid>-0` responses, 9/9. spike1's harness
+bootstrap synced (same guard + h-prefixed ids; flows into
+negatives/engines/confirm). His active row restaged to 3.0.28-EXT with
+his token (1122334455) preserved. NOTE: his earlier "still not
+working" round was likely THIS, not the token — the stale-relay and
+mismatch hardening from #34 stands but wasn't tonight's killer.

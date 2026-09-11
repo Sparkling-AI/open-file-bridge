@@ -114,6 +114,23 @@ except Exception as e:
     hlog(json.dumps({"kind": "iframe_health", "error": repr(e)[:300]}))
 '''
 
+# W5 (2026-09-11): TWO WORKERS, overlapping requests, ONE shared relay — the
+# cross-worker id-collision regression. "ofb-pipe" is a broadcast channel:
+# with bare integer ids (both workers count 0,1,2…) worker B's REQUEST
+# lands while worker A is pending on the same id and the old _on_msg
+# resolved A's future with B's REQUEST (live incident: ofb_fetch "returned"
+# the request; bridge_get died with KeyError 'status'). The fixed bootstrap
+# gives every worker session-unique ids (_wid prefix) and only lets
+# RESPONSES (messages with ok, never method) resolve futures.
+TWO_WORKER_CELL = '''
+import json
+from js import hlog
+d = await ofb_fetch("GET", "/version")
+hlog(json.dumps({"kind": "ver2w", "wid": _wid, "id": d.get("id"),
+                 "ok": d.get("ok"), "status": d.get("status"),
+                 "method": d.get("method")}))
+'''
+
 
 def sandbox_srcdoc(cell):
     return """<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>
@@ -193,6 +210,23 @@ def run():
     SCRATCH.mkdir(parents=True)
     fetch_pyodide()
     (SCRATCH / "wt-worker.js").write_text(module_worker_js())
+    (SCRATCH / "wt2-worker.js").write_text(
+        module_worker_js().replace(json.dumps(WORKER_CELL), json.dumps(TWO_WORKER_CELL)))
+    (SCRATCH / "wt2-page.html").write_text("""<!DOCTYPE html><html><head>
+<meta charset="utf-8"><title>OFB-WT two workers</title></head>
+<body><pre id="log" style="background:#f2f2f2; padding:10px; font-size:12px;"></pre>
+<script>
+const mk = () => new Worker("/wt2-worker.js", { type: "module" });
+const wire = (W, tag) => {
+  W.onmessage = (ev) => { if (ev.data && ev.data.workerLog)
+    document.getElementById("log").textContent += "[" + tag + "] " + ev.data.workerLog + "\\n"; };
+  W.onerror = (e) => document.getElementById("log").textContent += "[" + tag + " error] " + e.message + "\\n";
+};
+const A = mk(), B = mk();
+wire(A, "A"); wire(B, "B");
+setTimeout(() => A.postMessage({run: true}), 300);   // A fires first…
+setTimeout(() => B.postMessage({run: true}), 450);   // …B's request lands inside A's pending window
+</script></body></html>""")
     (SCRATCH / "wt-page.html").write_text(PAGE)
     (SCRATCH / "wt-idle.html").write_text(IDLE)
     (SCRATCH / "wt-iframe.html").write_text("""<!DOCTYPE html><html><head>
@@ -252,6 +286,12 @@ document.body.appendChild(f);
         page3.goto(base + "/wt-iframe.html")
         page3.wait_for_timeout(25000)
         ilog = page3.eval_on_selector("#log", "el => el.textContent")
+
+        # two-worker collision regression (same relay, overlapping requests)
+        page4 = ctx.new_page()
+        page4.goto(base + "/wt2-page.html")
+        page4.wait_for_timeout(30000)
+        w2log = page4.eval_on_selector("#log", "el => el.textContent")
         ctx.close()
     httpd.shutdown()
 
@@ -298,6 +338,22 @@ document.body.appendChild(f);
     check("F1 iframe transport still works (parent.postMessage)",
           bool(ih and ih.get("status") == 200 and ih.get("transport") == "parent"),
           json.dumps(ih)[:220] if ih else "no iframe health line")
+
+    print("---- two-worker page log ----")
+    print(w2log)
+    vers = []
+    for l in w2log.splitlines():
+        i = l.find("{")
+        if i >= 0 and '"ver2w"' in l:
+            try: vers.append(json.loads(l[i:]))
+            except Exception: pass
+    check("W5 two workers: both answered (2 results)", len(vers) == 2, str(len(vers)))
+    check("W5 each got its OWN response (ok, no request-steal, own id prefix)",
+          all(v.get("ok") is True and v.get("status") == 200 and
+              v.get("method") is None and
+              isinstance(v.get("id"), str) and v["id"].startswith(v.get("wid", "~"))
+              for v in vers),
+          json.dumps(vers)[:260])
 
     print()
     failed = [r for r in results if not r[1]]

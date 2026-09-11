@@ -753,6 +753,17 @@ field, or a model hand-writing pipe code. All three now self-explain:
 bootstrap warning line in the skill + stale-relay remedy in the 403
 token_required hint.
 
+## Stage 3 (extension): cross-worker id collision on the BC pipe fixed (2026-09-11, skill 3.0.28-EXT)
+
+Dandan's logs nailed a race the suites never covered: two OWUI chats =
+two pyodide workers with overlapping integer ids on the broadcast
+"ofb-pipe" channel — one worker's REQUEST resolved the other's pending
+future (ofb_fetch "returned" the request; KeyError 'status' upstream;
+one tab works, the identical other fails). Bootstrap now stamps ids
+with the session _wid prefix and only RESPONSES (ok present, no
+method) resolve futures. Red/green proven: old bootstrap reproduces
+the exact steal; new W5 two-worker test passes 9/9.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

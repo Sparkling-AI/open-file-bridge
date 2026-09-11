@@ -229,12 +229,13 @@ def build_harness(scratch, cells_sel=None):
     cells_sel: optional iterable of cell names to include (pass B/C run
     subsets; pass A runs everything)."""
     owui = OWUI
-    py = '''import sys, json, base64, asyncio
+    py = '''import sys, json, base64, asyncio, random
 from js import parent
 from pyodide.ffi import create_proxy, to_js
 
 _pending = {}
 _next = [100]
+_hwid = "h%08x" % random.getrandbits(32)  # session-unique ids (see skill 3.0.28-EXT)
 _installed = [False]
 _TOKEN = ["__OFB_TEST_TOKEN__"]  # sec tier-2: tests inject; skill sets from user paste
 
@@ -249,7 +250,9 @@ def _install():
         try:
             d = getattr(ev, "data", None)
             dd = d.to_py()
-            if dd.get("ofb") is not True:
+            # only RESPONSES resolve futures (requests carry method) —
+            # mirrors the skill's cross-worker collision guard
+            if dd.get("ofb") is not True or dd.get("method") is not None or "ok" not in dd:
                 return
             fut = _pending.pop(dd.get("id"), None)
             if fut is not None and not fut.done():
@@ -262,7 +265,7 @@ def _install():
 async def ofb_fetch(method, path, body=None, timeout=60.0):
     _install()
     fut = asyncio.get_event_loop().create_future()
-    rid = _next[0]; _next[0] += 1
+    rid = _hwid + "-" + str(_next[0]); _next[0] += 1
     _pending[rid] = fut
     msg = {"ofb": True, "id": rid, "method": method, "path": path}
     if body is not None:
@@ -275,7 +278,7 @@ async def ofb_fetch(method, path, body=None, timeout=60.0):
 async def ofb_fetch_b64(path, timeout=120.0):
     _install()
     fut = asyncio.get_event_loop().create_future()
-    rid = _next[0]; _next[0] += 1
+    rid = _hwid + "-" + str(_next[0]); _next[0] += 1
     _pending[rid] = fut
     parent.postMessage(to_js({"ofb": True, "id": rid, "method": "GET",
                               "path": path, "b64": True}), "*")

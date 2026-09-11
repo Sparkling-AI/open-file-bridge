@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.0.27-EXT (extension backend, no token)
+# Local File Bridge — skill v3.0.28-EXT (extension backend, no token)
 
 > **Variant picker (for whoever publishes this skill):** this is the
 > NO-TOKEN variant — publish it when the extension's 🔒 Security card
@@ -161,7 +161,14 @@ def _install():
             if d is None:
                 return
             dd = d.to_py()          # JsProxy -> dict (REQUIRED before .get)
-            if dd.get("ofb") is not True:
+            # only RESPONSES resolve futures: responses carry ok, requests
+            # carry method. "ofb-pipe" is a broadcast channel — with two OWUI
+            # tabs open, the OTHER tab's worker posts requests with ids that
+            # collide with ours, and without this guard its REQUEST would
+            # steal our pending future (observed live: ofb_fetch "returned"
+            # the request itself and bridge_get died with KeyError 'status').
+            if dd.get("ofb") is not True or dd.get("method") is not None \
+                    or "ok" not in dd:
                 return
             fut = _pending.pop(dd.get("id"), None)
             if fut is not None and not fut.done():
@@ -200,7 +207,10 @@ async def ofb_fetch(method, path, body=None, b64=False, timeout=60.0):
     _install()
     loop = asyncio.get_event_loop()
     fut = loop.create_future()
-    rid = _next[0]; _next[0] += 1
+    # session-unique ids: two OWUI tabs = two workers with counters that
+    # both start at 0 — bare ints collide on the shared channel (see the
+    # _on_msg guard); the _wid prefix makes every id globally unambiguous
+    rid = _wid + "-" + str(_next[0]); _next[0] += 1
     _pending[rid] = fut
     msg = {"ofb": True, "id": rid, "method": method, "path": path}
     if body is not None:
