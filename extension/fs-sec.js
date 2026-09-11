@@ -2,12 +2,15 @@
 //
 // Restores the desktop app's two-tier boundary (file_bridge.py
 // check_request) to the extension pipe:
-//   tier 1 — ORIGIN ALLOWLIST: only sites the user added in the settings
-//     page may issue pipe requests. Origins are taken from the BROWSER-set
-//     sender metadata (sender.origin / sender.url), never from message
-//     fields — page JS cannot forge them. Strict scheme://host:port match
-//     (match patterns cannot pin ports, so the SW is the enforcement
-//     point; every localhost port is its own origin).
+//   tier 1 — SITE LOCK: exactly ONE site (the user's Open WebUI origin)
+//     may issue pipe requests. Dandan 2026-09-11: "make it only accept
+//     one site — multiple sites behind one bridge token doesn't make
+//     sense" — the bridge serves ONE deployment; the token is its second
+//     lock, not a shared key for several. The site is taken from the
+//     BROWSER-set sender metadata (sender.origin / sender.url), never
+//     from message fields — page JS cannot forge them. Strict
+//     scheme://host:port (match patterns cannot pin ports, so the SW is
+//     the enforcement point; every localhost port is its own origin).
 //   tier 2 — BRIDGE TOKEN (opt-in, app parity): an org-wide secret the
 //     page must present per request. Closes the residual gap tier 1
 //     cannot: same-origin impostors — any local process can bind
@@ -18,25 +21,40 @@
 //     user pastes it into chat once when asked; the model must never
 //     echo it. (It cannot defend code injection into the REAL page —
 //     injected code sees everything the page holds.)
-//   UNLOCKED (no origins, no token) is DENIED outright — same hard-fail
+//   UNLOCKED (no site, no token) is DENIED outright — same hard-fail
 //     as the app's production mode. Default-deny on fresh installs and
 //     upgrades; the settings page offers blocked origins as one-click
-//     Allow rows so recovery is one visit.
+//     "Use this site" rows so recovery is one visit.
 //
 // Trusted senders: the extension's OWN pages (options, engine host,
-// guide, open) are exempt — sender.id === chrome.runtime.id.
+// guide, open) are exempt — their sender URL is chrome-extension://.
 
 "use strict";
 
-const SEC_MAX_ORIGINS = 20;
 const SEC_TOKEN_MAX_LEN = 256;
 const SEC_DENIED_KEEP = 8;
 
 /* ---------------- kv helpers (fs-idb is loaded first) ---------------- */
 
-async function secAllowedOrigins() {
-  const v = await kvGet("allowed_origins", []);
-  return Array.isArray(v) ? v.filter((o) => typeof o === "string") : [];
+/** The ONE allowed site origin, or null. Migrates the 3.0.18-era
+ *  `allowed_origins` LIST (first entry wins) so upgrades keep working. */
+async function secAllowedSite() {
+  try {
+    const one = await kvGet("allowed_site", null);
+    if (typeof one === "string" && one) return one;
+    const legacy = await kvGet("allowed_origins", []);
+    if (Array.isArray(legacy) && legacy.length &&
+        typeof legacy[0] === "string" && legacy[0]) {
+      return legacy[0];
+    }
+  } catch (e) { /* fall through */ }
+  return null;
+}
+
+/** Store the one site; clears the legacy list key so reads stay clean. */
+async function secSetAllowedSite(origin) {
+  await kvSet("allowed_site", origin || null);
+  try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
 }
 
 async function secBridgeToken() {
@@ -44,13 +62,13 @@ async function secBridgeToken() {
   return typeof v === "string" && v ? v : null;
 }
 
-/** 'token+origin' | 'token' | 'origin' | 'UNLOCKED' — the app's names. */
+/** 'site+token' | 'token' | 'site' | 'UNLOCKED'. */
 async function secMode() {
   const hasTok = (await secBridgeToken()) !== null;
-  const hasOrg = (await secAllowedOrigins()).length > 0;
-  if (hasTok && hasOrg) return "token+origin";
+  const hasSite = (await secAllowedSite()) !== null;
+  if (hasTok && hasSite) return "site+token";
   if (hasTok) return "token";
-  if (hasOrg) return "origin";
+  if (hasSite) return "site";
   return "UNLOCKED";
 }
 
@@ -129,27 +147,28 @@ async function secGate(msg, sender) {
     }) };
   }
 
-  const allowed = await secAllowedOrigins();
-  if (!allowed.length && (await secBridgeToken()) === null) {
+  const site = await secAllowedSite();
+  if (!site && (await secBridgeToken()) === null) {
     return { ofb: true, id: id, ok: false, status: 403, body: JSON.stringify({
       error: "bridge locked — no site is allowed yet",
       security_locked: true,
       origin: who.origin,
       hint: "tell the user: click the Open File Bridge toolbar icon → " +
-            "🔒 Security → Allowed sites → add " + who.origin +
+            "🔒 Security → Allowed site → set it to " + who.origin +
             " (one click if it appears under Recently blocked), then retry",
     }) };
   }
 
-  if (allowed.length && !allowed.includes(who.origin)) {
+  if (site && who.origin !== site) {
     secNoteDenied(who.origin); // fire-and-forget
     return { ofb: true, id: id, ok: false, status: 403, body: JSON.stringify({
-      error: "origin " + who.origin + " is not in the allowed-sites list",
+      error: "origin " + who.origin + " is not the allowed site",
       origin_blocked: true,
       origin: who.origin,
       hint: "tell the user: click the Open File Bridge toolbar icon → " +
-            "🔒 Security → Allowed sites → add " + who.origin +
-            " (one click under Recently blocked), then retry",
+            "🔒 Security → Allowed site → set it to " + who.origin +
+            " (one click under Recently blocked; this REPLACES the current " +
+            "site), then retry",
     }) };
   }
 

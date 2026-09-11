@@ -117,12 +117,14 @@ Bridge must be running during chats. Non-technical users will forget.
       itself; the Linux re-run must confirm the four still pass WITH
       the gate on.
 - [ ] Onboarding copy beyond the options card: README still documents
-      only the APP setup (no extension section); the CWS store listing
-      (chat-only draft) needs the same skill + code-interpreter steps;
-      when feat/stage3-extension merges to master, repoint the
-      Get-started card's SKILL-EXT.md link (options.html, currently
-      branch-scoped) — until the next push that link even serves the
-      OLD skill (3.0.5-EXT on the remote).
+      only the APP setup (no extension section — it should also name the
+      TWO skill variants, SKILL-EXT.md vs SKILL-EXT-TOKEN.md); the CWS
+      store listing (chat-only draft) needs the same skill +
+      code-interpreter steps; when feat/stage3-extension merges to
+      master, repoint the Get-started card's skill-file links
+      (options.html SKILL_FILE_BASE, currently branch-scoped) — until
+      the next push those links serve the OLD skill (3.0.5-EXT on the
+      remote).
 - [ ] Dandan's Chrome, once, after loading ext 3.0.18: options → 🔒
       Security → allow `http://127.0.0.1:8788` (one click under
       Recently blocked) and optionally Generate+Save a bridge token

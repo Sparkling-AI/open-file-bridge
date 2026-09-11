@@ -711,6 +711,21 @@ test with "list the files in my folder". Steps 1–2 show live ✓/○
 status; the skill-file link is branch-scoped until the merge (TODO 6b).
 Vision-checked (GLM-4.6V) + smoke 5/5.
 
+## Stage 3 (extension): paste-ready skill variants + single-site lock (2026-09-11, ext 3.0.20 / skill 3.0.25-EXT)
+
+Skill files are now directly copy-pasteable into OWUI: dev chatter
+replaced by a 3-line variant picker, all version archaeology scrubbed
+to behavior statements. TWO variants mirror the app's pattern —
+SKILL-EXT.md (no token; still self-heals via ofb_set_token if a token
+appears later) and NEW SKILL-EXT-TOKEN.md (`_TOKEN` pre-filled at
+publish time, zero chat friction), generated from the plain file with
+a verified 5-delta diff. The Security card now locks the bridge to
+exactly ONE site (kv allowed_site, legacy-list migration, modes
+site+token/site/token/UNLOCKED) — one bridge token guards one
+deployment, not several sites. The Get-started skill link adapts to
+the token state. sec_test 14/14, options smoke 6/6, worker_transport
+7/7 on the rewritten bootstrap.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

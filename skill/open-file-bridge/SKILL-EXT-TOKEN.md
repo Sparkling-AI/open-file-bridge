@@ -1,16 +1,18 @@
 ---
 name: open-file-bridge
-description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the Open File Bridge extension — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
+description: "MUST-CALL before ANY file task (TOKEN variant — the bridge token is pre-embedded below). User's real files are reachable ONLY via the Open File Bridge extension — call this skill first and run its Bootstrap exactly as written. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.25-EXT (extension backend, no token)
+# Local File Bridge — skill v3.0.25-EXT (extension backend, TOKEN variant)
 
-> **Variant picker (for whoever publishes this skill):** this is the
-> NO-TOKEN variant — publish it when the extension's 🔒 Security card
-> has NO bridge token set. With a token set, publish
-> `SKILL-EXT-TOKEN.md` instead (its bootstrap ships the token
-> pre-filled). Paste the description above into the skill's description
-> field and everything below this line into its content.
+> **TOKEN variant — publish this only when the extension's 🔒 Security
+> card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`
+> instead). The org's bridge token is already embedded in the bootstrap
+> below — `_TOKEN` was pre-filled when this skill was prepared. Copy
+> the bootstrap EXACTLY; do not remove or redefine the `_TOKEN` line;
+> and NEVER echo the token back in your answer. Paste the description
+> above into the skill's description field and everything below this
+> line into its content.
 
 The Open File Bridge **browser extension** is the file backend: no
 desktop app, no bridge process. Requests travel
@@ -45,13 +47,13 @@ desktop bridge app — every recipe below is complete on its own.
     <the origin named in the error>** (one click if it already shows
     under "Recently blocked"), then retry. Do NOT retry before they
     confirm; every retry while blocked fails identically.
-  - `{"token_required": true}` — the user set a bridge token (second
-    lock; stops a fake page impersonating their address). Ask the user
-    ONCE to paste the bridge token (toolbar icon → 🔒 Security →
-    Bridge token → Show/copy), then run
-    `ofb_set_token("<the pasted token>")` and retry. NEVER echo the
-    token back in your answer; it rides in the `token` field of every
-    request from then on (the bootstrap handles that automatically).
+  - `{"token_required": true}` — the token embedded below is wrong or
+    was rotated in the extension's settings. Ask the user ONCE for the
+    current bridge token (toolbar icon → 🔒 Security → Bridge token →
+    Show/copy), then run `ofb_set_token("<the pasted token>")` and
+    retry. NEVER echo the token back in your answer; it rides in the
+    `token` field of every request from then on (the bootstrap handles
+    that automatically).
 - **Permission errors (HTTP 403 `permission_needed: true`)** — after a
   browser restart or extension update the user must re-confirm folder
   access once. Tell the user: click the Open File Bridge toolbar
@@ -137,9 +139,9 @@ _installed = [False]
 _bc = None            # worker transport (BroadcastChannel "ofb-pipe")
 _relay_tag = [None]   # elected relay — the ONE tab that forwards for us
 _wid = "w%08x" % random.getrandbits(32)
-_TOKEN = [""]         # bridge token: set from a user paste via
-                     # ofb_set_token when a 403 token_required arrives —
-                     # NEVER echo it back in your answer
+_TOKEN = ["__BRIDGE_TOKEN__"]   # org bridge token EMBEDDED (filled in when
+                     # this skill was prepared). NEVER redefine it, and
+                     # NEVER echo the value back in your answer
 
 def ofb_set_token(t):
     _TOKEN[0] = str(t or "")

@@ -2528,3 +2528,42 @@ after the next push the link serves current; move it to master when the
 branch merges (TODO 6b). Vision-checked via GLM-4.6V (clean checklist,
 no layout defects); smoke 5/5 (card first, links resolve, fresh +
 allowed-site status lines, zero console errors).
+
+## Stage-3 session #31: paste-ready skill + token variant + SINGLE-site lock (2026-09-11, ext 3.0.20 / skill 3.0.25-EXT)
+
+**Dandan's three asks:** (1) SKILL-EXT.md wasn't copy-paste ready —
+dev-facing chatter (PUBLISHING NOTE, version archaeology, DEVNOTES
+refs) mixed into what should be the OWUI skill's description+body;
+(2) with the token tier back, mirror the app's variant pattern — one
+skill for no-token, one with the token pre-embedded; (3) the Security
+card allowed MULTIPLE sites, which "doesn't make sense — one bridge
+token is for one deployment".
+
+**Skill rewrite (3.0.25-EXT):** body scrubbed to model-operational
+content only — the publishing note became a 3-line variant picker
+(plain vs token, which to publish when), version-history asides
+(3.0.1/3.0.3/3.0.5/3.0.11/3.0.18 callouts) collapsed into behavior
+statements, "see DEVNOTES #19–#28" and observed-date anecdotes dropped,
+the dangling "see standard skill's recipe" comment made self-contained,
+strict-mode mentions dropped (no EXT strict variant). NEW
+SKILL-EXT-TOKEN.md generated FROM the plain file by script (5 intended
+deltas only: description marker, H1, variant note, token_required
+recovery wording "token was rotated", and the bootstrap's
+`_TOKEN = ["__BRIDGE_TOKEN__"]`) — diff verified to contain nothing
+else. Both bootstraps ast-parse; worker_transport 7/7 runs the
+rewritten plain bootstrap verbatim through both transports. OWUI rows
+restaged — BOTH rows now carry the no-token BODY (the old
+surgical-row-with-frontmatter distinction dropped; frontmatter's only
+consumer was a human copying from the DB).
+
+**Single-site lock (ext 3.0.20):** fs-sec tier 1 is now ONE site (kv
+`allowed_site`; migration reads a 3.0.18-era `allowed_origins` list's
+first entry, and setting a site deletes the legacy key). Modes renamed
+`site+token` / `site` / `token` / UNLOCKED. /state exposes
+`allowed_origin` (the one site) — the `allowed_origins` array is gone.
+Options Security card: one input + Set site/Remove, denied rows say
+"Use this site" and clicking REPLACES. Get-started step 3's skill link
+ADAPTS: with a bridge token set it points at SKILL-EXT-TOKEN.md (and
+names why). Tests: sec_test 14/14 (new P4c proves the legacy list is
+ignored once allowed_site is set), options smoke 6/6 (incl. the
+adaptive link flip), spike1.sec_configure sets allowed_site.

@@ -79,13 +79,12 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       writes_enabled: r.writesEnabled !== false,
     }));
     const lim = await rateLimits();
-    const secOrigins = await secAllowedOrigins();
+    const secSite = await secAllowedSite();
     return fsOk({
       root: ros.length ? ros[0].path : null,
       roots: ros, port: null,
       ocr_lang: await kvGet("ocr_lang", "eng"),
-      allowed_origin: secOrigins.length ? secOrigins[0] : null,
-      allowed_origins: secOrigins,
+      allowed_origin: secSite,
       security: await secMode(),
       token_required: (await secBridgeToken()) !== null,
       readonly: await kvGet("readonly_global", false), readonly_source: "setting",

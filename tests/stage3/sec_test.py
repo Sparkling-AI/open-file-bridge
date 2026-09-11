@@ -161,14 +161,22 @@ def main():
         check("P3b wrong token denied", r["status"] == 403 and
               body_of(r).get("token_required") is True, "")
 
-        # ---- P4: /state reports the tier model ----
+        # ---- P4: /state reports the tier model (single site) ----
         r = req(token=TEST_TOKEN, path="/state")
         s = body_of(r)
-        check("P4 /state security mode token+origin",
-              s.get("security") == "token+origin", str(s.get("security")))
-        check("P4b /state allowed_origins + token_required",
-              s.get("allowed_origins") == [base] and s.get("token_required") is True,
-              json.dumps(s.get("allowed_origins")))
+        check("P4 /state security mode site+token",
+              s.get("security") == "site+token", str(s.get("security")))
+        check("P4b /state allowed_origin + token_required",
+              s.get("allowed_origin") == base and s.get("token_required") is True,
+              str(s.get("allowed_origin")))
+        # single-site semantics: a SECOND origin must NOT be servable even
+        # if it somehow landed in the legacy 3.0.18 list key
+        opt.evaluate(
+            "async () => { await OFBIDB.put('kv', ['https://other.example'], 'allowed_origins'); }")
+        r = opt.evaluate(
+            "() => pipe('GET', '/state').then(r => r.data)")
+        check("P4c legacy list ignored once allowed_site is set",
+              r and r.get("allowed_origin") == base, str(r and r.get("allowed_origin")))
 
         # ---- U1-U3: SW-context units (fabricated senders) ----
         u1 = sw.evaluate(

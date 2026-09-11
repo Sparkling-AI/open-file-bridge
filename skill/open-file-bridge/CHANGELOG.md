@@ -2,6 +2,23 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.0.25-EXT — 2026-09-11
+
+Paste-ready rewrite + TWO variants. The extension skill files are now
+directly copy-pasteable into OWUI (Workspace → Skills): a short variant
+picker at the top replaces the old developer-facing publishing notes,
+and all repo archaeology (setup-script notes, version-history asides)
+is gone — only model-operational content remains. NEW
+`SKILL-EXT-TOKEN.md` mirrors the app's token-variant pattern: publish
+it when the extension's 🔒 Security card has a bridge token set — the
+bootstrap ships with `_TOKEN` pre-filled (`__BRIDGE_TOKEN__`
+placeholder, filled at publish time), zero chat friction; publish the
+no-token `SKILL-EXT.md` otherwise (it still self-heals via
+`ofb_set_token` if a token appears later). Same release also renames
+the security mode to single-site semantics (`site+token` / `site` /
+`token` / UNLOCKED) matching extension 3.0.20, which locks the bridge
+to exactly ONE site.
+
 ## 2.11 — 2026-09-06
 
 The chat-side approval round trip is REMOVED. Real usage showed models losing

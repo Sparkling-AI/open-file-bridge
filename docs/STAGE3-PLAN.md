@@ -330,6 +330,9 @@ Chrome 110):
    (neither tier configured) denies everything, same as the app's
    production hard-fail; the settings page's 🔒 Security card manages
    both, with blocked origins surfacing as one-click Allow rows.
+   AMENDED later same day: tier 1 is exactly ONE site (Dandan: "one
+   bridge token is for one deployment") — kv allowed_site, modes
+   site+token/site/token/UNLOCKED, ext 3.0.20.
    Trusted senders are the extension's OWN pages — discriminated by
    the sender URL's `chrome-extension://` scheme (NOT `sender.id`:
    content scripts carry the extension id too, which made the first

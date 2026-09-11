@@ -73,20 +73,28 @@ function fmtTTL(v) {
 /* ---------------- get-started checklist status ---------------------------- */
 
 /** Steps 1-2 of the 🚀 card are verifiable from here (folder + site); the
- *  Open WebUI-side steps (skill, interpreter) are instructions only. */
+ *  Open WebUI-side steps (skill, interpreter) are instructions only.
+ *  The skill-file link ADAPTS: with a bridge token set, point at the
+ *  token variant (its bootstrap ships with the token pre-filled). */
 async function renderStart() {
   const el = document.getElementById("startstat");
   if (!el) return;
   try {
     const roots = (lastHealth && lastHealth.roots) || [];
-    const origins = (await OFBIDB.get("kv", "allowed_origins")) || [];
+    const site = await secAllowedSiteRead();
+    const token = await OFBIDB.get("kv", "bridge_token");
     const parts = [];
     parts.push(roots.length ? "✓ folder connected" : "○ no folder yet");
-    parts.push(origins.length
-      ? "✓ site allowed (" + origins.length + ")"
-      : "○ no site allowed yet");
+    parts.push(site ? "✓ site allowed" : "○ no site allowed yet");
     parts.push("→ steps 3–4 happen in Open WebUI (skill + code interpreter)");
     el.textContent = parts.join(" · ");
+    const link = document.getElementById("skillfile");
+    const name = document.getElementById("skillfilename");
+    if (link && name) {
+      const which = token ? SKILL_FILE_TOKEN : SKILL_FILE_PLAIN;
+      link.href = SKILL_FILE_BASE + which;
+      name.textContent = which + (token ? " — token variant, because you set a bridge token" : "");
+    }
   } catch (e) { /* status is UX */ }
 }
 
@@ -138,7 +146,7 @@ async function beat() {
   renderStart();
 }
 
-/* ---------------- security card (fs-sec: allowlist + token) --------------- */
+/* ---------------- security card (fs-sec: one site + token) ---------------- */
 
 function normalizeSite(raw) {
   const s = String(raw || "").trim();
@@ -152,50 +160,40 @@ function normalizeSite(raw) {
   return { origin: u.origin };
 }
 
+const SKILL_FILE_PLAIN = "SKILL-EXT.md";
+const SKILL_FILE_TOKEN = "SKILL-EXT-TOKEN.md";
+const SKILL_FILE_BASE =
+  "https://github.com/Sparkling-AI/open-file-bridge/blob/feat/stage3-extension/skill/open-file-bridge/";
+
 async function renderSec() {
-  const origins = (await OFBIDB.get("kv", "allowed_origins")) || [];
+  const site = await secAllowedSiteRead();
   const token = await OFBIDB.get("kv", "bridge_token");
+  const stat = document.getElementById("sitestat");
+  if (site) {
+    stat.textContent = "✓ Only " + site + " can use the bridge.";
+    stat.className = "ok";
+  } else {
+    stat.textContent = "";
+    stat.className = "";
+  }
   const modeEl = document.getElementById("secmodeinfo");
-  const mode = origins.length ? (token ? "site list + token" : "site list") : (token ? "token only" : "nothing");
+  const mode = site ? (token ? "site lock + token" : "site lock") : (token ? "token only" : "nothing");
   modeEl.innerHTML = "Current protection: <b>" + esc(mode) + "</b>" +
-    (origins.length || token ? "" :
-      " — <span class='warn'>no site can use the bridge yet; add your Open WebUI address above.</span>");
+    (site || token ? "" :
+      " — <span class='warn'>no site can use the bridge yet; set your Open WebUI address above.</span>");
   modeEl.className = "hint";
 
-  const rows = document.getElementById("siterows");
-  rows.innerHTML = "";
-  for (const o of origins.slice(0, 20)) {
-    const row = document.createElement("div");
-    row.className = "root-row";
-    const name = document.createElement("span");
-    name.className = "name";
-    name.textContent = o;
-    const del = document.createElement("button");
-    del.className = "small secondary";
-    del.textContent = "Remove";
-    del.onclick = async () => {
-      const keep = origins.filter((x) => x !== o);
-      await OFBIDB.put("kv", keep, "allowed_origins");
-      renderSec(); beat();
-    };
-    row.append(name, del);
-    rows.appendChild(row);
-  }
-  if (!origins.length) {
-    rows.innerHTML = "<p class='hint'>No sites allowed yet.</p>";
-  }
-
-  // recently-blocked suggestions (fs-sec's denied ring) — one-click Allow
+  // recently-blocked suggestions — one click REPLACES the current site
   const denied = (await OFBIDB.get("kv", "denied_origins")) || [];
   const drows = document.getElementById("deniedrows");
-  const fresh = denied.filter((d) => d && d.o && !origins.includes(d.o) &&
+  const fresh = denied.filter((d) => d && d.o && d.o !== site &&
     Date.now() - (d.ts || 0) < 3600 * 1000);
   drows.innerHTML = "";
   if (fresh.length) {
     const label = document.createElement("p");
     label.className = "hint";
     label.style.margin = "10px 0 0 0";
-    label.textContent = "Recently blocked by the bridge — allow if this is your Open WebUI:";
+    label.textContent = "Recently blocked by the bridge — is one of these your Open WebUI? Clicking replaces the current site:";
     drows.appendChild(label);
     for (const d of fresh.slice(0, 8)) {
       const row = document.createElement("div");
@@ -205,11 +203,10 @@ async function renderSec() {
       name.textContent = d.o;
       const add = document.createElement("button");
       add.className = "small secondary";
-      add.textContent = "Allow";
+      add.textContent = "Use this site";
       add.onclick = async () => {
-        const keep = ((await OFBIDB.get("kv", "allowed_origins")) || []).filter((x) => x !== d.o);
-        keep.push(d.o);
-        await OFBIDB.put("kv", keep.slice(0, 20), "allowed_origins");
+        await OFBIDB.put("kv", d.o, "allowed_site");
+        try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
         renderSec(); beat();
       };
       row.append(name, add);
@@ -221,8 +218,16 @@ async function renderSec() {
   if (document.activeElement !== tokInput) tokInput.value = token || "";
   document.getElementById("tokenstat").textContent = token
     ? "✓ token required from every chat request"
-    : "no token — the site list alone guards the bridge";
+    : "no token — the site lock alone guards the bridge";
   renderStart();
+}
+
+/** options-page read of the one site (mirrors fs-sec's migration). */
+async function secAllowedSiteRead() {
+  const one = await OFBIDB.get("kv", "allowed_site");
+  if (typeof one === "string" && one) return one;
+  const legacy = (await OFBIDB.get("kv", "allowed_origins")) || [];
+  return Array.isArray(legacy) && legacy.length ? legacy[0] : null;
 }
 
 function genToken() {
@@ -472,23 +477,27 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("pick").onclick = () => pickFolder();
 
-  // Security card: site allowlist + bridge token (fs-sec tiers 1 & 2)
+  // Security card: ONE site + bridge token (fs-sec tiers 1 & 2)
   document.getElementById("siteaddbtn").onclick = async () => {
-    const stat = document.getElementById("secstatus");
+    const stat = document.getElementById("sitestat");
     const n = normalizeSite(document.getElementById("siteadd").value);
-    if (n.err) { stat.textContent = "✗ " + n.err; stat.className = "warn hint"; return; }
-    const cur = (await OFBIDB.get("kv", "allowed_origins")) || [];
-    if (cur.includes(n.origin)) { stat.textContent = "✓ " + n.origin + " is already allowed"; stat.className = "hint"; return; }
-    if (cur.length >= 20) { stat.textContent = "✗ site list is full (20) — remove one first"; stat.className = "warn hint"; return; }
-    await OFBIDB.put("kv", cur.concat([n.origin]), "allowed_origins");
+    if (n.err) { stat.textContent = "✗ " + n.err; stat.className = "warn"; return; }
+    await OFBIDB.put("kv", n.origin, "allowed_site");
+    try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
     document.getElementById("siteadd").value = "";
-    stat.textContent = "✓ " + n.origin + " can now use the bridge";
-    stat.className = "hint";
+    stat.textContent = "✓ Only " + n.origin + " can use the bridge.";
+    stat.className = "ok";
     renderSec(); beat();
   };
   document.getElementById("siteadd").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") document.getElementById("siteaddbtn").click();
   });
+  document.getElementById("siterm").onclick = async () => {
+    await OFBIDB.del("kv", "allowed_site");
+    try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
+    document.getElementById("sitestat").textContent = "";
+    renderSec(); beat();
+  };
   document.getElementById("tokenset").onclick = async () => {
     const v = document.getElementById("bridgetoken").value.trim();
     if (v && v.length < 8) {

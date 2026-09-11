@@ -493,12 +493,13 @@ def find_ext(ctx):
 
 
 def sec_configure(opt, origin, token=TEST_TOKEN):
-    """Allow `origin` on the sender gate (+ set the bridge token when given).
-    `opt` = an OPEN options.html page (any extension page context with
-    OFBIDB works — the SW reads the same store per request)."""
+    """Set the ONE allowed site on the sender gate (+ bridge token when
+    given). `opt` = an OPEN options.html page (any extension page context
+    with OFBIDB works — the SW reads the same store per request)."""
     opt.evaluate(
         "async (a) => {"
-        "  await OFBIDB.put('kv', [a[0]], 'allowed_origins');"
+        "  await OFBIDB.put('kv', a[0], 'allowed_site');"
+        "  await OFBIDB.del('kv', 'allowed_origins');"
         "  if (a[1] !== null) await OFBIDB.put('kv', a[1], 'bridge_token');"
         "  else await OFBIDB.del('kv', 'bridge_token');"
         "}",
