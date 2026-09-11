@@ -163,7 +163,7 @@ function normalizeSite(raw) {
 const SKILL_FILE_PLAIN = "SKILL-EXT.md";
 const SKILL_FILE_TOKEN = "SKILL-EXT-TOKEN.md";
 const SKILL_FILE_BASE =
-  "https://github.com/Sparkling-AI/open-file-bridge/blob/feat/stage3-extension/skill/open-file-bridge/";
+  "https://github.com/Sparkling-AI/open-file-bridge/blob/master/skill/open-file-bridge/";
 
 // site editor has three states: EMPTY (input + "Set site"), SET (view row
 // with Edit/Remove — no input, so the set site is impossible to miss), and

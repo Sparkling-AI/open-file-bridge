@@ -781,6 +781,13 @@ removed from the skill bodies (nothing older was ever published). CWS
 zip rebuilt at 3.1.0 (48.4 MB, 80 files). sec_test 14/14 +
 worker_transport 9/9.
 
+## Stage 3 (extension): Get-started links on master, ext 3.1.1 (2026-09-12)
+
+The options-page skill-file links (plain + adaptive token variant)
+repointed from the feature branch to blob/master after the release
+merge (verified 200; smoke 6/6). Extension 3.1.1; CWS zip rebuilt, the
+3.1.0 artifact removed.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
