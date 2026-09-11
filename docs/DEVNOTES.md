@@ -2713,3 +2713,18 @@ mentions remain in either skill body. sec_test 14/14 + worker_transport
 1122334455). NOT changed (observed, out of scope): /version still
 serves skill_min "2.11" — an app-line concept; revisit if the /version
 note's setup_owui.py wording confuses extension users.
+
+
+## Stage-3 session #38: Get-started links repointed to master (2026-09-12, ext 3.1.1)
+
+Post-merge cleanup from Dandan: the options-page skill-file links still
+pointed at blob/feat/stage3-extension/... — after the merge they belong
+on master (stable, always the released skill; the branch may diverge or
+die). options.html #skillfile href + options.js SKILL_FILE_BASE →
+blob/master/...; verified live (200), the adaptive token-variant flip
+still works (options smoke 6/6, href flips to the MASTER token-variant
+URL). Ext bumped 3.1.0 → 3.1.1 (manifest + FS_VERSION) because 3.1.0
+was already merged/pushed; CWS zip rebuilt as
+open-file-bridge-extension-3.1.1.zip and the 3.1.0 zip DELETED so the
+stale artifact can't be uploaded by mistake. Docs grep: the only other
+branch mentions are historical narrative (DEVNOTES/STAGE3-PLAN/TODO).
