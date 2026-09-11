@@ -2611,3 +2611,38 @@ which file to publish). NOTE: the OWUI rows' description COLUMN
 already carried the app-style text (Dandan set it manually at row
 creation) — the files were the outliers; restage now sets content AND
 description together so they can never drift again.
+
+
+## Stage-3 session #34: token-variant live failure — flow verified, stale-relay trap named (2026-09-11, ext 3.0.22 / skill 3.0.27-EXT)
+
+**Report:** Dandan published SKILL-EXT-TOKEN.md the intended way
+(generate token → replace __BRIDGE_TOKEN__ → stage), then "list my
+files" ran 5 code executions without answering. **Flow check:** app
+parity confirmed — the app's solo-setup README says "replace
+__ORG_TOKEN__ with your token"; EXT is designed identically. **His
+staged row inspected:** valid python, `_TOKEN = ["1122334455"]`
+(hand-typed custom value, not Generate). **E2E proof:** extracted his
+bootstrap VERBATIM from webui.db and ran it through a real module
+worker (BC transport) against ext 3.0.21 with site + same token
+configured — /health 200, token accepted, /list honest 503 (harness
+profile has no folder). 4/4. So skill + flow + gate + relay token
+passthrough all work; the failure was environmental. The three
+candidates (all → 403 token_required on every call → model retries →
+flail): (1) extension's SAVED token ≠ skill token (typed twice by
+hand; Save button easy to miss — Generate alone does NOT store),
+(2) STALE RELAY: an OWUI tab from before an extension reload keeps the
+OLD relay, which forwards only {ofb,id,method,path,body,b64} and
+silently DROPS the new `token` field — extension reload without page
+refresh now breaks the token tier SPECIFICALLY (site tier still
+passes: origin is right), a new failure mode of the known
+content-scripts-don't-hot-swap trap, (3) the model hand-writing pipe
+code without the token (recurring inline-the-bootstrap disease). Chat
+rows in webui.db held ONLY user turns (assistant stream never
+persisted) — no cell output to autopsy; diagnosis is by elimination +
+verified-mechanism. **Hardening:** skill 3.0.27-EXT adds a warning
+line above the bootstrap (run EXACTLY as written; refresh the page
+after an extension update); ext 3.0.22's 403 token_required hint names
+the stale-relay/refresh remedy. His active row restaged to 3.0.27-EXT
+WITH his token preserved (token-variant body + substitution); the
+inactive row got the plain body + description. sec_test 14/14 on
+3.0.22.

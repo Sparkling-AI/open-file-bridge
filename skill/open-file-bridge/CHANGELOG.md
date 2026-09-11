@@ -2,6 +2,20 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.0.27-EXT — 2026-09-11
+
+Token-variant hardening after Dandan's "5 executions, no answer" run:
+the publish flow (replace `__BRIDGE_TOKEN__`) was verified CORRECT —
+his exact staged bootstrap + token passes a real-browser e2e through
+the worker transport. The failure class is environmental (token
+mismatch in the extension's settings, a stale relay from before an
+extension reload that silently DROPS the token field, or a model
+hand-writing its own pipe code). All three now self-explain: a
+warning line above the bootstrap ("run EXACTLY as written — hand-written
+copies fail the sender gate with 403 token_required; refresh the page
+after an extension update"), and the 403 `token_required` hint (ext
+3.0.22) names the stale-relay/refresh-page remedy.
+
 ## 3.0.26-EXT — 2026-09-11
 
 The EXT variants' description now matches the application skills verbatim

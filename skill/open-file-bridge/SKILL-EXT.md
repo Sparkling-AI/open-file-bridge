@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.0.26-EXT (extension backend, no token)
+# Local File Bridge — skill v3.0.27-EXT (extension backend, no token)
 
 > **Variant picker (for whoever publishes this skill):** this is the
 > NO-TOKEN variant — publish it when the extension's 🔒 Security card
@@ -117,6 +117,13 @@ to SHOW the user the image. For ORIGINAL bytes (e.g. to embed into a
 document), use `/read_b64`, not `/image_b64`.
 
 ## Bootstrap (run once per session)
+
+**Run the block EXACTLY as written.** The transport (and, in the token
+variant, the bridge token) lives inside it — hand-written or trimmed
+copies fail the sender gate with 403 `token_required` and waste turns.
+After an extension update, a page that was already open holds a STALE
+relay that drops the token silently: if a correct token still gets
+`token_required`, tell the user to REFRESH the page once and retry.
 
 ```python
 import sys, json, base64, asyncio, random

@@ -742,6 +742,17 @@ file-type trigger surface + MUST-CALL rule; only "extension" adapted)
 for both EXT variants — previously a generic "ANY file task" wording.
 Restage now writes content AND the description column together.
 
+## Stage 3 (extension): token-variant live failure diagnosed + hardened (2026-09-11, ext 3.0.22 / skill 3.0.27-EXT)
+
+Dandan's 5-execution flail after publishing the token variant: the
+publish flow (replace __BRIDGE_TOKEN__) verified CORRECT — his staged
+bootstrap passes a real-browser worker-transport e2e (4/4). Failure
+class is environmental: token mismatch in the extension's saved
+settings, a stale pre-reload relay that silently drops the token
+field, or a model hand-writing pipe code. All three now self-explain:
+bootstrap warning line in the skill + stale-relay remedy in the 403
+token_required hint.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

@@ -181,7 +181,11 @@ async function secGate(msg, sender) {
       hint: "ask the user ONCE for the bridge token (Open File Bridge " +
             "toolbar icon → 🔒 Security → Bridge token, Show/copy), add it " +
             "as the token field on every request, retry after setting it. " +
-            "NEVER echo the token back in your answer",
+            "NEVER echo the token back in your answer. If the token you " +
+            "send is already the right one, the page may hold a STALE " +
+            "relay from before the last extension update (it drops the " +
+            "token silently) — tell the user to REFRESH the page once, " +
+            "then retry",
     }) };
   }
 
