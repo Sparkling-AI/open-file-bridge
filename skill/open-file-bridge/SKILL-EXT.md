@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "MUST-CALL before ANY file task. User's real files are reachable ONLY via the local bridge — call this skill first and run its Bootstrap. Files written with open()/os in this sandbox are LOST and INVISIBLE to the user; claiming success without a bridge response is a failure."
 ---
 
-# Local File Bridge — skill v3.0.23-EXT (extension backend)
+# Local File Bridge — skill v3.0.24-EXT (extension backend)
 
 > **PUBLISHING NOTE (2026-09-06):** `scripts/setup_owui.py` does not know
 > this variant yet — admins publish it MANUALLY (OWUI Workspace → Skills,
@@ -12,7 +12,7 @@ description: "MUST-CALL before ANY file task. User's real files are reachable ON
 
 > **EXTENSION VARIANT (3.0 — Stage 3)** — use when the user has the Open
 > File Bridge **browser extension**. The extension IS the backend now: no
-> desktop app, no bridge process, no token. Requests travel
+> desktop app, no bridge process. Requests travel
 > `postMessage or BroadcastChannel → page relay → extension service
 > worker → the user's granted folder` (Chrome File System Access API).
 > OWUI ≥ 0.11 may execute cells in a pyodide **worker** (no parent
@@ -29,19 +29,36 @@ description: "MUST-CALL before ANY file task. User's real files are reachable ON
 > elected relay's tab was closed mid-session — retry once (the
 > bootstrap re-elects automatically on the next call).
 
-Requires extension ≥ **3.0.1** (`/version` names the running build —
-`3.0.12-EXT` at this skill's writing; treat any `3.0.x-EXT` answer as
-current; `skill_min` 2.5). ≥ **3.0.3** = invisible engine
-auto-start (offscreen); on 3.0.1–3.0.2 engines still auto-start but in a
-background tab. The endpoint surface mirrors bridge app 2.11 — every
-recipe from the standard skill works with the exceptions below.
+Requires extension ≥ **3.0.18** (`/version` names the running build;
+treat any `3.0.x-EXT` answer as current; `skill_min` 2.5). ≥ **3.0.3** =
+invisible engine auto-start (offscreen); on 3.0.1–3.0.2 engines still
+auto-start but in a background tab. ≥ **3.0.18** = the sender security
+gate (see below — the SITE must be allowed, and if the user set a
+bridge token you must present it). The endpoint surface mirrors bridge
+app 2.11 — every recipe from the standard skill works with the
+exceptions below.
 
 ## What is different from the app-backed skill
 
 - `bridge_get` / `bridge_post` / `ofb_fetch` / `ofb_fetch_b64` — IDENTICAL
   signatures and behavior (bootstrap below).
-- **No token, no 401 flow.** The security boundary is the browser's own
-  folder-permission gate + the relay's descendant-iframe/id/rate gates.
+- **Sender security gate (extension ≥ 3.0.18, 2026-09-11)** — the
+  extension serves ONLY sites the user allowed (strict
+  scheme://host:port, set in the extension settings). Two 403 shapes
+  can come back, each self-explaining:
+  - `{"security_locked": true}` or `{"origin_blocked": true}` — this
+    site is not on the allowlist. Tell the user ONCE: click the Open
+    File Bridge **toolbar icon → 🔒 Security → Allowed sites → add
+    <the origin named in the error>** (one click if it already shows
+    under "Recently blocked"), then retry. Do NOT retry before they
+    confirm; every retry while blocked fails identically.
+  - `{"token_required": true}` — the user set a bridge token (second
+    lock; stops a fake page impersonating their address). Ask the user
+    ONCE to paste the bridge token (toolbar icon → 🔒 Security →
+    Bridge token → Show/copy), then run
+    `ofb_set_token("<the pasted token>")` and retry. NEVER echo the
+    token back in your answer; it rides in the `token` field of every
+    request from then on (the bootstrap handles that automatically).
 - **Permission errors (HTTP 403 `permission_needed: true`)** — after a
   browser restart the user must re-confirm folder access once. Tell the
   user: click the Open File Bridge toolbar icon → **Reconnect**. On the
@@ -126,6 +143,12 @@ _installed = [False]
 _bc = None            # worker transport (BroadcastChannel "ofb-pipe")
 _relay_tag = [None]   # elected relay — the ONE tab that forwards for us
 _wid = "w%08x" % random.getrandbits(32)
+_TOKEN = [""]         # bridge token (extension ≥ 3.0.18): set from a user
+                     # paste via ofb_set_token when a 403 token_required
+                     # arrives — NEVER echo it back in your answer
+
+def ofb_set_token(t):
+    _TOKEN[0] = str(t or "")
 
 def _install():
     if _installed[0]:
@@ -181,6 +204,8 @@ async def ofb_fetch(method, path, body=None, b64=False, timeout=60.0):
     msg = {"ofb": True, "id": rid, "method": method, "path": path}
     if body is not None:
         msg["body"] = body
+    if _TOKEN[0]:
+        msg["token"] = _TOKEN[0]   # sender gate tier 2 (extension ≥ 3.0.18)
     if b64:
         msg["b64"] = True
     if parent is not None:
@@ -241,7 +266,7 @@ async def write_binary(path, data: bytes):
 ```
 
 **First call:** `h = await bridge_get("/health")` — one call answers
-everything: extension alive, `version` (`3.0.3-EXT`), `addons`
+everything: extension alive, `version` (`3.0.18-EXT`+), `addons`
 (`{pdf: true, ocr: true}` — bundled capability), `engine_alive`
 (false is NORMAL — engines are lazy; they auto-start the moment you
 call an engine endpoint, so do NOT treat it as unavailable), `roots`
@@ -250,7 +275,10 @@ has not picked one yet → tell them to click the toolbar icon and choose
 a folder). "no relay answered" or "extension not present" means no
 extension on this page; a 503 "no shared folder" means no folder picked
 yet. A raw TIMEOUT is now rare — retry once (the relay election
-self-heals), then treat it as a dead extension.
+self-heals), then treat it as a dead extension. On extension ≥ 3.0.18
+the FIRST call may instead return 403 `security_locked`/`origin_blocked`
+or 403 `token_required` — see the sender-gate bullet above for the
+exact one-shot recovery (user allows the site / pastes the token).
 
 **Permission preflight (same /health call):** every root carries a
 `perm` field. If ANY root shows `"perm": "prompt"` instead of
@@ -265,7 +293,11 @@ resets `perm` to `prompt`; every read/write would fail with 403
 `permission_needed` until they Reconnect.
 
 **Errors are JSON** — read them, don't blind-retry. The shapes:
-403 `permission_needed` (Reconnect → Allow on every visit), 409
+403 `permission_needed` (Reconnect → Allow on every visit), 403
+`security_locked`/`origin_blocked` (site not allowed — user adds it in
+the extension settings; retry ONCE after they confirm), 403
+`token_required` (ask for the paste ONCE, `ofb_set_token`, retry —
+never echo the token), 409
 `engine_needed` (auto-start usually handles it — retry once; only if
 it persists, the user opens the engine tab from settings), 503
 no-folder (pick a folder), 405 wrong method (the error NAMES the right

@@ -678,6 +678,27 @@ Landscape (analysis, nothing implemented):
   markdown sanitizer may strip non-http links. Would live BESIDE the
   http /click as fallback.
 
+## Stage 3 (extension): sender security gate restored — origin allowlist + bridge token (2026-09-11, ext 3.0.18 / skill 3.0.24-EXT)
+
+The 2026-09-06 "token retired" posture left the pipe open to every
+website (relay injected on all https + localhost pages; the SW never
+checked WHO asked; reads and new-file writes are ungated by design —
+see DEVNOTES session #29). Restored the desktop app's two tiers with
+the enforcement point moved to the SW message listener
+(`extension/fs-sec.js`; match patterns cannot pin ports, so sender
+metadata is the only strict scheme://host:port check): tier 1 origin
+allowlist on browser-set sender metadata, tier 2 optional per-request
+bridge token (hash-compare; closes same-origin impostors on
+localhost/http), UNCONFIGURED = denied outright. Options page 🔒
+Security card manages both (blocked origins surface as one-click
+Allow). Trusted senders = own extension pages, discriminated by the
+`chrome-extension://` sender URL — NOT `sender.id` (content scripts
+carry it too; the first draft trusted every relay forward until
+sec_test caught it). New `tests/stage3/sec_test.py` 13/13 on the Mac;
+the four Linux picker suites now call `sec_configure` (TODO 6b has the
+re-run note). Skill teaches the 403 shapes (`security_locked`,
+`origin_blocked`, `token_required`) with one-shot recoveries.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

@@ -228,6 +228,17 @@ document.body.appendChild(f);
             args=["--disable-extensions-except=" + str(EXT),
                   "--load-extension=" + str(EXT)])
         base = f"http://127.0.0.1:{PORT}"
+        # sender gate: allow the harness origin, NO token tier — the skill
+        # bootstrap runs verbatim here (it sends a token only when the user
+        # pasted one, which this suite never simulates)
+        sys.path.insert(0, str(Path(__file__).parent))
+        import spike1  # noqa: E402
+        _sw, ext_origin = spike1.find_ext(ctx)
+        assert ext_origin, "no service worker"
+        opt = ctx.new_page()
+        opt.goto(ext_origin + "/options.html")
+        opt.wait_for_selector("#pick", timeout=10000)
+        spike1.sec_configure(opt, base, token=None)
         page = ctx.new_page()          # relay #1
         page.goto(base + "/wt-page.html")
         page2 = ctx.new_page()         # relay #2 (election must pick ONE);

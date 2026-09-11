@@ -110,10 +110,20 @@ Bridge must be running during chats. Non-technical users will forget.
       The 2026-09-10 language expansion (ext 3.0.11) also needs that
       engines run: e11 now asserts 21 langs in alphabetical order, and
       no new-lang OCR (rus/jpn/…) has been exercised live yet — only
-      static checks ran on the Mac.
+      static checks ran on the Mac. UPDATE 2026-09-11 (sender gate, ext
+      3.0.18): all four picker suites now call `spike1.sec_configure`
+      after the picker (origin + TEST_TOKEN; worker_transport is
+      origin-only) — the new `sec_test.py` (13/13 Mac) covers the gate
+      itself; the Linux re-run must confirm the four still pass WITH
+      the gate on.
+- [ ] Dandan's Chrome, once, after loading ext 3.0.18: options → 🔒
+      Security → allow `http://127.0.0.1:8788` (one click under
+      Recently blocked) and optionally Generate+Save a bridge token
+      (paste in chat once when the model asks).
 - [ ] Bump the CWS zip (`dist-stage3/…-3.0.2.zip`) when releasing — the
-      manifest is at 3.0.11 now (worker transport, blocking
-      confirmations, …, 21 OCR languages; zip is 94 MB unpacked).
+      manifest is at 3.0.18 now (worker transport, blocking
+      confirmations, …, 21 OCR languages, sender gate; zip is 94 MB
+      unpacked).
 - [ ] confirm_test.py was rewritten for the 2026-09-09 blocking-confirmation
       contract (c0 approve-mid-wait, c1 timed_out, c5 deny-mid-wait) but
       only runs on Linux/Xvfb — first run there must confirm it green.

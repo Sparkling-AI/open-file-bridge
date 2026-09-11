@@ -81,8 +81,31 @@ After a browser restart the assistant may report <code>permission-needed</code>
 
 <details class="sec" id="sec-security" open>
 <summary>🔒 Security</summary>
-<p class="hint">Every read and write is re-checked against the folder
-grant stored in this browser before it runs.</p>
+<p class="hint">Only sites listed below can talk to the bridge — every
+other website is refused, and until a site is added <b>nothing</b> is
+served. Add the address your Open WebUI runs on; scheme, host and port
+must match exactly (<code>https://chat.example.com</code>,
+<code>http://127.0.0.1:8080</code>).</p>
+<div class="btnrow">
+<input id="siteadd" type="text" placeholder="https://your-open-webUI-address" style="flex:1;min-width:220px">
+<button id="siteaddbtn" class="secondary">Add site</button>
+</div>
+<div id="siterows"></div>
+<div id="deniedrows"></div>
+<p class="hint" id="secmodeinfo"></p>
+<div class="btnrow" style="margin-top:10px">
+<label class="hint" for="bridgetoken" style="white-space:nowrap">Bridge token</label>
+<input id="bridgetoken" type="text" placeholder="not set — optional second lock" style="flex:1;min-width:220px" autocomplete="off" spellcheck="false">
+<button id="tokenset" class="secondary">Save</button>
+<button id="tokengen" class="secondary">Generate</button>
+<button id="tokencopy" class="secondary">Copy</button>
+</div>
+<p class="hint" id="tokenstat"></p>
+<p class="hint" style="margin-top:2px">With a token set, the chat must
+also present it — this stops a <i>fake</i> page impersonating your
+Open WebUI address (possible for local/http addresses). When the
+assistant asks, paste the token <b>once</b> in chat; it is never echoed
+back. Leave empty to rely on the site list alone.</p>
 <p class="hint">Always on, not configurable: credential-looking files
 (<code>.env</code>, <code>id_rsa</code>, <code>*.pem</code>, …) are refused;
 every overwrite keeps the previous version; deletes go to the trash (30-day expiry).</p>

@@ -3,9 +3,10 @@
 // ONE page for both entry points: the toolbar icon and chrome://extensions
 // → Options both land here (sw.js opens options.html; setup.html redirects
 // to it). Sections mirror the desktop app's settings page (src/file_bridge.py
-// PICKER_HTML) with extension semantics: no origin/token card input (the
-// browser permission gate replaced them), folder grants instead of a root
-// path, engines hosted in a tab instead of in-process.
+// PICKER_HTML) with extension semantics: the origin allowlist + optional
+// bridge token ARE the app's two security tiers (fs-sec.js, 2026-09-11),
+// folder grants instead of a root path, engines hosted in a tab instead of
+// in-process.
 //
 // Reads (health/state/tree) go through the service-worker pipe — the SAME
 // router the OWUI relay uses, so the page shows exactly what the model gets
@@ -89,7 +90,8 @@ async function beat() {
   const roots = r.data.roots || [];
   const needPerm = roots.filter((x) => x.perm !== "granted");
   info.textContent = "Running · v" + (r.data.version || "?") +
-    " · security: extension" +
+    " · security: " + (r.data.security === "UNLOCKED" ? "⚠ LOCKED — add a site below"
+      : (r.data.security || "extension")) +
     (roots.length
       ? (needPerm.length
         ? " · ⚠ " + needPerm.length + " folder" + (needPerm.length > 1 ? "s" : "") + " need Reconnect"
@@ -113,6 +115,98 @@ async function beat() {
     langSig = sig;
     renderLangs(r.data.ocr_langs_available || [], r.data.ocr_lang || "eng");
   }
+}
+
+/* ---------------- security card (fs-sec: allowlist + token) --------------- */
+
+function normalizeSite(raw) {
+  const s = String(raw || "").trim();
+  if (!s) return { err: "enter an address first" };
+  const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:\/\//.test(s) ? s : "https://" + s;
+  let u;
+  try { u = new URL(withScheme); } catch (e) { return { err: "not a valid address" }; }
+  if (u.protocol !== "http:" && u.protocol !== "https:") {
+    return { err: "only http(s) addresses can be allowed" };
+  }
+  return { origin: u.origin };
+}
+
+async function renderSec() {
+  const origins = (await OFBIDB.get("kv", "allowed_origins")) || [];
+  const token = await OFBIDB.get("kv", "bridge_token");
+  const modeEl = document.getElementById("secmodeinfo");
+  const mode = origins.length ? (token ? "site list + token" : "site list") : (token ? "token only" : "nothing");
+  modeEl.innerHTML = "Current protection: <b>" + esc(mode) + "</b>" +
+    (origins.length || token ? "" :
+      " — <span class='warn'>no site can use the bridge yet; add your Open WebUI address above.</span>");
+  modeEl.className = "hint";
+
+  const rows = document.getElementById("siterows");
+  rows.innerHTML = "";
+  for (const o of origins.slice(0, 20)) {
+    const row = document.createElement("div");
+    row.className = "root-row";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.textContent = o;
+    const del = document.createElement("button");
+    del.className = "small secondary";
+    del.textContent = "Remove";
+    del.onclick = async () => {
+      const keep = origins.filter((x) => x !== o);
+      await OFBIDB.put("kv", keep, "allowed_origins");
+      renderSec(); beat();
+    };
+    row.append(name, del);
+    rows.appendChild(row);
+  }
+  if (!origins.length) {
+    rows.innerHTML = "<p class='hint'>No sites allowed yet.</p>";
+  }
+
+  // recently-blocked suggestions (fs-sec's denied ring) — one-click Allow
+  const denied = (await OFBIDB.get("kv", "denied_origins")) || [];
+  const drows = document.getElementById("deniedrows");
+  const fresh = denied.filter((d) => d && d.o && !origins.includes(d.o) &&
+    Date.now() - (d.ts || 0) < 3600 * 1000);
+  drows.innerHTML = "";
+  if (fresh.length) {
+    const label = document.createElement("p");
+    label.className = "hint";
+    label.style.margin = "10px 0 0 0";
+    label.textContent = "Recently blocked by the bridge — allow if this is your Open WebUI:";
+    drows.appendChild(label);
+    for (const d of fresh.slice(0, 8)) {
+      const row = document.createElement("div");
+      row.className = "root-row";
+      const name = document.createElement("span");
+      name.className = "name";
+      name.textContent = d.o;
+      const add = document.createElement("button");
+      add.className = "small secondary";
+      add.textContent = "Allow";
+      add.onclick = async () => {
+        const keep = ((await OFBIDB.get("kv", "allowed_origins")) || []).filter((x) => x !== d.o);
+        keep.push(d.o);
+        await OFBIDB.put("kv", keep.slice(0, 20), "allowed_origins");
+        renderSec(); beat();
+      };
+      row.append(name, add);
+      drows.appendChild(row);
+    }
+  }
+
+  const tokInput = document.getElementById("bridgetoken");
+  if (document.activeElement !== tokInput) tokInput.value = token || "";
+  document.getElementById("tokenstat").textContent = token
+    ? "✓ token required from every chat request"
+    : "no token — the site list alone guards the bridge";
+}
+
+function genToken() {
+  const b = crypto.getRandomValues(new Uint8Array(24));
+  return btoa(String.fromCharCode(...b)).replace(/\+/g, "-").replace(/\//g, "_")
+    .replace(/=+$/, "");
 }
 
 /* ---------------- settings (/state once + after saves) --------------------- */
@@ -142,6 +236,7 @@ async function refresh() {
       ? s.confirm_scope : "all";
     document.getElementById("confirmstat").textContent = "✓";
     renderRoots();
+    renderSec();
     renderAudit();
     renderPreview();
   } catch (e) {
@@ -355,6 +450,50 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("pick").onclick = () => pickFolder();
 
+  // Security card: site allowlist + bridge token (fs-sec tiers 1 & 2)
+  document.getElementById("siteaddbtn").onclick = async () => {
+    const stat = document.getElementById("secstatus");
+    const n = normalizeSite(document.getElementById("siteadd").value);
+    if (n.err) { stat.textContent = "✗ " + n.err; stat.className = "warn hint"; return; }
+    const cur = (await OFBIDB.get("kv", "allowed_origins")) || [];
+    if (cur.includes(n.origin)) { stat.textContent = "✓ " + n.origin + " is already allowed"; stat.className = "hint"; return; }
+    if (cur.length >= 20) { stat.textContent = "✗ site list is full (20) — remove one first"; stat.className = "warn hint"; return; }
+    await OFBIDB.put("kv", cur.concat([n.origin]), "allowed_origins");
+    document.getElementById("siteadd").value = "";
+    stat.textContent = "✓ " + n.origin + " can now use the bridge";
+    stat.className = "hint";
+    renderSec(); beat();
+  };
+  document.getElementById("siteadd").addEventListener("keydown", (ev) => {
+    if (ev.key === "Enter") document.getElementById("siteaddbtn").click();
+  });
+  document.getElementById("tokenset").onclick = async () => {
+    const v = document.getElementById("bridgetoken").value.trim();
+    if (v && v.length < 8) {
+      document.getElementById("tokenstat").textContent = "✗ use at least 8 characters (or Generate)";
+      return;
+    }
+    if (v) await OFBIDB.put("kv", v, "bridge_token");
+    else await OFBIDB.del("kv", "bridge_token");
+    document.getElementById("tokenstat").textContent =
+      v ? "✓ token saved — chats must now present it" : "token cleared — site list alone guards the bridge";
+    renderSec(); beat();
+  };
+  document.getElementById("tokengen").onclick = () => {
+    document.getElementById("bridgetoken").value = genToken();
+    document.getElementById("tokengen").textContent = "New"; // next click replaces again
+    document.getElementById("tokenstat").textContent = "generated — press Save to activate";
+  };
+  document.getElementById("tokencopy").onclick = async () => {
+    const v = document.getElementById("bridgetoken").value.trim();
+    try {
+      await navigator.clipboard.writeText(v);
+      document.getElementById("tokenstat").textContent = "✓ copied — paste it in chat when the assistant asks";
+    } catch (e) {
+      document.getElementById("tokenstat").textContent = "copy failed — select the field and copy manually";
+    }
+  };
+
   // OCR ticks apply immediately (no Save button — a tick that shows but
   // isn't stored is a lie). The ✓ line under the box is the readout.
   document.getElementById("langbox").addEventListener("change", async () => {
@@ -440,6 +579,6 @@ window.addEventListener("DOMContentLoaded", async () => {
     }, (window._pvMs || 0) > 1500 ? 30000 : 5000);
   })();
   document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible") { beat(); renderPreview(); renderAudit(); }
+    if (document.visibilityState === "visible") { beat(); renderSec(); renderPreview(); renderAudit(); }
   });
 });

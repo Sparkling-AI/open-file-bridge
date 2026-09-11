@@ -216,6 +216,7 @@ def main():
         # n7's overwrite would gate. The gate itself has a dedicated
         # suite (confirm_test.py); this one tests the FS-backend guards.
         setup.evaluate("OFBIDB.put('kv', 'off', 'confirm_scope')")
+        spike1.sec_configure(setup, base)  # sender gate: origin + test token
         time.sleep(0.3)
 
         # main negative cells (grant live: setup tab open)

@@ -6,12 +6,15 @@
 // path within the user-granted folder, never a destination host.
 //  - Only messages of shape {ofb:true, id, method, path, body?} are
 //    accepted; the router runs against FileSystemHandles (fs-adapter).
-//  - The tier-2 token is RETIRED (plan §5.2): the boundary is the
-//    browser's per-op permission gate + the relay's gates.
+//  - SENDER GATE (fs-sec, 2026-09-11 — restores the app's boundary):
+//    origin allowlist (browser-set sender metadata) + optional bridge
+//    token, enforced BEFORE the router. UNCONFIGURED = DENIED. The
+//    token is the org-boundary tier the app shipped; both live in the
+//    settings page's 🔒 Security card.
 //  - Payload caps and concurrency caps mirror the page relay.
 
 importScripts("fs-idb.js", "fs-core.js", "fs-adapter.js", "fs-writes.js",
-  "fs-links.js", "fs-engine.js", "fs-confirm.js");
+  "fs-links.js", "fs-engine.js", "fs-confirm.js", "fs-sec.js");
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB request payload cap
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024; // 64 MB response cap
@@ -23,10 +26,16 @@ function swFail(id, error, status = 0) {
   return { ofb: true, id, ok: false, status, error: String(error) };
 }
 
-async function handleOfbRequest(msg, senderTabId) {
+async function handleOfbRequest(msg, sender) {
   const id = msg.id;
   const method = String(msg.method || "GET").toUpperCase();
   const path = String(msg.path || "");
+
+  // ---- sender gate: origin allowlist + optional bridge token ----
+  // BEFORE shape/payload work — a rejected sender learns nothing else
+  const sec = await secGate(msg, sender);
+  if (sec) return sec;
+  const senderTabId = sender && sender.tab ? sender.tab.id : null;
 
   // ---- shape gate: narrow pipe only ----
   if (!/^\/[A-Za-z0-9_\-./?&=%+]*$/.test(path)) {
@@ -108,7 +117,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
   // narrow pipe: only the exact OFB request shape
   if (msg.ofb !== true || msg.id === undefined) return; // not ours: ignore
-  handleOfbRequest(msg, sender && sender.tab ? sender.tab.id : null).then(sendResponse);
+  handleOfbRequest(msg, sender).then(sendResponse);
   return true; // async sendResponse
 });
 

@@ -198,9 +198,11 @@ replaced-by-page).
   (2026-09-06): its stated review-time factors are broad match
   patterns, powerful permissions, and code volume/obfuscation — we now
   score low on all three (relay matches stay `https://*/*` — the one
-  broad thing; the docs frame breadth as review-TIME, not rejection;
-  the deferred lever of `optional_host_permissions` origin-pinning
-  stays documented if real review feedback ever demands it).
+  broad thing; the docs frame breadth as review-TIME, not rejection.
+  Origin-pinning later landed at the SW message layer (fs-sec.js,
+  2026-09-11 — §5.2 amendment), leaving `optional_host_permissions`
+  unused: enforcement sits on browser-set sender metadata, so the
+  broad match patterns stay cosmetic).
 - Permissions budget: `storage` only. No `unlimitedStorage` (IndexedDB
   holds handles + audit + settings = kilobytes; tessdata/wheels are
   packaged resources, not storage).
@@ -309,6 +311,30 @@ Chrome 110):
    line) carries over BY CONSTRUCTION: the adapter never had an
    approval round trip — writes are immediate + snapshot-first, same
    contract as app 2.11+ / skill 2.11+.
+   **AMENDED 2026-09-11 — sender gate RESTORED (ext 3.0.18 / skill
+   3.0.24-EXT, fs-sec.js):** Dandan re-reviewed the posture and both app
+   tiers came back. The retired-token reasoning held only until someone
+   noticed the relay rides EVERY https page and the SW never checked
+   WHO was asking — any website could read the whole granted folder
+   silently (reads and new-file writes are ungated by design; only
+   destructive ops raise the confirmation card). Restored, with the
+   enforcement point moved from HTTP/CORS to the SW message listener
+   (match patterns cannot pin ports, so `sender` metadata is the only
+   strict scheme://host:port check possible): tier 1 = origin allowlist
+   (browser-set `sender.url`/`sender.origin`, never message fields —
+   page JS cannot forge them); tier 2 = optional bridge token per
+   message (hash-then-compare), closing the residual tier-1 gap:
+   same-origin impostors — a local process binding 127.0.0.1:<port>
+   when the real service is down, or a plain-http LAN deployment being
+   injected into. An impostor page does not know the token. UNLOCKED
+   (neither tier configured) denies everything, same as the app's
+   production hard-fail; the settings page's 🔒 Security card manages
+   both, with blocked origins surfacing as one-click Allow rows.
+   Trusted senders are the extension's OWN pages — discriminated by
+   the sender URL's `chrome-extension://` scheme (NOT `sender.id`:
+   content scripts carry the extension id too, which made the first
+   draft of the gate trust every relay forward — caught live in
+   sec_test's P0 on 2026-09-11).
 3. **Relay gates unchanged** (descendant-iframes-only, id-correlated
    targeted replies, ≤30 in-flight, ≤120/min, 10 MB payload cap) on
    the window path; the 2026-09-09 worker path (BroadcastChannel

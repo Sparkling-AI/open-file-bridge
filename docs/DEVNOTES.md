@@ -2422,3 +2422,80 @@ attempts (ours or upstream):
 6. If OWUI ever links cell uploads to chats (or exposes chat ids to
    cells), ofb_vision becomes viable again — the whole design was
    proven leg-by-leg (relay token → Bearer → 200; worker upload 200).
+
+## Stage-3 session #29: sender security gate RESTORED — origin allowlist + bridge token (2026-09-11, ext 3.0.18 / skill 3.0.24-EXT)
+
+**Trigger.** Dandan asked how extension security works after the origin
+lock removal, then read relay.js/sw.js and put it plainly: with the
+extension on, ANY website can talk to the pipe — is the whole granted
+folder readable? Answer, verified in code: yes. The relay rides every
+https + localhost page, a page is trivially its own "descendant iframe"
+(self-post), BroadcastChannel is same-origin, and the SW never checked
+WHO asked (tier-2 token retired 2026-09-06, §5.2). Reads and new-file
+writes are ungated by design — only destructive ops raise the
+confirmation card. Blast radius was "one granted folder", but that
+folder was silently readable by every site on the internet.
+
+**Dandan's call:** restore the app's boundary — allowlist like the
+application, plus the token ("for local service or http sites it is
+possible to pretend" — right instinct, refined below).
+
+**Design (extension/fs-sec.js, enforced in sw.js handleOfbRequest
+BEFORE shape/payload work):**
+- Tier 1 origin allowlist: strict scheme://host:port from browser-set
+  sender metadata (`sender.origin` else `new URL(sender.url).origin`).
+  Match patterns CANNOT pin ports (and `http://127.0.0.1/*` spans every
+  port), so the SW listener is the only enforcement point that works.
+  Message fields are never trusted for identity.
+- Tier 2 bridge token (opt-in): per-request `token` field,
+  hash-then-compare (SHA-256 digests, length-uniform) — the app's
+  org-boundary semantics: user pastes once in chat on 403
+  token_required, model never echoes. Closes the tier-1 residual:
+  same-origin impostors (local process binds 127.0.0.1:<owui-port>
+  when the service is down; plain-http LAN page injection). It does
+  NOT defend code injection into the REAL page — injected JS sees
+  whatever the page holds; that honesty is in the fs-sec header.
+- UNLOCKED (neither tier set) denies everything with a self-naming 403
+  (`security_locked` + the origin to allow) — the app's production
+  hard-fail parity. Upgrades land here: Dandan's next chat 403s until
+  he allows 127.0.0.1:8788 once (options card shows blocked origins as
+  one-click Allow rows, kv ring `denied_origins`, 8 rows / 1 h).
+- Trusted senders: the extension's OWN pages. Discriminator =
+  `sender.url` starts with `chrome-extension://`. **NOT `sender.id
+  === chrome.runtime.id`** — the first draft used exactly that and
+  sec_test's P0 caught it live returning 200: CONTENT SCRIPTS also
+  carry sender.id = the extension id (they ARE the extension from the
+  browser's viewpoint), so every relay forward was "trusted". The
+  sender-gate bug class is new; the discriminator note is now in both
+  fs-sec.js and the plan §5.2 amendment.
+- Options 🔒 Security card: add/remove origins (URL-normalized,
+  https:// prefix default), Recently-blocked Allow rows, token
+  input + Save/Generate/Copy. /state gained `allowed_origins`,
+  `security` mode, `token_required`; /health `security` + `locked`.
+
+**Skill 3.0.24-EXT:** bootstrap carries `_TOKEN`/`ofb_set_token` and
+stamps `token` on every request when set; 403 shapes documented with
+the one-shot recoveries (allow the site / paste once, never echo).
+`Requires extension ≥ 3.0.18`.
+
+**Tests.** New `tests/stage3/sec_test.py` — no picker, no X driver, no
+pyodide: plain page JS self-post (a legit relay client) + SW-context
+units. 13/13 on the Mac (chrome-for-testing headed): UNLOCKED deny
+names the origin, options page trusted while UNLOCKED, origin-allow →
+200, token missing/wrong → 403 token_required, right token → 200,
+/state tiers, evil-sender unit + denied ring, originless sender
+denied, own-extension sender trusted. The four Linux suites got
+`spike1.sec_configure(...)` (origin + `TEST_TOKEN`) after their picker
+flows; worker_transport allows origin-only (its bootstrap runs
+verbatim from SKILL-EXT.md — which now token-stamps only when
+_TOKEN is set, so it stays token-free). spike1's harness bootstrap
+gained `ofb_set_token` mirroring the skill. NOTE for the Linux re-run
+ticket: all four picker suites now REQUIRE sec_configure or every cell
+403s — the call is already inserted.
+
+**Deployment for Dandan's env (his Chrome, manual once):** reload the
+unpacked ext → options → Security → allow http://127.0.0.1:8788 (it
+will already sit under Recently blocked after the first blocked call)
+→ optionally Generate + Save a token; if he sets one, he pastes it in
+chat once when the model asks. Both OWUI skill rows restaged to
+3.0.24-EXT same day.

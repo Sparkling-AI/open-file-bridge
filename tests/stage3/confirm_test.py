@@ -215,8 +215,10 @@ def main():
         assert roots_len >= 1
         time.sleep(1.0)
 
-        # clean slate: scope "all" (the default)
+        # clean slate: scope "all" (the default) + sender gate open
+        # (origin allowlist + test token; the harness bootstrap sends it)
         opt.evaluate("OFBIDB.put('kv', 'all', 'confirm_scope')")
+        spike1.sec_configure(opt, base)
         time.sleep(0.3)
 
         verdicts = {}

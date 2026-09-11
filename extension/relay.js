@@ -3,14 +3,20 @@
 // SECURITY INVARIANT (EXTENSION-PLAN.md §3.3): the OWUI Pyodide sandbox is an
 // opaque-origin iframe that CAN postMessage to this page. Assume HOSTILE
 // senders. This relay:
-//  - accepts ONLY messages of shape {ofb:true, id, method, path, body?} and
-//    ONLY from this window's own iframes (event.source must be an iframe
-//    whose parent chain reaches window) — never from other windows/tabs;
+//  - accepts ONLY messages of shape {ofb:true, id, method, path, body?,
+//    token?} and ONLY from this window's own iframes (event.source must
+//    be an iframe whose parent chain reaches window) — never from other
+//    windows/tabs;
 //  - correlates requests to responses by id and drops ids that were never
 //    issued (no unsolicited inbound);
 //  - rate-limits: <=30 in-flight, <=120 requests/min, payload cap 10 MB;
 //  - forwards responses ONLY to the exact iframe window that asked
 //    (targeted postMessage), never a broadcast.
+//  - NOTE: this page's OWN scripts can always ride this pipe (a page is
+//    trivially its own "descendant", and the BC channel is same-origin).
+//    The AUTHORITY is the service worker's sender gate (fs-sec.js): an
+//    origin allowlist on browser-set sender metadata + optional bridge
+//    token. The relay is transport only — it adds no trust decisions.
 //
 // WORKER TRANSPORT (2026-09-09): OWUI >= 0.11 can execute python cells in a
 // pyodide WORKER (shared-worker executor) — no parent window exists there,
@@ -78,6 +84,10 @@
       // request-shaped: only from our own iframes
       if (!isDescendantIframe(ev.source)) return;
       if (typeof m.method !== "string" || typeof m.path !== "string") return;
+      // bridge token (fs-sec tier 2): short opaque string, passed through
+      // verbatim — the SW validates it, the relay never inspects it
+      if (m.token !== undefined &&
+          (typeof m.token !== "string" || m.token.length > 256)) return;
       const cap = capReject();
       if (cap) {
         try { ev.source.postMessage({ ofb: true, id: m.id, ok: false, status: 0,
@@ -101,7 +111,7 @@
       try {
         chrome.runtime.sendMessage(
           { ofb: true, id, method: m.method, path: m.path, body: m.body,
-            b64: m.b64 === true },
+            b64: m.b64 === true, token: m.token },
           (resp) => {
             inflight.delete(id);
             const out = resp || { ofb: true, id, ok: false, status: 0,
@@ -148,6 +158,8 @@
       if (m.ofb !== true || m.id === undefined || m.method === undefined) return;
       if (m.to !== RELAY_TAG) return; // only the elected relay forwards
       if (typeof m.method !== "string" || typeof m.path !== "string") return;
+      if (m.token !== undefined &&
+          (typeof m.token !== "string" || m.token.length > 256)) return;
       if (m.body !== undefined && m.body !== null &&
           (typeof m.body !== "string" || m.body.length > MAX_PAYLOAD)) return;
       const cap = capReject();
@@ -161,7 +173,7 @@
       try {
         chrome.runtime.sendMessage(
           { ofb: true, id: m.id, method: m.method, path: m.path,
-            body: m.body, b64: m.b64 === true },
+            body: m.body, b64: m.b64 === true, token: m.token },
           (resp) => {
             bcInflight--;
             const out = resp || { ofb: true, id: m.id, ok: false, status: 0,

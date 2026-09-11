@@ -236,6 +236,10 @@ from pyodide.ffi import create_proxy, to_js
 _pending = {}
 _next = [100]
 _installed = [False]
+_TOKEN = ["__OFB_TEST_TOKEN__"]  # sec tier-2: tests inject; skill sets from user paste
+
+def ofb_set_token(t):
+    _TOKEN[0] = str(t or "")
 
 def _install():
     if _installed[0]:
@@ -263,6 +267,8 @@ async def ofb_fetch(method, path, body=None, timeout=60.0):
     msg = {"ofb": True, "id": rid, "method": method, "path": path}
     if body is not None:
         msg["body"] = body
+    if _TOKEN[0]:
+        msg["token"] = _TOKEN[0]
     parent.postMessage(to_js(msg), "*")
     return await asyncio.wait_for(fut, timeout)
 
@@ -287,6 +293,7 @@ def notify_kill():
     # session #4; ofb_fetch's to_js(msg) was already correct).
     parent.postMessage(to_js({"ofbHostKill": True}), "*")
 '''
+    py = py.replace("__OFB_TEST_TOKEN__", TEST_TOKEN)
     cells = {
         "s1_health": '''d = (await ofb_fetch("GET", "/health")).to_py()
 h = json.loads(d["body"])
@@ -436,6 +443,66 @@ def build_test_extension(scratch):
         matches.append("http://127.0.0.1/*")
     (dest / "manifest.json").write_text(_json.dumps(mf, indent=2) + "\n")
     return dest
+
+
+# ---- security-gate plumbing (fs-sec, 2026-09-11) ----------------------------
+# The sender gate denies everything until an origin is allowed; suites that
+# exercise the pipe configure it through the options page's IDB (same store
+# the SW reads). TEST_TOKEN rides in the harness bootstrap's _TOKEN default
+# (cells can override via ofb_set_token, mirroring the skill's user paste).
+
+TEST_TOKEN = "ofb-test-token-s3"
+
+
+def find_ext(ctx):
+    """(sw, ext_origin) — wait for the extension's service worker. The
+    CDP fallback finds ext_origin without a worker HANDLE; after any
+    extension page opens (its beat() pings wake the SW), retry briefly
+    for the handle so callers can evaluate in SW context."""
+    sw = None
+    ext_origin = None
+    deadline = time.time() + 15
+    while time.time() < deadline and ext_origin is None:
+        for worker in ctx.service_workers:
+            if worker.url.startswith("chrome-extension://"):
+                sw = worker
+                ext_origin = "chrome-extension://" + sw.url.split("//")[1].split("/")[0]
+                break
+        if ext_origin:
+            break
+        try:
+            pg0 = ctx.pages[0] if ctx.pages else ctx.new_page()
+            cdp = ctx.new_cdp_session(pg0)
+            for t in cdp.send("Target.getTargets")["targetInfos"]:
+                if t["type"] == "service_worker" and t["url"].startswith("chrome-extension://"):
+                    ext_origin = "chrome-extension://" + t["url"].split("//")[1].split("/")[0]
+            cdp.detach()
+        except Exception:
+            pass
+        time.sleep(0.5)
+    if ext_origin and sw is None:
+        deadline = time.time() + 20
+        while time.time() < deadline and sw is None:
+            for worker in ctx.service_workers:
+                if worker.url.startswith("chrome-extension://"):
+                    sw = worker
+                    break
+            if sw is None:
+                time.sleep(0.5)
+    return sw, ext_origin
+
+
+def sec_configure(opt, origin, token=TEST_TOKEN):
+    """Allow `origin` on the sender gate (+ set the bridge token when given).
+    `opt` = an OPEN options.html page (any extension page context with
+    OFBIDB works — the SW reads the same store per request)."""
+    opt.evaluate(
+        "async (a) => {"
+        "  await OFBIDB.put('kv', [a[0]], 'allowed_origins');"
+        "  if (a[1] !== null) await OFBIDB.put('kv', a[1], 'bridge_token');"
+        "  else await OFBIDB.del('kv', 'bridge_token');"
+        "}",
+        [origin, token])
 
 
 def run_harness_page(ctx, base, tag, cells_sel=None):
@@ -607,6 +674,9 @@ def main():
         print("roots in IDB:", roots_len)
         verdicts["picker+idb"] = roots_len == 1
         page.screenshot(path=str(SCRATCH / "after-pick.png"))
+        # sender gate: allow this harness origin + set the test token
+        # (the harness bootstrap sends it by default)
+        sec_configure(page, base)
         # NOTE: setup tab stays OPEN — the pick grant is session-scoped and
         # dies ~2s after the last extension tab closes (probe4/8); a
         # background tab keeps it (probe8 Q1). Pass A runs with it open.

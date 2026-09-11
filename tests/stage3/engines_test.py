@@ -441,6 +441,7 @@ def main():
             print("VERDICT: FAIL — grant failed")
             ctx.close()
             return 1
+        spike1.sec_configure(setup, base)  # sender gate: origin + test token
 
         # engine tab (holds grant + engines)
         eng = ctx.new_page()

@@ -36,7 +36,10 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     catch (e) { return fsFail(400, { error: "invalid JSON body" }); }
   }
 
-  /* ---- token-free meta (app contract: /health /version /state /wheels) -- */
+  /* ---- meta endpoints (the app served these token-free; in the
+     extension the SW sender gate covers ALL endpoints uniformly — a
+     blocked sender gets a self-explaining 403 instead, which the skill
+     turns into "add this site in the extension settings") ------------- */
 
   if (method === "GET" && path === "/health") {
     const roots = await enabledRoots();
@@ -58,8 +61,8 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     info.ocr_lang = await kvGet("ocr_lang", "eng");
     info.ocr_langs_available = FS_ENGINES.ocr ? FS_OCR_LANGS : [];
     info.wheels = FS_WHEELS.length;
-    info.security = "extension";
-    info.locked = true;
+    info.security = await secMode();
+    info.locked = info.security === "UNLOCKED";
     return fsOk(info);
   }
 
@@ -76,11 +79,15 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       writes_enabled: r.writesEnabled !== false,
     }));
     const lim = await rateLimits();
+    const secOrigins = await secAllowedOrigins();
     return fsOk({
       root: ros.length ? ros[0].path : null,
       roots: ros, port: null,
       ocr_lang: await kvGet("ocr_lang", "eng"),
-      allowed_origin: null, security: "extension",
+      allowed_origin: secOrigins.length ? secOrigins[0] : null,
+      allowed_origins: secOrigins,
+      security: await secMode(),
+      token_required: (await secBridgeToken()) !== null,
       readonly: await kvGet("readonly_global", false), readonly_source: "setting",
       allow_reveal: false,
       ignore_global: await kvGet("ignore_global", []),
