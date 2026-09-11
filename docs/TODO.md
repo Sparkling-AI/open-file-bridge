@@ -146,6 +146,19 @@ Bridge must be running during chats. Non-technical users will forget.
 - [ ] osd.traineddata (10.6 MB) sits in the extension bundle unreferenced
       by any code — drop it or wire it into orientation detection,
       Dandan's call (app bundles it too, so parity keeps it for now).
+- [ ] Adapter polish from the 2026-09-12 parity audit: `/csv_head` and
+      `/csv_stats` sit in MOVED_WRITE_ENDPOINTS, so a GET (the app's
+      method for both) answers a misleading 405 "POST-only" before the
+      POST 501s with the recipe. Make GET on these two answer the moved
+      501 directly (or split them into a GET-side moved set like
+      epMovedRead). Needs an ext version bump — skill 3.1.1-EXT already
+      teaches the honest path (plain text → /read + stdlib csv).
+- [ ] /search context parity (from the same audit): desktop returns
+      `context=N` surrounding lines per match (default 1, max 5),
+      `scanned_files`, comma-list `exclude`, and globs the full relative
+      path; ext `epSearch` returns one 240-char line per match with
+      basename-only glob and single-pattern exclude. Port the desktop
+      semantics (fs-adapter.js epSearch) — same caps otherwise (50/200).
 
 ## 7. CI gaps
 

@@ -2794,3 +2794,31 @@ was already merged/pushed; CWS zip rebuilt as
 open-file-bridge-extension-3.1.1.zip and the 3.1.0 zip DELETED so the
 stale artifact can't be uploaded by mistake. Docs grep: the only other
 branch mentions are historical narrative (DEVNOTES/STAGE3-PLAN/TODO).
+
+## Stage-3 session #39: parity audit + csv doc bug fixed (2026-09-12, skill 3.1.1-EXT, ext untouched)
+
+Dandan asked for a desktop-vs-extension feature review. Verdict:
+endpoint-for-endpoint parity holds except (a) `/convert` — no
+LibreOffice in a browser, 501 with a manual-resave hint, (b)
+`/trash/purge` — ext has no on-demand purge (30-day TTL sweep only,
+fs-writes.js), (c) `/reveal` — 403, platform limit (no OS-launch API,
+and File System Access handles never expose the absolute path, so even
+a file:// tab is unconstructible), (d) drop-in OCR languages
+(desktop merges user .traineddata; ext fixed at the bundled 21), (e)
+`/search` context lines (desktop returns `context=N` surrounding lines
++ scanned_files + comma-list exclude + full-path glob; ext returns one
+240-char line per match, basename glob, single exclude — improvement
+proposed, not yet built), (f) OCR caching (desktop caches, ext
+re-OCRs). Everything else at parity incl. pdf_op ops, OCR params,
+rate-breaker, edit dry_run, ignore lists, sensitive floor.
+
+Doc bug found + fixed: SKILL-EXT line "same request/response shapes as
+the app" listed `/csv_head` `/csv_stats`, but fs-adapter routes BOTH
+into MOVED_WRITE_ENDPOINTS since the first spike (b678f9b) — POST 501s
+with the recipe, GET misdirects with 405 "POST-only" (they are GET in
+the app). Skill 3.1.0-EXT → 3.1.1-EXT (both variants, 4-hunk diff
+discipline verified); csv now named moved with the honest no-wheels
+path (plain text → /read + stdlib csv). Restaged both OWUI rows.
+Adapter polish (GET answering the moved 501 instead of the 405) filed
+in TODO §6b — needs an ext bump, deliberately not folded into a
+skill-only patch.

@@ -2,6 +2,18 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.1.1-EXT — 2026-09-12
+
+Doc fix from the desktop-vs-extension parity audit: `/csv_head` and
+`/csv_stats` were listed under "same request/response shapes as the
+app" — they are NOT. The extension routes both into the moved-endpoints
+501 (they parse nothing in the pipe; a GET even answers a misleading
+405 "POST-only" first). The skill now names them moved and teaches the
+honest path, which needs no wheels at all: CSV is plain text — `/read`
+the file and parse with the stdlib `csv` module. Extension untouched
+(floor stays ≥ 3.1.0); the adapter's GET-405 polish is filed in
+TODO §6b.
+
 ## 3.1.0-EXT — 2026-09-11 (release)
 
 First published line: everything unified at **3.1.0** — the extension

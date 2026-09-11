@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.1.0-EXT (extension backend, no token)
+# Local File Bridge — skill v3.1.1-EXT (extension backend, no token)
 
 > **Variant picker (for whoever publishes this skill):** this is the
 > NO-TOKEN variant — publish it when the extension's 🔒 Security card
@@ -72,13 +72,15 @@ below is complete on its own.
   retry ONCE, and only if it persists tell the user: toolbar icon →
   settings → OCR card → check "Auto-start the engines" and press
   "Open engine tab" (manual fallback).
-- `/pdf_text`, `/pdf_op`, `/ocr`, `/ocr_pdf`, `/image_info`, `/image_b64`,
-  `/csv_head`, `/csv_stats` — same request/response shapes as the app.
+- `/pdf_text`, `/pdf_op`, `/ocr`, `/ocr_pdf`, `/image_info`, `/image_b64`
+  — same request/response shapes as the app.
 - **Moved endpoints** (501 with a recipe): `/docx_read /docx_write
   /docx_merge /docx_mailmerge /pptx_read /pptx_from_template /xlsx_read
-  /xlsx_append /eml_read /html_text /pdf_from_text` — the office stack
-  runs HERE in Pyodide: fetch bytes with `/read_b64`, write with
-  `/write_b64` (recipes below).
+  /xlsx_append /eml_read /html_text /pdf_from_text /csv_head /csv_stats`
+  — the office stack runs HERE in Pyodide: fetch bytes with `/read_b64`,
+  write with `/write_b64` (recipes below). CSV needs no wheels and no
+  recipe — it is plain text: `/read` it and slice/aggregate in Python
+  (stdlib `csv` module if quoting matters).
 - `/convert` is GONE (501). Legacy formats: ask the user to open the file
   in their office app (Word / Excel / LibreOffice) and save as
   `.docx` / `.xlsx`, then we can read and edit it.
@@ -408,7 +410,9 @@ from fpdf import FPdf  # build the document with its usual API (add_page, cell, 
 ```
 
 (eml/html stay stdlib: `email.message_from_bytes(await read_binary(p))` /
-regex-strip after `read_binary(...).decode("utf-8", "replace")`.)
+regex-strip after `read_binary(...).decode("utf-8", "replace")`. CSV is
+plain text — do not call `/csv_head` / `/csv_stats`: `/read` the file
+and parse it with the stdlib `csv` module.)
 
 Compiled data-science wheels (`pandas`/`matplotlib` …) still come from
 Pyodide's own lock via `micropip.install("pandas")` — fetched from the
