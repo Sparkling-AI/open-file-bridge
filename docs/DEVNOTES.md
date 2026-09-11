@@ -2567,3 +2567,28 @@ ADAPTS: with a bridge token set it points at SKILL-EXT-TOKEN.md (and
 names why). Tests: sec_test 14/14 (new P4c proves the legacy list is
 ignored once allowed_site is set), options smoke 6/6 (incl. the
 adaptive link flip), spike1.sec_configure sets allowed_site.
+
+## Stage-3 session #32: site editor 3-state UI (2026-09-11, ext 3.0.21)
+
+**Dandan's bug report (screenshot):** after setting a site, the Security
+card still showed the EMPTY input with its placeholder next to a
+"Set site" button — the set site was only mentioned in a small line
+below, so the card read as "nothing set yet". His spec: input only
+when unset; when set show the URL + Edit + Remove; Edit reopens the
+input.
+
+**Shipped:** three states in options.html/options.js — EMPTY
+(input + "Set site"), SET (🔒 <site> — the only site that can use the
+bridge + Edit + Remove, input row HIDDEN), EDITING (input prefilled +
+focused/selected, button reads "Save"; Enter still saves). A module
+`siteEditing` flag survives renderSec re-renders so a tab-switch
+(visibilitychange fires renderSec) never clobbers a half-finished
+edit; the denied-rows "Use this site" click and Remove both reset it.
+Removed the standalone Remove button (lives in the set-state row now —
+nothing to remove when empty). The old ✓-status line folded INTO the
+view row; #sitestat is error-only. Click-through smoke 7/7 on real
+DOM states (empty → set via real click → edit prefilled → replace via
+Save → remove → startstat flips); GLM-4.6V transcription of an
+element-scoped screenshot confirms the rendering (first full-page
+vision pass HALLUCINATED card copy that doesn't exist — element
+screenshots, not full pages, for card-level checks).

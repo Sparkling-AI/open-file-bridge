@@ -119,12 +119,12 @@ served. Set it to the address your Open WebUI runs on; scheme, host and
 port must match exactly (<code>https://chat.example.com</code>,
 <code>http://127.0.0.1:8080</code>). Setting a new site replaces the
 old one.</p>
-<div class="btnrow">
+<div class="btnrow" id="siterow">
 <input id="siteadd" type="text" placeholder="https://your-open-webUI-address" style="flex:1;min-width:220px">
 <button id="siteaddbtn" class="secondary">Set site</button>
-<button id="siterm" class="secondary">Remove</button>
 </div>
-<p class="ok" id="sitestat"></p>
+<div id="siteview"></div>
+<p class="warn" id="sitestat" style="margin:6px 0 0 0"></p>
 <div id="deniedrows"></div>
 <p class="hint" id="secmodeinfo"></p>
 <div class="btnrow" style="margin-top:10px">

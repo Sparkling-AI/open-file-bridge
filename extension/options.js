@@ -165,17 +165,56 @@ const SKILL_FILE_TOKEN = "SKILL-EXT-TOKEN.md";
 const SKILL_FILE_BASE =
   "https://github.com/Sparkling-AI/open-file-bridge/blob/feat/stage3-extension/skill/open-file-bridge/";
 
+// site editor has three states: EMPTY (input + "Set site"), SET (view row
+// with Edit/Remove — no input, so the set site is impossible to miss), and
+// EDITING (input prefilled + "Save"). The flag survives re-renders so a
+// visibilitychange mid-edit never clobbers the field.
+let siteEditing = false;
+
 async function renderSec() {
   const site = await secAllowedSiteRead();
   const token = await OFBIDB.get("kv", "bridge_token");
-  const stat = document.getElementById("sitestat");
-  if (site) {
-    stat.textContent = "✓ Only " + site + " can use the bridge.";
-    stat.className = "ok";
-  } else {
-    stat.textContent = "";
-    stat.className = "";
+
+  const row = document.getElementById("siterow");
+  const input = document.getElementById("siteadd");
+  const btn = document.getElementById("siteaddbtn");
+  const view = document.getElementById("siteview");
+  const showInput = !site || siteEditing;
+  row.style.display = showInput ? "" : "none";
+  btn.textContent = siteEditing ? "Save" : "Set site";
+  if (siteEditing && document.activeElement !== input) input.value = site || "";
+
+  view.innerHTML = "";
+  if (site && !siteEditing) {
+    const r = document.createElement("div");
+    r.className = "root-row";
+    const name = document.createElement("span");
+    name.className = "name";
+    name.innerHTML = "🔒 <b>" + esc(site) + "</b> — the only site that can use the bridge";
+    const edit = document.createElement("button");
+    edit.className = "small secondary";
+    edit.textContent = "Edit";
+    edit.onclick = () => {
+      siteEditing = true;
+      renderSec();
+      const i = document.getElementById("siteadd");
+      i.focus();
+      try { i.select(); } catch (e) {}
+    };
+    const del = document.createElement("button");
+    del.className = "small secondary";
+    del.textContent = "Remove";
+    del.onclick = async () => {
+      siteEditing = false;
+      await OFBIDB.del("kv", "allowed_site");
+      try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
+      document.getElementById("siteadd").value = "";
+      renderSec(); beat();
+    };
+    r.append(name, edit, del);
+    view.appendChild(r);
   }
+
   const modeEl = document.getElementById("secmodeinfo");
   const mode = site ? (token ? "site lock + token" : "site lock") : (token ? "token only" : "nothing");
   modeEl.innerHTML = "Current protection: <b>" + esc(mode) + "</b>" +
@@ -205,6 +244,7 @@ async function renderSec() {
       add.className = "small secondary";
       add.textContent = "Use this site";
       add.onclick = async () => {
+        siteEditing = false;
         await OFBIDB.put("kv", d.o, "allowed_site");
         try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
         renderSec(); beat();
@@ -481,23 +521,17 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("siteaddbtn").onclick = async () => {
     const stat = document.getElementById("sitestat");
     const n = normalizeSite(document.getElementById("siteadd").value);
-    if (n.err) { stat.textContent = "✗ " + n.err; stat.className = "warn"; return; }
+    if (n.err) { stat.textContent = "✗ " + n.err; return; }
     await OFBIDB.put("kv", n.origin, "allowed_site");
     try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
     document.getElementById("siteadd").value = "";
-    stat.textContent = "✓ Only " + n.origin + " can use the bridge.";
-    stat.className = "ok";
+    stat.textContent = "";
+    siteEditing = false;
     renderSec(); beat();
   };
   document.getElementById("siteadd").addEventListener("keydown", (ev) => {
     if (ev.key === "Enter") document.getElementById("siteaddbtn").click();
   });
-  document.getElementById("siterm").onclick = async () => {
-    await OFBIDB.del("kv", "allowed_site");
-    try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
-    document.getElementById("sitestat").textContent = "";
-    renderSec(); beat();
-  };
   document.getElementById("tokenset").onclick = async () => {
     const v = document.getElementById("bridgetoken").value.trim();
     if (v && v.length < 8) {

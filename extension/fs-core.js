@@ -7,7 +7,7 @@
 
 "use strict";
 
-const FS_VERSION = "3.0.20-EXT";
+const FS_VERSION = "3.0.21-EXT";
 const FS_SKILL_MIN = "2.11";
 const MAX_LIST = 500;
 const MAX_BINARY = 8000000;          // b64 endpoints

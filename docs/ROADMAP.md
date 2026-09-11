@@ -726,6 +726,15 @@ deployment, not several sites. The Get-started skill link adapts to
 the token state. sec_test 14/14, options smoke 6/6, worker_transport
 7/7 on the rewritten bootstrap.
 
+## Stage 3 (extension): site editor 3-state UI (2026-09-11, ext 3.0.21)
+
+Dandan's screenshot report: after setting a site the card still showed
+the empty placeholder input + "Set site", reading as nothing-set. Now
+three states: EMPTY (input + Set site), SET (site URL + Edit/Remove,
+no input), EDITING (prefilled input + Save; the editing flag survives
+re-renders so tab switches never clobber it). Click-through smoke 7/7
++ element-screenshot vision transcription.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
