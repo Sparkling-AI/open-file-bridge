@@ -129,10 +129,10 @@ Bridge must be running during chats. Non-technical users will forget.
       Security → allow `http://127.0.0.1:8788` (one click under
       Recently blocked) and optionally Generate+Save a bridge token
       (paste in chat once when the model asks).
-- [ ] Bump the CWS zip (`dist-stage3/…-3.0.2.zip`) when releasing — the
-      manifest is at 3.0.18 now (worker transport, blocking
-      confirmations, …, 21 OCR languages, sender gate; zip is 94 MB
-      unpacked).
+- [x] CWS zip rebuilt at release prep (2026-09-11):
+      `dist-stage3/open-file-bridge-extension-3.1.0.zip` — 48.4 MB
+      compressed / 80 files / manifest 3.1.0 verified inside. Actual
+      CWS upload still pending Dandan's store step.
 - [ ] confirm_test.py was rewritten for the 2026-09-09 blocking-confirmation
       contract (c0 approve-mid-wait, c1 timed_out, c5 deny-mid-wait) but
       only runs on Linux/Xvfb — first run there must confirm it green.

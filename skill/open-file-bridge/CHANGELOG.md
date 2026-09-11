@@ -2,6 +2,17 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.1.0-EXT — 2026-09-11 (release)
+
+First published line: everything unified at **3.1.0** — the extension
+(manifest + /health + /version) and both skill variants. The skill's
+dependency is now "extension ≥ **3.1.0**" (header note + the one-way
+floor on the first /health). All pre-release version archaeology is
+removed from the skill bodies ("gate 403s exist only on ≥ 3.0.18",
+"older extension builds bundle only 8 languages", the 3.0.1 floor) —
+no build older than 3.1.0 was ever published, so no reader can hold
+one.
+
 ## 3.0.29-EXT — 2026-09-11
 
 App-parity version floor: the EXT variants now carry the same

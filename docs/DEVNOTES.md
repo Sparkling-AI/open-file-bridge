@@ -2696,3 +2696,20 @@ field are backward-compatible through older relays), sender-gate 403s
 flagged as ≥ 3.0.18 behavior, update path = chrome://extensions reload
 (or CWS update). Bootstrap code unchanged (parses). Rows restaged
 3.0.29-EXT, active row with his token preserved.
+
+
+## Stage-3 session #37: release prep — everything at 3.1.0, archaeology out (2026-09-11, ext 3.1.0 / skill 3.1.0-EXT)
+
+Dandan's release cleanup: bump the whole line to **3.1.0** (manifest,
+FS_VERSION, both skill H1s), skill dependency "extension ≥ 3.1.0"
+(header blockquote + one-way floor), and remove never-published version
+statements — the "sender-gate 403s exist only on ≥ 3.0.18" clause, the
+"older extension builds bundle only 8 languages" hedge (kept the live
+/health pointer), the 3.0.1 floor. Sweep verified: zero "3.0.x"
+mentions remain in either skill body. sec_test 14/14 + worker_transport
+9/9 on 3.1.0. CWS zip rebuilt: dist-stage3/open-file-bridge-extension-
+3.1.0.zip (48.4 MB, 80 files, manifest version verified inside, unzip
+-t clean). Rows restaged 3.1.0-EXT (active = token variant with his
+1122334455). NOT changed (observed, out of scope): /version still
+serves skill_min "2.11" — an app-line concept; revisit if the /version
+note's setup_owui.py wording confuses extension users.

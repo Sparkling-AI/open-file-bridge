@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.0.29-EXT (extension backend, TOKEN variant)
+# Local File Bridge — skill v3.1.0-EXT (extension backend, TOKEN variant)
 
 > **TOKEN variant — publish this only when the extension's 🔒 Security
 > card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`
@@ -30,11 +30,9 @@ app to talk to). A slow TIMEOUT (no reply in ~30 s) usually means the
 elected relay's tab was closed mid-session — retry once (the bootstrap
 re-elects automatically).
 
-> Requires the Open File Bridge extension ≥ **3.0.1** (checked on the
+> Requires the Open File Bridge extension ≥ **3.1.0** (checked on the
 > first /health below; newer extensions are always fine — the pipe is
-> backward-compatible). The sender-gate 403s (`security_locked` /
-> `origin_blocked` / `token_required`) exist only on ≥ 3.0.18; older
-> builds simply serve without the gate.
+> backward-compatible).
 
 The endpoint surface mirrors the desktop bridge app — every recipe
 below is complete on its own.
@@ -93,11 +91,10 @@ below is complete on its own.
 
 Languages bundled (21, alphabetical — same set as the desktop app):
 `ara chi_sim chi_tra dan deu eng est fin fra hun ita jpn kor lav lit
-nor pol por rus spa swe`. Older extension builds bundle only 8 of
-these — trust `/health`'s `ocr_langs_available` over this list (set
-with `POST /ocr/lang {"lang": "swe+eng"}` or per-request `lang=`;
-combo langs matter — `swe+eng` fixes å/ä/ö AND digits, each alone can
-break one).
+nor pol por rus spa swe` (the live list is `/health`'s
+`ocr_langs_available`; set with `POST /ocr/lang {"lang": "swe+eng"}`
+or per-request `lang=`; combo langs matter — `swe+eng` fixes å/ä/ö
+AND digits, each alone can break one).
 One known caveat: an isolated ALL-CAPS diacritic token (e.g. a lone
 "ÅÄÖ") may decode as AAO. Words with diacritics in normal case are
 accurate; if a critical all-caps token looks wrong, ask the user to
@@ -297,7 +294,7 @@ instead return 403 `security_locked`/`origin_blocked`
 or 403 `token_required` — see the sender-gate bullet above for the
 exact one-shot recovery (user allows the site / pastes the token).
 Version rule (one-way floor, no lockstep): if `/health`'s `version` is
-OLDER than **3.0.1** (this skill's minimum), say once: "your Open File
+OLDER than **3.1.0** (this skill's minimum), say once: "your Open File
 Bridge extension is older than this skill — update it (Chrome →
 chrome://extensions → reload the unpacked extension, or update from the
 Chrome Web Store)" — then continue with what works. Newer extensions

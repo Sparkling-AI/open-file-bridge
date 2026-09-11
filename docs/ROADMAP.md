@@ -772,6 +772,15 @@ plus the one-way-floor rule on first /health (older → tell the user
 once to update, continue; newer → never warn; much-newer → refresh
 hint). The 3.0.25 scrub had collapsed this to a vague "any 3.0.x".
 
+## Stage 3 (extension): release prep — the whole line at 3.1.0 (2026-09-11)
+
+Extension (manifest + /health + /version) and both skill variants
+unified at 3.1.0; skill dependency = extension ≥ 3.1.0 (header note +
+one-way floor on first /health); all pre-release version archaeology
+removed from the skill bodies (nothing older was ever published). CWS
+zip rebuilt at 3.1.0 (48.4 MB, 80 files). sec_test 14/14 +
+worker_transport 9/9.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |
