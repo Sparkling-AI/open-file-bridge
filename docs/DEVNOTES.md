@@ -2976,3 +2976,8 @@ bridge-write"). Restage carried body AND description together. Live
 check: FRESH chat, "create a test3.md file with 2 lines of any
 texts" → expect a bridge write, `test-folder/test3.md` in the answer,
 and the file in Finder.
+
+Session #44 addendum (same day): Dandan live-verified 3.3.2 — "look
+good, please commit and push": the trivial-create test now goes
+through the bridge. Push of the 6-commit stack (350bd2d → 9a709e4,
+ext 3.3.0 / skill 3.3.2-EXT) on his ask.
