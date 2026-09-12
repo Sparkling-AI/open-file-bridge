@@ -61,10 +61,11 @@ the Microsoft Store, not the CWS).
 > Extras: OCR in 20+ languages (runs locally in the extension), PDF text
 > extraction, xlsx→csv and docx→html conversion, and full-text search.
 >
-> Where your Open WebUI must run: on the same computer (localhost), on your
-> LAN, or on a server you control — for a public HTTPS deployment, set a
-> bridge token and see the repo's user guide. Stock cloud Open WebUI without
-> browser file access is not supported.
+> Where your Open WebUI must run: anywhere you can install the bridge
+> skill — on the same computer (localhost), on your LAN, or on a server
+> you control. For a public HTTPS deployment, also set a bridge token.
+> Hosted Open WebUI services that don't let you install skills aren't
+> supported.
 >
 > Requires Open WebUI with the code interpreter enabled. The bridge skill
 > file, setup guide, and source code:

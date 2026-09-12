@@ -3056,3 +3056,16 @@ tagline — headline now "Turn Open WebUI into your Cowork." + subline
 pills unchanged); CWS detailed description in CHROME-WEB-STORE.md leads
 with the same line. Tile re-rendered from /tmp/ofb-shots/tile.html,
 glm-vision SHIP. No extension/ change — zip 3.3.1 unaffected.
+
+Session #46 addendum 3 (2026-09-13): "stock cloud OWUI not supported"
+claim CORRECTED in the CWS listing — it was app-era heritage (loopback
+HTTP + PNA/mixed-content block public-https pages from 127.0.0.1:8765)
+and is FALSE for the extension: no loopback, no network fetch — the pipe
+is postMessage → relay (injects on https://*/* incl. cloud pages) →
+chrome.runtime, so any OWUI origin works once allowlisted. The REAL
+limitation of a hosted service = you can't install the bridge skill (no
+Workspace access / user skills off) — model never learns the bridge.
+Listing now says "anywhere you can install the bridge skill… hosted
+services that don't let you install skills aren't supported". Honest
+caveat recorded here (not the listing): cloud-https OWUI is verified by
+mechanism, not live-tested — all live runs were local http OWUI.
