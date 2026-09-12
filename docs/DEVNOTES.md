@@ -2951,3 +2951,28 @@ INCOMPLETE mandate unchanged; reinforcement line re-anchored. Skill
 rows restaged. Live check for Dandan: FRESH chat, create a file, then
 ask "what is the path to the file" — expect `test-folder/<name>` and
 never a sandbox path.
+
+## Stage-3 session #44: the model never called the bridge — trigger-level fix (2026-09-12, skill 3.3.2-EXT, ext untouched)
+
+3.3.1's path rule didn't change Dandan's test3 outcome, so this round
+started with forensics instead of wording: webui.db history for both
+test chats shows assistant turns with NO bridge calls at all (no
+cells in the stored content), and the shared folder contains
+notes/notes2/notes3 but NOT test2.md/test3.md. So the model wrote
+plain Python into the Pyodide sandbox (/mnt/uploads), the file never
+reached his machine, and the "path" answer quoted the throwaway VM —
+accurate about the wrong filesystem. Same-evening contrast chats
+(Aktiebok docx→html 17:04, sales xlsx 17:10) DID use the bridge — the
+skill is visible; this is a task-shape judgment failure: trivial
+"create any file" asks short-circuit to native Python.
+
+Fix at BOTH layers that decide: (1) the frontmatter DESCRIPTION (the
+tool-selection trigger) now names trivial-create asks explicitly and
+states the sandbox filesystem is a throwaway VM files never leave;
+(2) a new first body section "The sandbox is NOT the user's computer"
+(open()/os. writes create nothing for the user; `written` is the
+proof; "if a file matters enough to mention, it matters enough to
+bridge-write"). Restage carried body AND description together. Live
+check: FRESH chat, "create a test3.md file with 2 lines of any
+texts" → expect a bridge write, `test-folder/test3.md` in the answer,
+and the file in Finder.

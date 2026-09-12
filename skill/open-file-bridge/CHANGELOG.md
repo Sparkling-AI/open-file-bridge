@@ -2,6 +2,22 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.3.2-EXT — 2026-09-12
+
+Root-cause fix for the /mnt/uploads answers (3.3.1's teaching wasn't
+enough): DB forensics on Dandan's test2/test3 chats showed the model
+NEVER called the bridge — for a trivial "create a file with any text"
+ask it wrote plain Python into the Pyodide sandbox, so the file never
+reached his folder and its "path" answer quoted the throwaway VM.
+Two-level fix: (1) the DESCRIPTION now names trivial-create asks
+explicitly and states the sandbox (/mnt/uploads) is a throwaway VM
+files never leave — this is the tool-selection layer; (2) a new
+first-body section "The sandbox is NOT the user's computer" makes the
+same contract unmissable (open()/os. writes create nothing for the
+user; the write response's `written` is the proof; "if a file matters
+enough to mention, it matters enough to bridge-write"). Extension
+untouched (3.3.0, floor ≥ 3.3.0).
+
 ## 3.3.1-EXT — 2026-09-12
 
 Path-communication rule (from Dandan's live test: asked "what is the

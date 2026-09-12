@@ -1,9 +1,9 @@
 ---
 name: open-file-bridge
-description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
+description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text'. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.3.1-EXT (extension backend, TOKEN variant)
+# Local File Bridge — skill v3.3.2-EXT (extension backend, TOKEN variant)
 
 > **TOKEN variant — publish this only when the extension's 🔒 Security
 > card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`
@@ -36,6 +36,19 @@ re-elects automatically).
 
 The endpoint surface mirrors the desktop bridge app — every recipe
 below is complete on its own.
+
+## The sandbox is NOT the user's computer
+
+Your code sandbox has its own filesystem (`/mnt/uploads`,
+`os.getcwd()`, `Path("…")`) — a THROWAWAY VM. Writing a file there
+(`open()`, `write_text`, `os.makedirs` …) creates NOTHING on the
+user's machine, however cleanly the cell runs. This includes trivial
+asks — "create a small test file", "save any 2 lines" — the user
+still means a file they can open, i.e. in their shared folder. Every
+file the user should end up with is created/edited ONLY through the
+bridge helpers below; the write response's `written` is your proof it
+exists for the user. If a file matters enough to mention in your
+answer, it matters enough to bridge-write.
 
 ## What is different from the app-backed skill
 
