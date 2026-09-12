@@ -2901,3 +2901,33 @@ change (the page is behind the model's link; ext-only bump, skill
 stays 3.2.0-EXT, floor 3.2.0 ≤ 3.2.1 ✓). sec_test 14/14 on 3.2.1.
 CWS zip rebuilt at 3.2.1, 3.2.0 zip deleted. Dandan's steps: reload
 the unpacked extension, then set Location once per folder.
+
+## Stage-3 session #42: outcome links REMOVED — path-in-answer instead (2026-09-12, ext 3.3.0 / skill 3.3.0-EXT)
+
+Verdict after Dandan lived with 3.2.0/3.2.1: the link-page experience
+is not good, and the blocker is a hard Chrome limit (no OS-launch, no
+absolute paths from File System Access handles) — his call: drop it.
+Whole family removed end-to-end:
+
+- ext: /link → self-explaining 501 (route KEPT so strays don't get
+  "unknown endpoint"; GET /link still 405s POST-only, which
+  engines_test's router-405 cell relies on), /click/* 404 updated,
+  fsRoute attach-wrapper deleted, open.html + open.js + fs-links.js
+  deleted, open.html out of web_accessible_resources, ⏳ Link-lifetime
+  card + linkttl listener + fmtTTL out of options, /state drops
+  link_ttl/link_ttl_source, fs-idb comment updated. The 3.2.1
+  folder-Location editor went too (os_path had no consumer left).
+  engines_test.py's GET /link cell unaffected (405 path unchanged).
+- skill (both variants, 3.3.0-EXT, floor ≥3.3.0): the outcome-links
+  bullet is now "No clickable outcome links — show the PATH instead"
+  (write answers name the file's path as a code span, `written`
+  minus leading /; an answer without the path is INCOMPLETE — the
+  mandate survives, only the target changed), /link out of the method
+  cheat, tail line updated.
+
+Learnings kept: OWUI's renderer preserves chrome-extension:// hrefs
+(session #40 — still true, just unused now); models echo response
+fields, so future write-response additions reach answers for free.
+sec_test 14/14 on 3.3.0; CWS zip rebuilt at 3.3.0 (77 files), 3.2.1
+zip deleted; both OWUI rows restaged. Dandan: reload the unpacked
+extension once more.

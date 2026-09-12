@@ -60,13 +60,6 @@ function fmtSize(n) {
   if (n < 1048576) return (n / 1024).toFixed(1) + " KB";
   return (n / 1048576).toFixed(1) + " MB";
 }
-function fmtTTL(v) {
-  return v >= 31536000 ? "1 year"
-    : (v >= 2592000 ? (v / 2592000) + " month" + (v >= 5184000 ? "s" : "")
-    : (v >= 86400 ? (v / 86400) + " day" + (v >= 172800 ? "s" : "")
-    : (v / 3600) + " hour" + (v >= 7200 ? "s" : "")));
-}
-
 // (fold-state restore lives in the DOMContentLoaded handler below — this
 // script loads from <head>, so details.sec does not exist yet at parse time)
 
@@ -284,12 +277,6 @@ async function refresh() {
     const ig = document.getElementById("ignorepats");
     if (ig !== null && document.activeElement !== ig)
       ig.value = (s.ignore_global || []).join("\n");
-    const sel = document.getElementById("linkttl");
-    let hit = [...sel.options].some((o) => +o.value === s.link_ttl);
-    sel.value = hit ? String(s.link_ttl)
-      : (s.link_ttl >= 31536000 ? "31536000" : "604800");
-    document.getElementById("ttlinfo").textContent =
-      "Links live " + fmtTTL(+sel.value) + " (custom values round to the nearest choice here).";
     const rl = s.rate_limits || {};
     document.getElementById("ratelimitw").value = rl.max_writes != null ? rl.max_writes : 20;
     document.getElementById("ratelimitmb").value = rl.max_mb != null ? rl.max_mb : 50;
@@ -374,45 +361,7 @@ async function renderRoots() {
       await OFBIDB.del("roots", r.id);
       renderRoots(); beat(); renderPreview();
     };
-    // Location: the folder's full path on this computer, typed by the
-    // user ONCE (the File System Access API never reveals it — only the
-    // folder's name). File-link pages show/copy ABSOLUTE paths when set.
-    const locBtn = document.createElement("button");
-    locBtn.className = "small secondary";
-    locBtn.textContent = "Location" + (r.os_path ? " ✓" : "…");
-    locBtn.title = "Full path of this folder on your computer (e.g. /Users/you/Documents/" +
-      (r.alias || "folder") + "). Optional — file-link pages then show and copy " +
-      "openable absolute paths instead of folder-relative ones.";
-    locBtn.onclick = () => {
-      if (row.querySelector("input.loc")) return;
-      const inp = document.createElement("input");
-      inp.className = "loc";
-      inp.placeholder = "/full/path/to/" + (r.alias || "folder");
-      inp.value = r.os_path || "";
-      inp.style.cssText =
-        "flex:1;min-width:10em;height:30px;border-radius:7px;border:1px solid #b9b9c9;" +
-        "padding:0 10px;font-size:13px;font-family:inherit";
-      let done = false;
-      const save = async () => {
-        if (done) return;
-        done = true;
-        const v = inp.value.trim().replace(/\/+$/, "");
-        if (v) r.os_path = v; else delete r.os_path;
-        await OFBIDB.put("roots", r);
-        renderRoots();
-        status(v ? "Folder location saved — file-link pages now copy absolute paths"
-          : "Folder location cleared", "ok");
-      };
-      inp.onkeydown = (ev) => {
-        if (ev.key === "Enter") save();
-        else if (ev.key === "Escape") { done = true; renderRoots(); }
-      };
-      inp.onblur = () => save();
-      row.insertBefore(inp, locBtn);
-      inp.focus();
-    };
-    if (r.os_path) name.title = r.os_path;
-    row.append(name, perm, toggle, locBtn, del);
+    row.append(name, perm, toggle, del);
     el.appendChild(row);
   }
 }
@@ -622,16 +571,6 @@ window.addEventListener("DOMContentLoaded", async () => {
       "✓ saved — " + (pats.length ? pats.length + " pattern" + (pats.length > 1 ? "s" : "") : "ignoring nothing extra");
     renderPreview();
   };
-
-  // Selects apply on change (same as confirm-scope); refresh() sets the
-  // value programmatically, which fires no change event — no save loop.
-  document.getElementById("linkttl").addEventListener("change", async () => {
-    const v = parseInt(document.getElementById("linkttl").value, 10);
-    if (Number.isFinite(v)) {
-      await OFBIDB.put("kv", v, "link_ttl");
-      document.getElementById("ttlinfo").textContent = "Links live " + fmtTTL(v) + " ✓";
-    }
-  });
 
   document.getElementById("saverate").onclick = async () => {
     const w = parseInt(document.getElementById("ratelimitw").value, 10);

@@ -123,10 +123,10 @@ Bridge must be running during chats. Non-technical users will forget.
       itself; the Linux re-run must confirm the four still pass WITH
       the gate on. UPDATE 2026-09-12 (ext 3.2.0): the re-run must also
       exercise the NEW paths — /search context/response shape e2e
-      (helper-level checks ran on the Mac only), write-response
-      `links` attachment (incl. write_many per-item + /edit
-      edited+path), and a real click through a printed
-      chrome-extension://open.html link (WAR navigation).
+      (helper-level checks ran on the Mac only) and write-response
+      field checks (/edit edited+path). UPDATE 2026-09-12 (ext 3.3.0):
+      the outcome-link e2e items are MOOT (links removed same day,
+      session #42); engines_test's GET /link 405 cell still applies.
 - [ ] Onboarding copy beyond the options card: README still documents
       only the APP setup (no extension section — it should also name the
       TWO skill variants, SKILL-EXT.md vs SKILL-EXT-TOKEN.md); the CWS
@@ -140,11 +140,11 @@ Bridge must be running during chats. Non-technical users will forget.
       Security → allow `http://127.0.0.1:8788` (one click under
       Recently blocked) and optionally Generate+Save a bridge token
       (paste in chat once when the model asks).
-- [x] CWS zip current at 3.2.1 (2026-09-12, link-page paths build):
-      `dist-stage3/open-file-bridge-extension-3.2.1.zip` — 46 MB /
-      80 files / manifest 3.2.1 verified inside; the 3.2.0 zip was
-      REMOVED so the stale one can't be uploaded. Actual CWS upload
-      still pending Dandan's store step.
+- [x] CWS zip current at 3.3.0 (2026-09-12, links-removed build):
+      `dist-stage3/open-file-bridge-extension-3.3.0.zip` — 77 files
+      (open.html/open.js/fs-links.js deleted) / manifest 3.3.0 / WAR
+      icon-only verified inside; the 3.2.1 zip was REMOVED. Actual CWS
+      upload still pending Dandan's store step.
 - [ ] confirm_test.py was rewritten for the 2026-09-09 blocking-confirmation
       contract (c0 approve-mid-wait, c1 timed_out, c5 deny-mid-wait) but
       only runs on Linux/Xvfb — first run there must confirm it green.

@@ -14,7 +14,7 @@
 //  - Payload caps and concurrency caps mirror the page relay.
 
 importScripts("fs-idb.js", "fs-core.js", "fs-adapter.js", "fs-writes.js",
-  "fs-links.js", "fs-engine.js", "fs-confirm.js", "fs-sec.js");
+  "fs-engine.js", "fs-confirm.js", "fs-sec.js");
 
 const MAX_BODY_BYTES = 10 * 1024 * 1024; // 10 MB request payload cap
 const MAX_RESPONSE_BYTES = 64 * 1024 * 1024; // 64 MB response cap

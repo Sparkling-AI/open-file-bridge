@@ -2,6 +2,23 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.3.0-EXT — 2026-09-12 (with extension 3.3.0)
+
+**Outcome links REMOVED from extension mode** (Dandan's call after
+living with 3.2.0/3.2.1): a browser extension cannot open files or the
+OS file manager, and the link-page experience (path + copy + save-a-
+copy, even with user-declared absolute paths) wasn't worth it. The
+replacement rule is simpler and honest: after any successful
+write/create/edit/restore, the answer NAMES the file's path as a code
+span (the response's `written`, no leading `/`) — an answer without
+the path is incomplete. Extension side: /link answers a self-
+explaining 501 (kept as a route so strays don't hit "unknown
+endpoint"), /click/* 404s with the same message, the ⏳ Link-lifetime
+settings card is gone, open.html/fs-links.js deleted, open.html
+removed from web_accessible_resources, /state no longer reports
+link_ttl. The 3.2.1 folder-Location setting went with it (nothing
+consumed os_path anymore). Floor: extension ≥ 3.3.0.
+
 ## 3.2.0-EXT — 2026-09-12 (with extension 3.2.0)
 
 Three user-visible upgrades, floor moves to **extension ≥ 3.2.0**:

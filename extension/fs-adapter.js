@@ -26,20 +26,7 @@ const FS_WHEELS = [
 
 /* ---------------- the router ---------------- */
 
-/* fsRoute wrapper (3.2.0): every successful POST write response leaves
- * with outcome links attached (app _json rule — models echo response
- * fields, so links reach chat answers without a second model call).
- * epWriteMany's inner /write calls re-enter here, so batch items get
- * their own links too. */
 async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
-  const resp = await fsRouteInner(method, pathWithQs, bodyText, b64Mode);
-  if (method === "POST") {
-    try { await attachWriteLinks(resp); } catch (e) { /* never fail a write for links */ }
-  }
-  return resp;
-}
-
-async function fsRouteInner(method, pathWithQs, bodyText, b64Mode) {
   const qi = pathWithQs.indexOf("?");
   const path = qi < 0 ? pathWithQs : pathWithQs.slice(0, qi);
   const q = parseQueryString(pathWithQs);
@@ -105,7 +92,6 @@ async function fsRouteInner(method, pathWithQs, bodyText, b64Mode) {
       ignore_global: await kvGet("ignore_global", []),
       rate_limits: { max_writes: lim.w, max_mb: Math.floor(lim.b / 1024 / 1024),
         writes_source: "setting", mb_source: "setting" },
-      link_ttl: await kvGet("link_ttl", 604800), link_ttl_source: "setting",
       engine_auto_open: await kvGet("engine_auto_open", true),
       confirm_scope: await kvGet("confirm_scope", "all"),
     });
@@ -148,7 +134,7 @@ async function fsRouteInner(method, pathWithQs, bodyText, b64Mode) {
   }
 
   if (path.startsWith("/click/")) {
-    return fsFail(404, { error: "outcome links are served by the extension page — see /link" });
+    return fsFail(404, { error: "outcome links were removed in extension 3.3.0 — show the file's path in your answer instead" });
   }
 
   if (method === "GET" && path === "/guide") {
@@ -216,7 +202,15 @@ async function fsRouteInner(method, pathWithQs, bodyText, b64Mode) {
     if (method === "POST" && path === "/trash/restore") return await epRestore("trash", body);
     if (method === "POST" && path === "/zip") return await epZip(body);
     if (method === "POST" && path === "/unzip") return await epUnzip(body);
-    if (method === "POST" && path === "/link") return await epLink(body);
+    if (method === "POST" && path === "/link") {
+    // outcome links REMOVED in 3.3.0 (Dandan's call): a browser
+    // extension cannot open files or the OS file manager, and the
+    // link-page experience wasn't worth it — honest 501, keep the
+    // route so strays get an explanation instead of "unknown endpoint"
+    return fsFail(501, {
+      error: "outcome links are gone in extension mode (removed in 3.3.0)",
+      hint: "a browser extension cannot open files or the OS file manager — after a write, show the file's path (the response's written field, without the leading /) as a code span in your answer" });
+  }
     if (method === "GET" && path === "/reveal") return fsFail(403, {
       error: "reveal is disabled — an extension cannot open the OS file manager",
       hint: "the extension page shows the file path with a copy button" });

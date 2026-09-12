@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.2.0-EXT (extension backend, no token)
+# Local File Bridge — skill v3.3.0-EXT (extension backend, no token)
 
 > **Variant picker (for whoever publishes this skill):** this is the
 > NO-TOKEN variant — publish it when the extension's 🔒 Security card
@@ -28,7 +28,7 @@ app to talk to). A slow TIMEOUT (no reply in ~30 s) usually means the
 elected relay's tab was closed mid-session — retry once (the bootstrap
 re-elects automatically).
 
-> Requires the Open File Bridge extension ≥ **3.2.0** (checked on the
+> Requires the Open File Bridge extension ≥ **3.3.0** (checked on the
 > first /health below; newer extensions are always fine — the pipe is
 > backward-compatible).
 
@@ -86,17 +86,14 @@ below is complete on its own.
   ask the user to open the file in their office app (Word / Excel /
   LibreOffice) and save as `.docx` / `.xlsx`, then we can read and edit
   it.
-- **Outcome links: every write answer SHOWS the open link.** Every
-  successful write/create/edit/restore response carries a `links`
-  object; put it in your ANSWER beside the file name, exactly:
-  `[📄 notes.md](links.open_url) · [📂 Show in folder](links.reveal_url)`.
-  The links open the extension's page — the file's full path with a
-  copy button (an extension cannot open the OS file manager or hand the
-  file to its default app; `reveal_url` shows the location the same
-  way). A write answer that reports only a path WITHOUT the link is
-  INCOMPLETE. If a response is missing `links` (should not happen),
-  mint them: `POST /link {"path": "…"}` and show its `open_url` /
-  `reveal_url` the same way.
+- **No clickable outcome links — show the PATH instead.** A browser
+  extension cannot open files or the OS file manager, so there is
+  nothing to link (the app-skill's 📄/📂 links don't apply here; `/link`
+  answers 501). After ANY successful write/create/edit/restore, name
+  the file's path in your ANSWER as a plain code span — the response's
+  `written` field without the leading `/`, e.g. `notes/report.md` —
+  and mention the folder name when it helps. A write answer that does
+  not name the file's path is INCOMPLETE.
 
 ## OCR notes (tesseract.js, bundled fast models)
 
@@ -305,7 +302,7 @@ instead return 403 `security_locked`/`origin_blocked`
 or 403 `token_required` — see the sender-gate bullet above for the
 exact one-shot recovery (user allows the site / pastes the token).
 Version rule (one-way floor, no lockstep): if `/health`'s `version` is
-OLDER than **3.2.0** (this skill's minimum), say once: "your Open File
+OLDER than **3.3.0** (this skill's minimum), say once: "your Open File
 Bridge extension is older than this skill — update it (Chrome →
 chrome://extensions → reload the unpacked extension, or update from the
 Chrome Web Store)" — then continue with what works. Newer extensions
@@ -340,7 +337,7 @@ failed request unchanged.
 **Method cheat** (405 enforces it): reads are **GET** with query
 params — `/list /read /peek /stat /search /directory_tree /image_info
 /image_b64 /pdf_text /ocr`; writes & actions are **POST** with a JSON
-body — `/link /write /write_b64 /write_many /edit /delete /zip /unzip
+body — `/write /write_b64 /write_many /edit /delete /zip /unzip
 /versions/* /trash/* /ocr_pdf /pdf_op`. `/list` is THE listing
 endpoint — `/files`, `/ls`, `/dir`, `/entries` do not exist; don't
 discovery-scan, the endpoint table above is complete.
@@ -370,9 +367,8 @@ To READ an old version WITHOUT changing the live file, use
 `"b64": true` for binary) — do NOT restore just to read. Restoring IS
 a write (it replaces the live file) and asks for approval worded as a
 restore. Writes >1 MB chunk automatically inside the pipe (model code
-never chunks manually). **Every write/create/edit/restore response
-carries `links` — echo them in your answer** (the outcome-links rule
-above).
+never chunks manually). **Every write answer names the file's path**
+(the no-links rule above).
 
 **Out-of-chat confirmations (default on).** Deletes and overwrites of
 EXISTING files push an Approve/Deny popup into the chat page (the
@@ -478,6 +474,7 @@ Compiled data-science wheels (`pandas`/`matplotlib` …) still come from
 Pyodide's own lock via `micropip.install("pandas")` — fetched from the
 OWUI origin, not through the pipe.
 
-Reading rules and caching match the desktop-app skill; outcome links
-open the extension page (the rule above — every write answer shows
-them). When unsure what a file is, call `/peek` first (a few tokens).
+Reading rules and caching match the desktop-app skill; there are no
+clickable outcome links in extension mode — every write answer names
+the file's path instead (the rule above). When unsure what a file is,
+call `/peek` first (a few tokens).

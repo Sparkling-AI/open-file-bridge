@@ -810,6 +810,18 @@ full path once → link pages show/copy absolute paths) and a
 **Save a copy to Downloads** button on every link page (blob
 `<a download>`, zero new permissions). Skill untouched at 3.2.0-EXT.
 
+## Stage 3 (extension): outcome links REMOVED — path-in-answer instead (2026-09-12, ext 3.3.0 / skill 3.3.0-EXT)
+
+After living with 3.2.0/3.2.1, Dandan's verdict: the link-page
+experience isn't worth it against the hard Chrome limits (no
+OS-launch, no absolute paths from granted handles). The whole family
+is out: /link 501s with the honest message, /click 404s, the ⏳
+Link-lifetime card and the folder-Location editor are gone,
+open.html/fs-links.js deleted, WAR back to icon-only. The skill's
+write-answer mandate now targets the file's PATH (code span) instead
+of a link. Learnings kept in DEVNOTES #42 (OWUI keeps
+chrome-extension:// hrefs; models echo response fields).
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

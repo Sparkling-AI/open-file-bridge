@@ -3,7 +3,7 @@
 // Shared by the service worker (fs-adapter) and the extension pages
 // (setup/options). One database per extension origin:
 //   roots     {id, alias, mode, handle, grantedAt, writesEnabled, ignore}
-//   kv        settings (ocr_lang, link_ttl, rate_max_writes, rate_max_mb,
+//   kv        settings (ocr_lang, rate_max_writes, rate_max_mb,
 //             ignore_global)
 //   audit     append-only op rows {ts, endpoint, method, path, size, status}
 //   clicks    {token, kind, path, expiry}

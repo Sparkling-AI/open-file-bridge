@@ -19,7 +19,6 @@ input:not([type=checkbox]), select { height: var(--control); padding: 0 10px;
 input:not([type=checkbox]):focus, select:focus, textarea:focus {
        outline: 2px solid var(--accent); outline-offset: -1px; border-color: var(--accent); }
 /* inputs sized to their content, not the card width */
-#linkttl { width: 150px; }
 #ratelimitw, #ratelimitmb { width: 100px; }
 textarea { width: 100%; max-width: 440px; min-height: 104px; padding: 8px 10px;
        font-size: 13px; line-height: 1.5; font-family: ui-monospace, monospace;
@@ -177,23 +176,6 @@ the assistant asks you to start them.
 (applies immediately):</p>
 <div id="langbox" class="panel"></div>
 <p class="hint" id="langs"></p>
-</details>
-
-<details class="sec" id="sec-links" open>
-<summary>⏳ Link lifetime</summary>
-<p class="hint">How long the chat-answer file links keep working after the
-assistant posts them. The clock starts when each link is created.</p>
-<div class="btnrow">
-<select id="linkttl">
-<option value="3600">1 hour</option>
-<option value="86400">1 day</option>
-<option value="604800">7 days</option>
-<option value="2592000">30 days</option>
-<option value="7776000">90 days</option>
-<option value="31536000">1 year</option>
-</select>
-<span class="hint" id="ttlinfo"></span>
-</div>
 </details>
 
 <details class="sec" id="sec-safety" open>
