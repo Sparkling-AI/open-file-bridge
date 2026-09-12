@@ -2981,3 +2981,20 @@ Session #44 addendum (same day): Dandan live-verified 3.3.2 — "look
 good, please commit and push": the trivial-create test now goes
 through the bridge. Push of the 6-commit stack (350bd2d → 9a709e4,
 ext 3.3.0 / skill 3.3.2-EXT) on his ask.
+
+## Stage-3 session #45: sandbox-not-your-computer ported to the app skills (2026-09-12, skill 2.11.3, app untouched)
+
+Dandan's call: the 3.3.2 EXT fix is environment-generic (same OWUI
+Pyodide cells), so the app line needs it too. Survey first: the
+STRICT variants ALREADY taught it (Rules 1–2: sandbox = throwaway
+scratch, never open()/os.* for user files) — but that helps only
+after selection, and all four app descriptions carried the weak
+"sandbox file APIs cannot reach that folder" trigger. Shipped as
+2.11.3 (all four files): hardened DESCRIPTION (names trivial-create
+asks; sandbox FS = throwaway VM files never leave) + the "The
+sandbox is NOT the user's computer" section in the two STANDARD
+variants (app-flavored tail: bridge-write then show the response's
+`links` — the app line still has clickable outcome links). STRICT
+variants: description + version bump only. Bridge app untouched
+(≥ 2.11 floor unchanged; skill-only patch per the 2.11.1/2.11.2
+precedent).

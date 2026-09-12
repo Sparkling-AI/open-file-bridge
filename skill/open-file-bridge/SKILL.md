@@ -1,14 +1,29 @@
 ---
 name: open-file-bridge
-description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through Open File Bridge. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
+description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through Open File Bridge — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text'. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v2.11.2
+# Local File Bridge — skill v2.11.3
 
 > Requires bridge ≥ **2.11** (checked at bootstrap below; newer bridges are
 > always fine — the API is backward-compatible).
 
 Access files in **the user's own computer** through their local Open File Bridge service (running at `http://127.0.0.1:8765`). The user has explicitly installed and authorized this — files NEVER pass through the Open WebUI server; all access happens from the user's browser via the Code Interpreter (Pyodide), which runs on the user's machine.
+
+
+## The sandbox is NOT the user's computer
+
+Your code sandbox has its own filesystem (`/mnt/uploads`,
+`os.getcwd()`, `Path("…")`) — a THROWAWAY VM. Writing a file there
+(`open()`, `write_text`, `os.makedirs` …) creates NOTHING on the
+user's machine, however cleanly the cell runs. This includes trivial
+asks — "create a small test file", "save any 2 lines" — the user
+still means a file they can open, i.e. in their shared folder. Every
+file the user should end up with is created/edited ONLY through the
+bridge endpoints below; the write response's `written` is your proof
+it exists for the user. If a file matters enough to mention in your
+answer, it matters enough to bridge-write (and then show its `links`
+from the same response).
 
 ## Bridge API
 

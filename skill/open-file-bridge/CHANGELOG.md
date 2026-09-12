@@ -2,6 +2,20 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 2.11.3 — 2026-09-12
+
+App-line port of the EXT 3.3.2 fix (the live failure where a trivial
+"create a file with any text" ask never touched the bridge and the
+model answered with a `/mnt/uploads` sandbox path — the file never
+reached the user's folder): the DESCRIPTION (tool-selection trigger)
+now names trivial-create asks and states the sandbox filesystem is a
+throwaway VM files never leave; the standard variants gain a first
+section "The sandbox is NOT the user's computer" (open()/os. writes
+create nothing for the user; the write response's `written` is the
+proof; then show its `links`). The STRICT variants already taught
+this (Rules 1–2) and get the description + version bump only. Bridge
+app untouched (≥ 2.11 floor unchanged).
+
 ## 3.3.2-EXT — 2026-09-12
 
 Root-cause fix for the /mnt/uploads answers (3.3.1's teaching wasn't
