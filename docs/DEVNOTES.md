@@ -2931,3 +2931,23 @@ fields, so future write-response additions reach answers for free.
 sec_test 14/14 on 3.3.0; CWS zip rebuilt at 3.3.0 (77 files), 3.2.1
 zip deleted; both OWUI rows restaged. Dandan: reload the unpacked
 extension once more.
+
+## Stage-3 session #43: path-communication rule — kill the /mnt/uploads answers (2026-09-12, skill 3.3.1-EXT, ext untouched)
+
+Dandan's live test: model created test2.md fine (the file IS in the
+shared folder), but asked "what is the path to the file" it answered
+`/mnt/uploads/test2.md` — OWUI's Pyodide sandbox upload dir. Root
+cause is teaching, not plumbing: on a LATER turn ("where is it?") the
+model has no bridge response in hand and introspects its own
+filesystem — which is the throwaway sandbox. The path bullet (3.3.0's
+"show the PATH instead") now reads "Naming files for the user":
+user-facing paths are ALWAYS `folder/relative/path` code spans built
+ONLY from bridge responses (/health `root` + `written`/`path` minus
+leading `/`, e.g. `test-folder/notes/report.md`), NEVER `/mnt/uploads/…`/
+os.getcwd()/any Pyodide path — "quoting one means you're describing
+the wrong file, go back to the bridge response". Write-answer
+INCOMPLETE mandate unchanged; reinforcement line re-anchored. Skill
+3.3.1-EXT both variants (floor stays ≥3.3.0 — no ext requirement);
+rows restaged. Live check for Dandan: FRESH chat, create a file, then
+ask "what is the path to the file" — expect `test-folder/<name>` and
+never a sandbox path.

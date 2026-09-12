@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.3.0-EXT (extension backend, no token)
+# Local File Bridge — skill v3.3.1-EXT (extension backend, no token)
 
 > **Variant picker (for whoever publishes this skill):** this is the
 > NO-TOKEN variant — publish it when the extension's 🔒 Security card
@@ -86,14 +86,20 @@ below is complete on its own.
   ask the user to open the file in their office app (Word / Excel /
   LibreOffice) and save as `.docx` / `.xlsx`, then we can read and edit
   it.
-- **No clickable outcome links — show the PATH instead.** A browser
-  extension cannot open files or the OS file manager, so there is
-  nothing to link (the app-skill's 📄/📂 links don't apply here; `/link`
-  answers 501). After ANY successful write/create/edit/restore, name
-  the file's path in your ANSWER as a plain code span — the response's
-  `written` field without the leading `/`, e.g. `notes/report.md` —
-  and mention the folder name when it helps. A write answer that does
-  not name the file's path is INCOMPLETE.
+- **Naming files for the user: `folder/relative/path` — NEVER a
+  sandbox path.** Bridge files live in the user's shared folder, whose
+  display name `/health` reports as `root` (e.g. `test-folder`). After
+  ANY successful write/create/edit/restore, and whenever the user asks
+  where a file is, name it as the folder name + the bridge-relative
+  path in a code span, e.g. `test-folder/notes/report.md` — built ONLY
+  from bridge responses: `written`/`path` minus the leading `/`, plus
+  the `root` name. NEVER report `/mnt/uploads/…`, `os.getcwd()`, or
+  any Pyodide-filesystem path — those are throwaway sandbox locations
+  the user cannot see; if you catch yourself quoting one, you are
+  describing the wrong file, go back to the bridge response. A write
+  answer without the file's folder-relative path is INCOMPLETE. (No
+  clickable links: `/link` 501s — an extension cannot open files or
+  the OS file manager.)
 
 ## OCR notes (tesseract.js, bundled fast models)
 
@@ -368,7 +374,7 @@ To READ an old version WITHOUT changing the live file, use
 a write (it replaces the live file) and asks for approval worded as a
 restore. Writes >1 MB chunk automatically inside the pipe (model code
 never chunks manually). **Every write answer names the file's path**
-(the no-links rule above).
+(folder + relative — the path rule above).
 
 **Out-of-chat confirmations (default on).** Deletes and overwrites of
 EXISTING files push an Approve/Deny popup into the chat page (the

@@ -2,6 +2,20 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.3.1-EXT — 2026-09-12
+
+Path-communication rule (from Dandan's live test: asked "what is the
+path to the file" after creating test2.md, the model answered
+`/mnt/uploads/test2.md` — a throwaway Pyodide-sandbox location the
+user cannot see). The path bullet now teaches: user-facing file names
+are ALWAYS `folder/relative/path` in a code span (folder display name
+from /health's `root` + the write response's `written`/`path` minus
+the leading `/`, e.g. `test-folder/notes/report.md`), and NEVER
+sandbox paths — `/mnt/uploads/…`, `os.getcwd()`, any Pyodide
+filesystem path; quoting one means you're describing the wrong file,
+go back to the bridge response. Extension untouched (stays 3.3.0,
+floor ≥ 3.3.0).
+
 ## 3.3.0-EXT — 2026-09-12 (with extension 3.3.0)
 
 **Outcome links REMOVED from extension mode** (Dandan's call after
