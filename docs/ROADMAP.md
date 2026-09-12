@@ -843,3 +843,29 @@ chrome-extension:// hrefs; models echo response fields).
   offline-safety + version pinning (user decision: local-only).
 - tesseract OCR: ~0.5 s/page @200 dpi (RapidOCR was 2.1 s).
 - Combo langs: swe+eng fixes å/ä/ö AND digits (each alone breaks one).
+
+## Stage 3 (extension): Chrome Web Store prep round (2026-09-12, ext 3.3.1)
+
+Dandan greenlit the CWS checklist audit + fixes. Verified the pasted
+checklist against the repo (its 3.1.1 zip reference was stale — 3.1.1 was
+already deleted; 3.3.0 was the live candidate), then shipped ext 3.3.1:
+manifest description 248 → 116 chars (store cap 132); `storage` permission
+REMOVED — grep-proofed that nothing calls chrome.storage (all state is
+IndexedDB `ofb-ext` via fs-idb), then re-verified functionally: offscreen
+smoke PASS (SW boots, engine auto-starts, no tabs) and IDB persistence
+PASS across a full browser restart (allowlisted site + token + version
+state survived on the same profile). CWS-facing collateral: docs/PRIVACY.md
+restructured to cover BOTH products (extension section states the exact
+worker-mode token behavior from relay.js: same-origin handoff, never
+crosses to the service worker); new docs/CHROME-WEB-STORE.md (listing
+copy, category, single purpose, `offscreen` + broad-content-script
+justifications, honest data-use answers, reviewer console recipe that
+rides the relay pipe without Open WebUI); store graphics from the REAL
+options page rendered via playwright-core + Chromium-for-Testing
+(fresh synthetic profile so no real token/folder data can leak):
+3 × 1280×800 screenshots + 440×280 promo tile, each glm-vision-checked
+(guide-page shot was rejected by vision as too text-heavy — replaced with
+the OCR/safety sections). Zip rebuilt at 3.3.1, 3.3.0 removed. Skill line
+untouched (3.3.2-EXT; floor ≥ 3.3.0 unchanged — patch bump only). What
+remains is the upload itself from Dandan's Google account
+(CHROME-WEB-STORE.md §6: trusted-testers first, then everyone).

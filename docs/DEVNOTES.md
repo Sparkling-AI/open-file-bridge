@@ -2998,3 +2998,43 @@ variants (app-flavored tail: bridge-write then show the response's
 variants: description + version bump only. Bridge app untouched
 (≥ 2.11 floor unchanged; skill-only patch per the 2.11.1/2.11.2
 precedent).
+
+## Stage-3 session #46: Chrome Web Store prep round (2026-09-12, ext 3.3.1 / skill untouched)
+
+Dandan pasted a CWS pre-upload checklist for verification. Audit findings:
+(1) description 248 chars — real, fixed; (2) PRIVACY.md was desktop-only —
+real, restructured; (3) no 1280×800/440×280 assets existed — real, made;
+the checklist's zip name (3.1.1) was stale — 3.1.1 was deleted long ago,
+3.3.0 was the candidate. Two items the checklist MISSED, both now handled
+in docs/CHROME-WEB-STORE.md: the review form's broad-content-script
+justification (relay injects on https://*/* + localhost by design — any
+self-hosted OWUI origin must work) and the listing copy itself.
+
+`storage` permission removal — evidence trail: grep across *.js/*.html
+found ZERO chrome.storage/browser.storage calls (fs-idb.js's comment is
+the only mention); all state is IDB. Functional proof after removal:
+offscreen smoke PASS (SW up, engineEnsureHost flips engine_alive, no
+engine tabs) and persistence PASS (same profile relaunched after the
+permission change: site 127.0.0.1:8080 + token + "Running · v3.3.1-EXT"
+all survived). Lesson: the permission was vestigial since settings moved
+to IDB for FileSystemHandle storage (handles aren't structured-cloneable
+into chrome.storage).
+
+Screenshot recipe (reusable): /tmp/ofb-shots pattern — playwright-core +
+~/Library/Caches/ms-playwright/chromium-1234 Chrome-for-Testing,
+launchPersistentContext(--disable-extensions-except/--load-extension),
+fresh profile, viewport exactly 1280×800, drive the REAL options UI
+(fill #siteadd → click #siteaddbtn; fill #bridgetoken → #tokenset) so the
+"configured" shots show genuinely saved state; compose by toggling
+<details> open attrs + scrollIntoView. Synthetic profile = store-shot
+privacy by construction (Dandan's real token/folders can never appear).
+glm-vision verdicts: shots 1/2 and the tile SHIP; the guide.html shot was
+called too text-heavy for a listing — replaced with the OCR-grid/safety
+scroll (vision PASS). Promo tile = docs/brand/promo-tile-440x280.png from
+an HTML compose (icon-512 + headline + three pills), same recipe at
+440×280.
+
+Reviewer recipe note: the console snippet in CHROME-WEB-STORE.md §5 works
+because the page itself rides the pipe (isDescendantIframe matches the
+page's own window — relay.js's documented invariant), so a reviewer can
+prove the bridge with ANY allowlisted page, no OWUI install needed.

@@ -140,11 +140,21 @@ Bridge must be running during chats. Non-technical users will forget.
       Security → allow `http://127.0.0.1:8788` (one click under
       Recently blocked) and optionally Generate+Save a bridge token
       (paste in chat once when the model asks).
-- [x] CWS zip current at 3.3.0 (2026-09-12, links-removed build):
-      `dist-stage3/open-file-bridge-extension-3.3.0.zip` — 77 files
-      (open.html/open.js/fs-links.js deleted) / manifest 3.3.0 / WAR
-      icon-only verified inside; the 3.2.1 zip was REMOVED. Actual CWS
-      upload still pending Dandan's store step.
+- [x] CWS zip current at 3.3.1 (2026-09-12, store-prep build):
+      `dist-stage3/open-file-bridge-extension-3.3.1.zip` — 77 files /
+      manifest 3.3.1 / description 116 chars (store max 132) / `storage`
+      permission REMOVED (vestigial — nothing calls chrome.storage; IDB
+      persistence + offscreen smoke re-verified after removal); the 3.3.0
+      zip was REMOVED.
+- [x] CWS prep round complete (2026-09-12): docs/PRIVACY.md restructured
+      (extension section: selected-folder scope, site lock, worker-mode
+      OWUI token handoff, IDB-only storage, no analytics/cloud);
+      docs/CHROME-WEB-STORE.md = full listing copy + single purpose +
+      offscreen/broad-host justifications + reviewer console recipe; 3×
+      1280×800 screenshots (real options page, synthetic profile) +
+      440×280 promo tile, all vision-checked. REMAINING: the upload +
+      publish itself from Dandan's Google developer account ($5 one-time
+      fee if new), per CHROME-WEB-STORE.md §6.
 - [ ] confirm_test.py was rewritten for the 2026-09-09 blocking-confirmation
       contract (c0 approve-mid-wait, c1 timed_out, c5 deny-mid-wait) but
       only runs on Linux/Xvfb — first run there must confirm it green.
