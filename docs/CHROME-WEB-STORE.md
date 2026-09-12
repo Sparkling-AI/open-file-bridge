@@ -98,17 +98,20 @@ store icon requirement; a 1280×800 marquee can be added later.
 - **Permission — `offscreen`:**
   > Runs OCR (Tesseract WASM) and document conversion in an offscreen
   > document so no extra tabs or windows open on the user's machine.
-- **Content scripts on `https://*/*`, `http://127.0.0.1/*`,
-  `http://localhost/*` (broad matching justification):**
-  > The content script is a passive message relay so the extension works
-  > with any self-hosted Open WebUI origin — users choose their own address
-  > (localhost, LAN, or a custom domain), so the origins cannot be
-  > pre-listed. The relay only forwards bridge-shaped messages; it collects
-  > nothing and grants nothing by itself. All file-operation requests are
-  > rejected by the extension's service worker unless the sender's origin is
-  > on the user's explicit allowlist (checked against browser-provided
-  > sender metadata), with an optional user-set bridge token as a second
-  > lock. Until the user allowlists a site, every request is refused.
+- **Host permission justification** (the dashboard field triggered by the
+  content-script matches on `https://*/*`, `http://127.0.0.1/*`,
+  `http://localhost/*` — the manifest declares no separate
+  `host_permissions` key):
+  > The extension's only host access is a content script injected into web
+  > pages, so it works with any self-hosted Open WebUI origin — users
+  > choose their own address (localhost, LAN, or a custom domain), so the
+  > origins cannot be pre-listed. The script is a passive message relay:
+  > it only forwards bridge-shaped messages, collects nothing, and grants
+  > nothing by itself. All file-operation requests are rejected by the
+  > extension's service worker unless the sender's origin is on the user's
+  > explicit allowlist (checked against browser-provided sender metadata),
+  > with an optional user-set bridge token as a second lock. Until the
+  > user allowlists a site, every request is refused.
 - **Data-use disclosures (recommended honest answers):**
   - Handles user data (file names/contents in the user-selected folder):
     yes, transferred only to the user's own allowlisted site on that site's
