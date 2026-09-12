@@ -112,13 +112,23 @@ store icon requirement; a 1280×800 marquee can be added later.
   > explicit allowlist (checked against browser-provided sender metadata),
   > with an optional user-set bridge token as a second lock. Until the
   > user allowlists a site, every request is refused.
-- **Data-use disclosures (recommended honest answers):**
-  - Handles user data (file names/contents in the user-selected folder):
-    yes, transferred only to the user's own allowlisted site on that site's
-    request.
-  - Sells or transfers data to third parties for non-core purposes: **no**.
-  - Uses data for analytics/telemetry beyond core functionality: **no**.
-  - Uses data for advertising/attribution: **no**.
+- **Data Usage disclosures (verified against Google's User Data FAQ,
+  2026-09-13):** local-only handling still requires disclosure (FAQ Q3);
+  reading browser storage counts as handling (Q2). Tick exactly:
+  - **Website content** — file text/images from the user-selected folder,
+    delivered to the user's own allowlisted Open WebUI on its request.
+  - **Authentication information** — the OWUI sign-in token (read from the
+    page's localStorage in worker mode, returned same-origin, never sent to
+    the service worker) and the user-set bridge token (stored in IndexedDB,
+    checked per request). Both stay on-device; disclosed anyway per FAQ Q3,
+    and PRIVACY.md already documents this handling.
+  - Do NOT tick: PII / Health / Financial / Personal communications (files
+    handled generically at the user's direction — FTP-client analogy, FAQ
+    Q15), Location (no IP/GPS), Web history (relay records no visits),
+    User activity (no interaction monitoring; the audit log records the
+    extension's own file operations, local-only).
+  - Certify all three limited-use statements (mandatory; all true — data
+    goes only to the user-specified server, i.e. the Q15 carve-out).
 
 ## 5. Reviewer test recipe (no Open WebUI required)
 
