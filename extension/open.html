@@ -6,7 +6,9 @@ body { font-family: system-ui, sans-serif; margin: 2rem; max-width: 40rem; color
 code { background: #f4f4f8; padding: 0.2rem 0.5rem; border-radius: 4px;
        word-break: break-all; }
 button { font-size: 1rem; padding: 0.4rem 1rem; border-radius: 8px;
-         border: 1px solid #b9b9c9; background: #4a5fc1; color: #fff; cursor: pointer; }
+         border: 1px solid #b9b9c9; background: #4a5fc1; color: #fff; cursor: pointer;
+         margin-right: 8px; }
+button.secondary { background: #fff; color: #1a1a2e; }
 .ok { color: #1a7f37; } .err { color: #b3261e; }
 </style>
 <script src="fs-idb.js"></script>
@@ -17,5 +19,6 @@ button { font-size: 1rem; padding: 0.4rem 1rem; border-radius: 8px;
 <p id="note"></p>
 <p><code id="path"></code></p>
 <button id="copy" hidden>Copy path</button>
+<button id="save" class="secondary" hidden>Save a copy to Downloads</button>
 </body>
 </html>

@@ -800,6 +800,16 @@ response shape). xlsx→csv + docx→html ship as wheel-validated Pyodide
 recipes; /convert's 501 hint names them; csv_head/csv_stats answer the
 moved 501 on GET. Skill floor ≥ 3.2.0; CWS zip rebuilt at 3.2.0.
 
+## Stage 3 (extension): link pages get openable paths + Save-a-copy (2026-09-12, ext 3.2.1)
+
+Live-test follow-up: the 3.2.0 link page copied folder-relative paths
+that open nothing, and the extension cannot know the absolute path
+(File System Access API never reveals it — only the folder's name).
+Shipped: a per-folder **Location** field in settings (user types the
+full path once → link pages show/copy absolute paths) and a
+**Save a copy to Downloads** button on every link page (blob
+`<a download>`, zero new permissions). Skill untouched at 3.2.0-EXT.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

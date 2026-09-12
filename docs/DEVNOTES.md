@@ -2874,3 +2874,30 @@ transport 9/9 (SW loads, /health reports 3.2.0-EXT). OWUI rows
 restaged. NOTE for Dandan: reload the unpacked extension in Chrome
 (chrome://extensions → reload) — the staged skill floors at 3.2.0 and
 will ask once until reloaded.
+
+## Stage-3 session #41: link page gets real paths + Save-a-copy (2026-09-12, ext 3.2.1)
+
+Dandan's live test of the 3.2.0 link page: it shows
+`test-folder/Aktiebok….html` — copied, that opens nothing. His ask:
+"prepend the folder path from config — the extension should know it."
+It can't: the File System Access API NEVER reveals a granted folder's
+absolute path (only `handle.name`, the basename — deliberate Chrome
+privacy design; there is no path API). Two fixes shipped:
+
+1. **Folder Location (settings → Folder row → Location…)** — the user
+   types the folder's full path ONCE; stored as `os_path` on the root
+   record (IDB). Link pages then show/copy ABSOLUTE paths
+   (`os_path` + "/" + rel). Inline input in the root row (Enter saves,
+   Escape cancels, empty clears; trailing slashes stripped).
+2. **Save a copy to Downloads** on every link page — walks the granted
+   handle to the file, `URL.createObjectURL(file)` + `<a download>`
+   click: the browser's own download flow, ZERO new permissions (no
+   chrome.downloads). A copy, never the shared original. The click is
+   the user gesture, so a lost permission (browser restart) can be
+   re-granted right there (NotAllowedError → named hint).
+
+open.js note line explains both states (path set vs not). No skill
+change (the page is behind the model's link; ext-only bump, skill
+stays 3.2.0-EXT, floor 3.2.0 ≤ 3.2.1 ✓). sec_test 14/14 on 3.2.1.
+CWS zip rebuilt at 3.2.1, 3.2.0 zip deleted. Dandan's steps: reload
+the unpacked extension, then set Location once per folder.
