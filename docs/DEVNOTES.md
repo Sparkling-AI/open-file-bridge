@@ -3038,3 +3038,14 @@ Reviewer recipe note: the console snippet in CHROME-WEB-STORE.md §5 works
 because the page itself rides the pipe (isDescendantIframe matches the
 page's own window — relay.js's documented invariant), so a reviewer can
 prove the bridge with ANY allowlisted page, no OWUI install needed.
+
+Session #46 addendum (2026-09-13): tagline reword — Dandan's ask: the
+pitch line meant Cowork "like in the Claude cowork" (the work-alongside
+mode), NOT "a coworker" (a colleague). README tagline + banner alt now
+read "Turn Open WebUI into your Cowork"; readme-banner.png and
+social-preview.png regenerated at 1280×640 from a fresh HTML compose
+(/tmp/ofb-shots/brand.html — icon-512 + two-line headline, blue accent
+on "your Cowork.", same three pills; social keeps gray bg + repo URL
+bottom-right), both glm-vision SHIP. NOTE: the GitHub repo's actual
+social preview must be re-uploaded in repo Settings → Social preview
+(no REST API for it) — Dandan's step after the next push.

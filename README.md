@@ -1,12 +1,12 @@
 <p align="center">
   <img src="docs/brand/readme-banner.png" width="800"
-       alt="Open File Bridge — turn Open WebUI into a coworker: share team knowledge, access private files, create files locally" />
+       alt="Open File Bridge — turn Open WebUI into your Cowork: share team knowledge, access private files, create files locally" />
 </p>
 
 # Open File Bridge
 
-**Turn [Open WebUI](https://github.com/open-webui/open-webui) into a
-coworker — with your team's shared knowledge, your private files, and all
+**Turn [Open WebUI](https://github.com/open-webui/open-webui) into your
+Cowork — with your team's shared knowledge, your private files, and all
 the document work done on your own machine.**
 
 What that means:
