@@ -29,8 +29,8 @@ the Microsoft Store, not the CWS).
 
 ### Detailed description (paste into the store)
 
-> Open File Bridge connects your self-hosted Open WebUI to ONE folder on
-> your computer — the folder you pick. Your AI chat can then list, read,
+> Turn Open WebUI into your Cowork — one that works in ONE folder on your
+> own computer: the folder you pick. Your AI chat can then list, read,
 > write, search, OCR, and convert files in that folder, while everything
 > stays on your machine.
 >

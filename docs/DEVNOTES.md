@@ -3049,3 +3049,10 @@ on "your Cowork.", same three pills; social keeps gray bg + repo URL
 bottom-right), both glm-vision SHIP. NOTE: the GitHub repo's actual
 social preview must be re-uploaded in repo Settings → Social preview
 (no REST API for it) — Dandan's step after the next push.
+
+Session #46 addendum 2 (2026-09-13): promo tile aligned with the Cowork
+tagline — headline now "Turn Open WebUI into your Cowork." + subline
+"reads & writes one folder on your computer — locally" (three safety
+pills unchanged); CWS detailed description in CHROME-WEB-STORE.md leads
+with the same line. Tile re-rendered from /tmp/ofb-shots/tile.html,
+glm-vision SHIP. No extension/ change — zip 3.3.1 unaffected.
