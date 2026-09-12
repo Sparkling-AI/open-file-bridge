@@ -2,6 +2,37 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.2.0-EXT — 2026-09-12 (with extension 3.2.0)
+
+Three user-visible upgrades, floor moves to **extension ≥ 3.2.0**:
+
+- **Outcome links are real clickable links now, and every write answer
+  shows one.** Live-render check first: the OWUI chat renderer keeps
+  `chrome-extension://` hrefs (DOMPurify only guards SVG/footnote/
+  preview paths) — so `open.html` became web-accessible and /link now
+  returns ABSOLUTE `chrome.runtime.getURL` links. Write/create/edit/
+  restore responses embed a `links` object (the app's `_attach_links`
+  port — "models echo response fields but skip optional extra calls"),
+  and the skill mandates showing `[📄 name](open_url)` beside every
+  created/updated file. Root cause of the "Created notes3.md …
+  Location: …" answer with no link.
+- **/search at desktop parity**: `context` lines per match (default 1,
+  max 5), `scanned_files` in the response, comma-separated `exclude`,
+  glob matched against the full relative path (`*` crosses `/`), and
+  the app's `matches[{path, line, context}]` response shape.
+- **xlsx→csv and docx→html** land as tested Pyodide recipes (§Office
+  files) — the two /convert pairs a browser CAN do (openpyxl +
+  stdlib csv; python-docx semantic HTML extract). /convert's 501 hint
+  now names them. csv_head/csv_stats also moved to the GET-side moved
+  set: a GET answers the moved 501 directly instead of a misleading
+  405 "POST-only" (fixes the TODO §6b item; skill 3.1.1's doc fix
+  stands).
+
+Ext 3.1.1 → 3.2.0 (manifest + FS_VERSION); CWS zip rebuilt as
+open-file-bridge-extension-3.2.0.zip, 3.1.1 zip deleted. Mac suites
+green (sec_test 14/14, worker_transport 9/9); recipes validated with
+the exact bundled wheels; /search e2e joins the standing Linux re-run.
+
 ## 3.1.1-EXT — 2026-09-12
 
 Doc fix from the desktop-vs-extension parity audit: `/csv_head` and

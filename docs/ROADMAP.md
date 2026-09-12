@@ -788,6 +788,18 @@ repointed from the feature branch to blob/master after the release
 merge (verified 200; smoke 6/6). Extension 3.1.1; CWS zip rebuilt, the
 3.1.0 artifact removed.
 
+## Stage 3 (extension): clickable outcome links on every write, /search parity, two /convert recipes (2026-09-12, ext 3.2.0 / skill 3.2.0-EXT)
+
+Outcome links became real: open.html web-accessible + absolute
+chrome.runtime.getURL URLs (live-checked: the OWUI chat renderer keeps
+chrome-extension:// hrefs), and write/create/edit/restore responses
+embed `links` (app `_attach_links` port — models echo response fields,
+they don't make optional extra calls). /search reaches desktop parity
+(context lines, scanned_files, comma-list exclude, full-path glob, app
+response shape). xlsx→csv + docx→html ship as wheel-validated Pyodide
+recipes; /convert's 501 hint names them; csv_head/csv_stats answer the
+moved 501 on GET. Skill floor ≥ 3.2.0; CWS zip rebuilt at 3.2.0.
+
 ## Format support matrix (current)
 
 | Format | Read | Write | Notes |

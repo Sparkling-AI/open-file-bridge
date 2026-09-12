@@ -110,7 +110,7 @@ Bridge must be running during chats. Non-technical users will forget.
 
 - [ ] Re-run the Linux stage-3 suites (spike1/engines/negatives/confirm,
       Xvfb) after the 2026-09-09 worker-transport relay change — the
-      Mac-runnable `tests/stage3/worker_transport_test.py` (7/7) covers
+      Mac-runnable `tests/stage3/worker_transport_test.py` (9/9) covers
       both transports and the election, but the picker-driven paths and
       the engines/confirm suites were not re-run on this machine.
       The 2026-09-10 language expansion (ext 3.0.11) also needs that
@@ -119,9 +119,14 @@ Bridge must be running during chats. Non-technical users will forget.
       static checks ran on the Mac. UPDATE 2026-09-11 (sender gate, ext
       3.0.18): all four picker suites now call `spike1.sec_configure`
       after the picker (origin + TEST_TOKEN; worker_transport is
-      origin-only) — the new `sec_test.py` (13/13 Mac) covers the gate
+      origin-only) — the new `sec_test.py` (14/14 Mac) covers the gate
       itself; the Linux re-run must confirm the four still pass WITH
-      the gate on.
+      the gate on. UPDATE 2026-09-12 (ext 3.2.0): the re-run must also
+      exercise the NEW paths — /search context/response shape e2e
+      (helper-level checks ran on the Mac only), write-response
+      `links` attachment (incl. write_many per-item + /edit
+      edited+path), and a real click through a printed
+      chrome-extension://open.html link (WAR navigation).
 - [ ] Onboarding copy beyond the options card: README still documents
       only the APP setup (no extension section — it should also name the
       TWO skill variants, SKILL-EXT.md vs SKILL-EXT-TOKEN.md); the CWS
@@ -135,30 +140,29 @@ Bridge must be running during chats. Non-technical users will forget.
       Security → allow `http://127.0.0.1:8788` (one click under
       Recently blocked) and optionally Generate+Save a bridge token
       (paste in chat once when the model asks).
-- [x] CWS zip current at 3.1.1 (2026-09-12, link-repoint build):
-      `dist-stage3/open-file-bridge-extension-3.1.1.zip` — 48.4 MB
-      compressed / 80 files / manifest 3.1.1 verified inside; the 3.1.0
-      zip was REMOVED so the stale one can't be uploaded. Actual CWS
-      upload still pending Dandan's store step.
+- [x] CWS zip current at 3.2.0 (2026-09-12, links+search+recipes
+      build): `dist-stage3/open-file-bridge-extension-3.2.0.zip` —
+      46 MB / 80 files / manifest 3.2.0 + open.html WAR verified
+      inside; the 3.1.1 zip was REMOVED so the stale one can't be
+      uploaded. Actual CWS upload still pending Dandan's store step.
 - [ ] confirm_test.py was rewritten for the 2026-09-09 blocking-confirmation
       contract (c0 approve-mid-wait, c1 timed_out, c5 deny-mid-wait) but
       only runs on Linux/Xvfb — first run there must confirm it green.
 - [ ] osd.traineddata (10.6 MB) sits in the extension bundle unreferenced
       by any code — drop it or wire it into orientation detection,
       Dandan's call (app bundles it too, so parity keeps it for now).
-- [ ] Adapter polish from the 2026-09-12 parity audit: `/csv_head` and
-      `/csv_stats` sit in MOVED_WRITE_ENDPOINTS, so a GET (the app's
-      method for both) answers a misleading 405 "POST-only" before the
-      POST 501s with the recipe. Make GET on these two answer the moved
-      501 directly (or split them into a GET-side moved set like
-      epMovedRead). Needs an ext version bump — skill 3.1.1-EXT already
-      teaches the honest path (plain text → /read + stdlib csv).
-- [ ] /search context parity (from the same audit): desktop returns
-      `context=N` surrounding lines per match (default 1, max 5),
-      `scanned_files`, comma-list `exclude`, and globs the full relative
-      path; ext `epSearch` returns one 240-char line per match with
-      basename-only glob and single-pattern exclude. Port the desktop
-      semantics (fs-adapter.js epSearch) — same caps otherwise (50/200).
+- [x] Adapter polish from the 2026-09-12 parity audit: `/csv_head` and
+      `/csv_stats` moved to the GET-side moved set (ext 3.2.0) — a GET
+      answers the moved 501 directly, a POST 405s "GET-only" (correct;
+      they are GET in the app). DONE in 3.2.0 together with the
+      /search parity port below.
+- [x] /search context parity (from the same audit): ext 3.2.0 ships
+      context lines (default 1, max 5), `scanned_files`, comma-list
+      `exclude`, full-rel-path glob, and the app's response shape
+      (`matches[{path, line, context}]`). Pure helpers unit-checked
+      (verbatim extract, fnmatchStar path-glob cases ALL PASS); the
+      e2e run needs a granted folder → folded into the Linux re-run
+      item at the top of this section.
 
 ## 7. CI gaps
 

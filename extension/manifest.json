@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Open File Bridge",
-  "version": "3.1.1",
+  "version": "3.2.0",
   "description": "Lets the code interpreter in Open WebUI read and write files in one folder on this machine — no server, no network. Only sites you allow can connect; the extension holds the folder grant, the page relay only forwards narrow, id-correlated requests.",
   "minimum_chrome_version": "109",
   "permissions": [
@@ -49,6 +49,16 @@
     {
       "resources": [
         "icons/icon-48.png"
+      ],
+      "matches": [
+        "https://*/*",
+        "http://127.0.0.1/*",
+        "http://localhost/*"
+      ]
+    },
+    {
+      "resources": [
+        "open.html"
       ],
       "matches": [
         "https://*/*",

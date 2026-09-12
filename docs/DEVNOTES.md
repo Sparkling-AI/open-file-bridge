@@ -2822,3 +2822,55 @@ path (plain text → /read + stdlib csv). Restaged both OWUI rows.
 Adapter polish (GET answering the moved 501 instead of the 405) filed
 in TODO §6b — needs an ext bump, deliberately not folded into a
 skill-only patch.
+
+## Stage-3 session #40: ext 3.2.0 — clickable outcome links, /search parity, two /convert recipes (2026-09-12)
+
+Dandan's follow-ups to the parity audit, all shipped together:
+
+**1. Outcome links (the "notes3.md had no open link" report).** Root
+cause chain: (a) the ext never ported the app's `_attach_links` —
+write responses carried no links, and models don't make optional extra
+calls (the app learned this 2026-08-29); (b) even a minted link was
+unclickable — epLink returned RELATIVE "open.html?n=…" (resolves
+against the OWUI origin → 404) and open.html was never in
+web_accessible_resources. Design check BEFORE building: created a chat
+with chrome-extension:// links via the OWUI API and inspected the
+rendered DOM — **OWUI keeps chrome-extension:// hrefs** (marked has
+target=_blank; DOMPurify in the bundle only guards SVG/footnote/
+DOCX-preview paths, not chat markdown). Shipped: open.html WAR'd
+(matches the content-script origin set — the relay can't run anywhere
+broader anyway), epLink returns absolute chrome.runtime.getURL URLs,
+fsRoute wrapped so every 200-POST with written|edited+path|restored
+gets links attached (write_many's inner /write re-enters the wrapper →
+per-item links for free; engine writes flow through it too), /edit now
+returns edited+path (the app's attach keys). The 7-day link TTL
+setting in options = these nonce pages' expiry (link_ttl kv, default
+604800) — same knob as the app's outcome links.
+
+**2. /search at desktop parity** (epSearch rewritten): context lines
+(default 1, max 5) as matches[].context "N: line" strings, scanned_files,
+exclude as comma list, glob against the full rel path (fnmatchStar's
+* already crosses / — unit-checked verbatim-extract), response keys
+now query/matches/truncated (old: q/results/text — skill updated in
+lockstep; no published builds exist to migrate). Caps unchanged
+(50/200, 2 MB per file, 15 s budget). e2e needs a granted folder →
+added to the standing Linux re-run (TODO §6b).
+
+**3. xlsx→csv + docx→html recipes** (the two /convert pairs a browser
+can do): validated against the EXACT bundled wheels in a venv
+(openpyxl 3.1.5, python_docx 1.2.0) — csv quoting/None→empty/unicode
+and html headings/lists/table/charset all pass. docx→html is a
+semantic extract (styles/images not rendered) — the recipe says so.
+/convert's 501 hint now names both pairs. csv_head/csv_stats moved
+GET-side (MOVED_READ set): GET answers the moved 501 directly, POST
+405s "GET-only" — the misleading reverse-405 is gone (TODO §6b item
+closed).
+
+Ext 3.1.1 → 3.2.0 (manifest + FS_VERSION); skill both variants at
+3.2.0-EXT, floor ≥ 3.2.0 (nothing older was ever published — same
+logic as the 3.1.0 unification). CWS zip rebuilt (name-identical 80
+files), 3.1.1 zip deleted. Mac suites: sec_test 14/14, worker_
+transport 9/9 (SW loads, /health reports 3.2.0-EXT). OWUI rows
+restaged. NOTE for Dandan: reload the unpacked extension in Chrome
+(chrome://extensions → reload) — the staged skill floors at 3.2.0 and
+will ask once until reloaded.

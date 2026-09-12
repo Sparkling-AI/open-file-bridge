@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize documents and other files in the folder the user shared from their computer through the Open File Bridge extension. Use for requests involving the user's local Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files. MUST-CALL before acting: sandbox file APIs cannot reach that folder; only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.1.1-EXT (extension backend, TOKEN variant)
+# Local File Bridge — skill v3.2.0-EXT (extension backend, TOKEN variant)
 
 > **TOKEN variant — publish this only when the extension's 🔒 Security
 > card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`
@@ -30,7 +30,7 @@ app to talk to). A slow TIMEOUT (no reply in ~30 s) usually means the
 elected relay's tab was closed mid-session — retry once (the bootstrap
 re-elects automatically).
 
-> Requires the Open File Bridge extension ≥ **3.1.0** (checked on the
+> Requires the Open File Bridge extension ≥ **3.2.0** (checked on the
 > first /health below; newer extensions are always fine — the pipe is
 > backward-compatible).
 
@@ -83,11 +83,22 @@ below is complete on its own.
   write with `/write_b64` (recipes below). CSV needs no wheels and no
   recipe — it is plain text: `/read` it and slice/aggregate in Python
   (stdlib `csv` module if quoting matters).
-- `/convert` is GONE (501). Legacy formats: ask the user to open the file
-  in their office app (Word / Excel / LibreOffice) and save as
-  `.docx` / `.xlsx`, then we can read and edit it.
-- `/link` + `/reveal` degrade honestly: the extension page shows the file
-  path with a copy button — it cannot open the OS file manager.
+- `/convert` is GONE (501) — except as recipes: **xlsx→csv** and
+  **docx→html** run in Pyodide (§Office files below); everything else:
+  ask the user to open the file in their office app (Word / Excel /
+  LibreOffice) and save as `.docx` / `.xlsx`, then we can read and edit
+  it.
+- **Outcome links: every write answer SHOWS the open link.** Every
+  successful write/create/edit/restore response carries a `links`
+  object; put it in your ANSWER beside the file name, exactly:
+  `[📄 notes.md](links.open_url) · [📂 Show in folder](links.reveal_url)`.
+  The links open the extension's page — the file's full path with a
+  copy button (an extension cannot open the OS file manager or hand the
+  file to its default app; `reveal_url` shows the location the same
+  way). A write answer that reports only a path WITHOUT the link is
+  INCOMPLETE. If a response is missing `links` (should not happen),
+  mint them: `POST /link {"path": "…"}` and show its `open_url` /
+  `reveal_url` the same way.
 
 ## OCR notes (tesseract.js, bundled fast models)
 
@@ -296,7 +307,7 @@ instead return 403 `security_locked`/`origin_blocked`
 or 403 `token_required` — see the sender-gate bullet above for the
 exact one-shot recovery (user allows the site / pastes the token).
 Version rule (one-way floor, no lockstep): if `/health`'s `version` is
-OLDER than **3.1.0** (this skill's minimum), say once: "your Open File
+OLDER than **3.2.0** (this skill's minimum), say once: "your Open File
 Bridge extension is older than this skill — update it (Chrome →
 chrome://extensions → reload the unpacked extension, or update from the
 Chrome Web Store)" — then continue with what works. Newer extensions
@@ -336,6 +347,16 @@ body — `/link /write /write_b64 /write_many /edit /delete /zip /unzip
 endpoint — `/files`, `/ls`, `/dir`, `/entries` do not exist; don't
 discovery-scan, the endpoint table above is complete.
 
+**`/search` = cross-file grep with context lines** —
+`GET /search?q=term&glob=docs/*.md&exclude=.tmp,.log&context=2&case=1&max=50`.
+`glob` matches the whole relative path (`*` crosses `/`, so
+`docs/*.md` works); `exclude` is a comma-separated list; `case=1`
+makes the term case-sensitive; each match returns
+`{path, line, context: ["N: …"]}` with `context` surrounding lines
+(default 1 each side, max 5); the response also carries `scanned_files`
+and `truncated`. Text files only, same ignore/sensitive rules as
+`/list`.
+
 **Diagnostics: ONE `print(json.dumps(...))` per cell — and NEVER
 print inside a loop.** OWUI chats show only the LAST stdout line of a
 cell; sessions have lost a 403 this way and then guessed nonexistent
@@ -351,7 +372,9 @@ To READ an old version WITHOUT changing the live file, use
 `"b64": true` for binary) — do NOT restore just to read. Restoring IS
 a write (it replaces the live file) and asks for approval worded as a
 restore. Writes >1 MB chunk automatically inside the pipe (model code
-never chunks manually).
+never chunks manually). **Every write/create/edit/restore response
+carries `links` — echo them in your answer** (the outcome-links rule
+above).
 
 **Out-of-chat confirmations (default on).** Deletes and overwrites of
 EXISTING files push an Approve/Deny popup into the chat page (the
@@ -409,6 +432,43 @@ paras = [p.text for p in d.paragraphs]
 # pdf from text (fpdf2):
 await install_bridge_wheels("fpdf2", "fonttools")
 from fpdf import FPdf  # build the document with its usual API (add_page, cell, multi_cell)
+
+# xlsx → csv (the one /convert pair that survives as a recipe):
+await install_bridge_wheels("openpyxl", "et_xmlfile")
+import openpyxl, csv
+wb = openpyxl.load_workbook(io.BytesIO(await read_binary(path)), data_only=True)
+buf = io.StringIO(); w = csv.writer(buf)
+for r in wb.active.rows:
+    w.writerow(["" if c.value is None else c.value for c in r])
+await write_binary(out_path, buf.getvalue().encode("utf-8"))
+
+# docx → html (semantic extract — headings/paragraphs/lists/tables;
+# NOT a faithful styled render; images are not exported):
+await install_bridge_wheels("python_docx", "typing_extensions")
+import docx, html
+d = docx.Document(io.BytesIO(await read_binary(path)))
+out = ['<html><head><meta charset="utf-8"><title>'
+       + html.escape(d.core_properties.title or "document")
+       + '</title></head><body>']
+H = {"Title": "h1", "Heading 1": "h1", "Heading 2": "h2", "Heading 3": "h3"}
+in_list = False
+for p in d.paragraphs:
+    t = html.escape(p.text); style = p.style.name
+    if style in ("List Bullet", "List Number"):
+        if not in_list: out.append("<ul>"); in_list = True
+        out.append("<li>" + t + "</li>"); continue
+    if in_list: out.append("</ul>"); in_list = False
+    if t.strip():
+        tag = H.get(style, "p"); out.append(f"<{tag}>{t}</{tag}>")
+if in_list: out.append("</ul>")
+for tbl in d.tables:
+    out.append('<table border="1">')
+    for row in tbl.rows:
+        out.append("<tr>" + "".join("<td>" + html.escape(c.text) + "</td>"
+                                    for c in row.cells) + "</tr>")
+    out.append("</table>")
+out.append("</body></html>")
+await write_binary(out_path, "\n".join(out).encode("utf-8"))
 ```
 
 (eml/html stay stdlib: `email.message_from_bytes(await read_binary(p))` /
@@ -420,5 +480,6 @@ Compiled data-science wheels (`pandas`/`matplotlib` …) still come from
 Pyodide's own lock via `micropip.install("pandas")` — fetched from the
 OWUI origin, not through the pipe.
 
-Reading rules, `/link` outcome links and caching match the desktop-app
-skill; when unsure what a file is, call `/peek` first (a few tokens).
+Reading rules and caching match the desktop-app skill; outcome links
+open the extension page (the rule above — every write answer shows
+them). When unsure what a file is, call `/peek` first (a few tokens).

@@ -250,7 +250,10 @@ async function epEdit(body) {
   const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts);
   await writeFileBytes(rg.rootRec, rg.parts, new TextEncoder().encode(newText));
   await auditRow({ endpoint: "/edit", method: "JS-POST".slice(3), path: rg.relInRoot, size: newText.length, status: 200 });
-  return fsOk({ ok: true, results: results, snapshot: snap });
+  // edited+path: the app's _attach_links key — the router mints outcome
+  // links from exactly these two fields
+  const edited = results.reduce((n, r) => n + (r.ok ? (r.replaced || 0) : 0), 0);
+  return fsOk({ ok: true, edited: edited, path: rg.relInRoot, results: results, snapshot: snap });
 }
 
 /* ---------------- /delete (trash-move) ---------------- */

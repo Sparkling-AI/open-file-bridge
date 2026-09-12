@@ -26,7 +26,20 @@ const FS_WHEELS = [
 
 /* ---------------- the router ---------------- */
 
+/* fsRoute wrapper (3.2.0): every successful POST write response leaves
+ * with outcome links attached (app _json rule — models echo response
+ * fields, so links reach chat answers without a second model call).
+ * epWriteMany's inner /write calls re-enter here, so batch items get
+ * their own links too. */
 async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
+  const resp = await fsRouteInner(method, pathWithQs, bodyText, b64Mode);
+  if (method === "POST") {
+    try { await attachWriteLinks(resp); } catch (e) { /* never fail a write for links */ }
+  }
+  return resp;
+}
+
+async function fsRouteInner(method, pathWithQs, bodyText, b64Mode) {
   const qi = pathWithQs.indexOf("?");
   const path = qi < 0 ? pathWithQs : pathWithQs.slice(0, qi);
   const q = parseQueryString(pathWithQs);
@@ -232,7 +245,9 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
   if (path === "/convert") {
     return fsFail(501, {
       error: "/convert is not available in extension mode",
-      hint: "open legacy formats in your office app (Word / Excel / LibreOffice) and save as .docx / .xlsx, then I can read and edit it" });
+      hint: "two pairs have Pyodide recipes (xlsx→csv, docx→html — SKILL-EXT §Office files); " +
+        "everything else: open the file in your office app (Word / Excel / LibreOffice) " +
+        "and save as .docx / .xlsx, then I can read and edit it" });
   }
 
   /* ---- router fall-through: method-aware 405 ----
@@ -268,9 +283,12 @@ function opFailToResp(e) {
   return fsFail(500, { error: String((e && e.message) || e) });
 }
 
-const MOVED_READ_ENDPOINTS = new Set(["/eml_read", "/html_text", "/docx_read", "/pptx_read", "/xlsx_read"]);
+// csv_head/csv_stats are GET in the app — moved on the GET side since
+// 3.2.0 (a GET used to 405 "POST-only" first, misdirecting the model)
+const MOVED_READ_ENDPOINTS = new Set(["/eml_read", "/html_text", "/docx_read",
+  "/pptx_read", "/xlsx_read", "/csv_head", "/csv_stats"]);
 const MOVED_WRITE_ENDPOINTS = new Set(["/docx_write", "/docx_merge", "/docx_mailmerge",
-  "/pptx_from_template", "/xlsx_append", "/pdf_from_text", "/csv_head", "/csv_stats"]);
+  "/pptx_from_template", "/xlsx_append", "/pdf_from_text"]);
 
 /** Moved read endpoints (plan §2): the FILE is still validated with the
  *  app's semantics (permission gate, sensitive floor, 404/503) so models
@@ -282,6 +300,8 @@ const MOVED_RECIPES = {
   "/xlsx_read": 'openpyxl from /wheels/openpyxl (read via /read_b64, load_workbook(BytesIO(...)))',
   "/eml_read": "stdlib email module: /read_b64 → email.message_from_bytes",
   "/html_text": "stdlib html.parser or bs4-style regex strip: /read_b64 → decode → strip tags",
+  "/csv_head": "plain text — /read it (start_line/max_lines window); stdlib csv module if quoting matters",
+  "/csv_stats": "plain text — /read it and count in Python; stdlib csv module if quoting matters",
 };
 
 async function epMovedRead(path, q) {
@@ -478,49 +498,52 @@ async function epSearch(q) {
   const rootRec = roots[0];
   const pats = await allIgnorePatterns(rootRec);
   const max = Math.min(parseInt(q.max || "50", 10) || 50, 200);
-  const caseSensitive = q.case === "1" || q.case === "true";
-  const glob = q.glob || null;
-  const exclude = q.exclude || null;
+  // app takes case=sensitive; the old ext took 1|true — accept all three
+  const caseSensitive = ["1", "true", "sensitive"].includes(String(q.case || "").toLowerCase());
+  // app parity: context lines per match (default 1, max 5)
+  const ctx = Math.max(0, Math.min(parseInt(q.context || "1", 10) || 1, 5));
+  // app parity: exclude is a comma-separated list, matched against the rel path
+  const excl = String(q.exclude || "").split(",").map((s) => s.trim()).filter(Boolean);
+  const glob = q.glob ? unquoteComp(q.glob) : null;
   const needle = caseSensitive ? term : term.toLowerCase();
-  const results = [];
+  const matches = [];
+  let scanned = 0;
   const t0 = Date.now();
   async function rec(dir, prefixParts) {
-    if (results.length >= max || Date.now() - t0 > 15000) return;
+    if (matches.length >= max || Date.now() - t0 > 15000) return;
     for await (const [name, h] of dir.entries()) {
-      if (results.length >= max) return;
+      if (matches.length >= max) return;
       const relParts = prefixParts.concat(name);
       const rel = relParts.join("/");
       const isDir = h.kind === "directory";
       if (ignoreMatch(rel, isDir, pats)) continue;
       if (isDir) { await rec(h, relParts); continue; }
+      if (excl.some((p) => fnmatchStar(rel, p))) continue;
+      // app parity: glob matches the full rel path (* crosses /)
+      if (glob && !fnmatchStar(rel, glob)) continue;
       const ext = extOf(name);
       if (!TEXT_EXTS.has(ext) && !KNOWN_BASENAMES.has(name.toLowerCase())) continue;
-      if (glob && !fnmatchStar(name, glob)) continue;
-      if (exclude && fnmatchStar(name, exclude)) continue;
       if (sensitiveName(name)) continue;
       let file;
       try { file = await h.getFile(); } catch (e) { continue; }
       if (file.size > 2000000) continue;
       const text = await file.text();
-      const hay = caseSensitive ? text : text.toLowerCase();
-      let from = 0;
-      while (results.length < max) {
-        const idx = hay.indexOf(needle, from);
-        if (idx < 0) break;
-        let lineNo = 1, consumed = 0;
-        const lines = text.split("\n");
-        for (let i = 0; i < lines.length; i++) {
-          consumed += lines[i].length + 1;
-          if (consumed > idx) { lineNo = i + 1; break; }
-        }
-        results.push({ path: rel, line: lineNo, text: (lines[lineNo - 1] || "").slice(0, 240) });
-        from = idx + needle.length;
+      scanned++;
+      const lines = text.split("\n");
+      for (let i = 0; i < lines.length && matches.length < max; i++) {
+        const hay = caseSensitive ? lines[i] : lines[i].toLowerCase();
+        if (!hay.includes(needle)) continue;
+        const lo = Math.max(0, i - ctx), hi = Math.min(lines.length, i + ctx + 1);
+        const context = [];
+        for (let j = lo; j < hi; j++) context.push((j + 1) + ": " + lines[j].slice(0, MAX_LINE_CHARS));
+        matches.push({ path: rel, line: i + 1, context: context });
       }
     }
   }
   await rec(rootRec.handle, []);
-  await auditRow({ endpoint: "/search", method: "GET", path: ".", status: 200, size: results.length });
-  return fsOk({ q: term, results: results, truncated: results.length >= max });
+  await auditRow({ endpoint: "/search", method: "GET", path: ".", status: 200, size: matches.length });
+  // app response shape: query/scanned_files/matches[{path,line,context}]/truncated
+  return fsOk({ query: term, scanned_files: scanned, matches: matches, truncated: matches.length >= max });
 }
 
 async function epTree(q) {
