@@ -1,4 +1,8 @@
-# Building the Packages
+# Building the Legacy Desktop Packages
+
+> The browser extension is the official product line and is packaged by
+> `.github/workflows/extension.yml` from `v3.*` tags. This document covers the
+> maintenance-only `2.x` desktop application.
 
 Everything builds from `src/file_bridge.py` — a single stdlib-only Python
 file (3.8+), so the "build" is just freezing it with PyInstaller per OS.
@@ -12,7 +16,7 @@ file (3.8+), so the "build" is just freezing it with PyInstaller per OS.
 | Windows installer | Inno Setup on `build/installer_windows.iss` | `OpenFileBridge-Setup.exe` |
 | Windows Store | `build/build_msix.ps1` after the Windows build | `dist/OpenFileBridge-windows-x64.msix` |
 | macOS | `pyinstaller --onefile --windowed --name OpenFileBridge src/file_bridge.py` then `build/package_macos.sh` | `OpenFileBridge-macos.zip` (.app inside) |
-| All three (CI) | push a `v*` tag | GitHub Actions artifacts |
+| All three (CI) | push an `app-v2.*` tag | GitHub Actions artifacts + legacy GitHub release |
 
 PyInstaller **cannot cross-compile** — build each OS on that OS (or use the
 included GitHub Actions workflow, which is the easiest path: it produces all
@@ -152,13 +156,14 @@ iconutil -c icns -o build/appicon.icns /tmp/appicon.iconset
 
 ## CI (recommended)
 
-`.github/workflows/build.yml` builds **and smoke-tests** all three OSes
+`.github/workflows/build.yml` builds **and smoke-tests** the legacy desktop
+application on all three OSes
 (health + frozen-addons checks; Windows artifacts get `wheels/` + `tessdata/`
-layered in) on every `v*` tag:
+layered in) on every matching application tag:
 
 ```bash
-git tag v1.0.0 && git push --tags
-# → Actions → build → three artifacts ready to download
+git tag app-v2.11.2 && git push origin app-v2.11.2
+# → Actions → legacy desktop app → per-OS artifacts + non-latest release
 ```
 
 **macOS artifact is signed + notarized + stapled in CI** when these repo

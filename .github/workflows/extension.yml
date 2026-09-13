@@ -1,0 +1,155 @@
+name: extension
+
+on:
+  push:
+    branches: [master]
+    tags: ['v3.*']
+    paths:
+      - 'extension/**'
+      - 'skill/open-file-bridge/SKILL-EXT*.md'
+      - 'tests/stage3/**'
+      - '.github/workflows/extension.yml'
+  pull_request:
+    paths:
+      - 'extension/**'
+      - 'skill/open-file-bridge/SKILL-EXT*.md'
+      - 'tests/stage3/**'
+      - '.github/workflows/extension.yml'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Validate versions and JavaScript
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -m json.tool extension/manifest.json >/dev/null
+          find extension -maxdepth 1 -name '*.js' -print0 |
+            xargs -0 -n1 node --check
+
+          python3 - <<'PY'
+          import json
+          import re
+          from pathlib import Path
+
+          manifest_version = json.loads(
+              Path("extension/manifest.json").read_text()
+          )["version"]
+          if not re.fullmatch(r"(?:0|[1-9]\d*)(?:\.(?:0|[1-9]\d*)){0,3}", manifest_version):
+              raise SystemExit(f"invalid Chrome extension version: {manifest_version}")
+          version_parts = tuple(map(int, manifest_version.split(".")))
+          if not any(version_parts) or any(part > 65535 for part in version_parts):
+              raise SystemExit(f"invalid Chrome extension version: {manifest_version}")
+
+          core = Path("extension/fs-core.js").read_text()
+          match = re.search(r'^const FS_VERSION = "([^"]+)";', core, re.MULTILINE)
+          if not match:
+              raise SystemExit("FS_VERSION not found in extension/fs-core.js")
+          expected = f"{manifest_version}-EXT"
+          if match.group(1) != expected:
+              raise SystemExit(
+                  f"version mismatch: manifest={manifest_version}, FS_VERSION={match.group(1)!r}; "
+                  f"expected {expected!r}"
+              )
+          floors = {}
+          for skill_path in (
+              Path("skill/open-file-bridge/SKILL-EXT.md"),
+              Path("skill/open-file-bridge/SKILL-EXT-TOKEN.md"),
+          ):
+              skill = skill_path.read_text()
+              floor_match = re.search(
+                  r"Requires the Open File Bridge extension ≥ \*\*(\d+\.\d+\.\d+)\*\*",
+                  skill,
+              )
+              if not floor_match:
+                  raise SystemExit(f"extension compatibility floor not found in {skill_path}")
+              floors[skill_path.name] = floor_match.group(1)
+
+          if len(set(floors.values())) != 1:
+              raise SystemExit(f"extension skill floors disagree: {floors}")
+          floor = next(iter(floors.values()))
+          if tuple(map(int, floor.split("."))) > version_parts:
+              raise SystemExit(
+                  f"skill requires extension {floor}, newer than package {manifest_version}"
+              )
+
+          print(
+              f"extension version {manifest_version} is consistent; "
+              f"skill floor is {floor}"
+          )
+          PY
+
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            manifest_version="$(python3 -c \
+              'import json; print(json.load(open("extension/manifest.json"))["version"])')"
+            tag_version="${GITHUB_REF_NAME#v}"
+            if [[ "$tag_version" != "$manifest_version" ]]; then
+              echo "tag $GITHUB_REF_NAME does not match manifest version $manifest_version" >&2
+              exit 1
+            fi
+          fi
+
+      - name: Package extension
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(python3 -c \
+            'import json; print(json.load(open("extension/manifest.json"))["version"])')"
+          archive="dist-extension/open-file-bridge-extension-${version}.zip"
+
+          mkdir -p dist-extension
+          git archive --format=zip --output="$archive" HEAD:extension
+          unzip -t "$archive"
+          test "$(unzip -Z1 "$archive" | grep -cx 'manifest.json')" -eq 1
+          test "$(unzip -Z1 "$archive" | grep -c '^extension/')" -eq 0
+          (cd dist-extension && sha256sum *.zip > SHA256SUMS)
+
+      - name: Upload extension artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: OpenFileBridge-extension
+          path: |
+            dist-extension/*.zip
+            dist-extension/SHA256SUMS
+          if-no-files-found: error
+
+  # A GitHub release is automatic for official v3.* tags. Chrome Web Store
+  # upload/publication stays manual so reviewed store state cannot be replaced
+  # merely by pushing a Git tag.
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download extension artifact
+        uses: actions/download-artifact@v6
+        with:
+          name: OpenFileBridge-extension
+          path: dist-extension
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" \
+              dist-extension/*.zip dist-extension/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              dist-extension/*.zip dist-extension/SHA256SUMS \
+              --verify-tag \
+              --title "Open File Bridge ${GITHUB_REF_NAME}" \
+              --notes "Official browser-extension release. Chrome Web Store publication is handled separately after review." \
+              --latest
+          fi

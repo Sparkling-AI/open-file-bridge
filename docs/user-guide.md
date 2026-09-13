@@ -1,5 +1,9 @@
 # Open File Bridge — User Guide
 
+> **Legacy desktop application (2.x):** the browser extension (3.x) is now
+> the official product line. Use this guide only where Open WebUI's browser
+> execution context is permitted to reach `http://127.0.0.1:8765`.
+
 Open File Bridge lets **your** Open WebUI chats read and write files in **one folder
 on your own computer**. Your files never pass through the Open WebUI server —
 everything happens between your browser and your own machine.
@@ -10,8 +14,8 @@ everything happens between your browser and your own machine.
   blocks web pages from calling `http://127.0.0.1` services, so Open File Bridge
   cannot work there. This is a hard Safari limitation, not a bug.
 - One of: Windows 10/11, macOS 11+, or Linux.
-- The Open File Bridge app — **download it from the
-  [GitHub Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)**
+- The Open File Bridge app — **find the latest `app-v2.*` entry under
+  [GitHub Releases](https://github.com/Sparkling-AI/open-file-bridge/releases)**
   (or get it from your admin if they mirror it internally):
 
   | Your OS | Download | First run |
@@ -26,8 +30,8 @@ everything happens between your browser and your own machine.
 ## Install & first run
 
 ### Windows
-1. Download `OpenFileBridge-windows-x64.zip` from
-   [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)
+1. Download `OpenFileBridge-windows-x64.zip` from the latest `app-v2.*`
+   [release](https://github.com/Sparkling-AI/open-file-bridge/releases)
    and unzip it (right-click → *Extract All…*).
 2. Double-click `OpenFileBridge\OpenFileBridge.exe`. If Windows shows
    **"Windows protected your PC"** (SmartScreen — normal for a new app
@@ -41,8 +45,8 @@ everything happens between your browser and your own machine.
    in your browser; your folder choice is remembered.
 
 ### macOS
-1. Download `OpenFileBridge-macos.zip` from
-   [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest),
+1. Download `OpenFileBridge-macos.zip` from the latest `app-v2.*`
+   [release](https://github.com/Sparkling-AI/open-file-bridge/releases),
    unzip it, drag **OpenFileBridge** into **Applications**.
 2. Double-click to launch. Since 2.8.1 the app is **signed and notarized**
    (Developer ID) — it opens normally, no Gatekeeper bypass needed. Only a
@@ -61,8 +65,8 @@ everything happens between your browser and your own machine.
    combining fixes å/ä/ö *and* digits). Codes can also be typed manually.
 
 ### Linux
-Download `OpenFileBridge-linux.zip` from
-[Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest),
+Download `OpenFileBridge-linux.zip` from the latest `app-v2.*`
+[release](https://github.com/Sparkling-AI/open-file-bridge/releases),
 unzip, and run the binary:
 ```bash
 unzip OpenFileBridge-linux.zip

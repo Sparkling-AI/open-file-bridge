@@ -19,20 +19,49 @@ What that means:
   conversion and OCR all run on the user's machine, so file work scales
   with users, not your server
 
-Built for and verified against Open WebUI (0.10.x and 0.11.x). Under the
-hood it's a generic, localhost file API: any AI system whose generated
-code runs **in the user's browser** (or on the user's machine) can use
-it too.
+Built for and verified against Open WebUI (0.10.x and 0.11.x). The
+**browser extension is the official product line**. It keeps file access
+inside the user's browser and does not require a localhost service.
+
+## Product lines and versioning
+
+| Product line | Versions and release tags | Status | Transport |
+|---|---|---|---|
+| Browser extension | `3.x`; tags `v3.*` | **Official; active development** | Open WebUI page relay → extension → user-granted folder |
+| Desktop application | `2.x`; tags `app-v2.*` | **Legacy; maintenance only** | Pyodide → `http://127.0.0.1:8765` → application → configured folder |
+
+The versions are intentionally independent. A `v3.*` tag packages and
+publishes the cross-platform extension; an `app-v2.*` tag builds the legacy
+application for Windows, macOS, and Linux. Skill text also has its own
+revision and declares the **minimum** compatible extension. It is not kept in
+lockstep with either executable.
+
+### Why the extension is now official
+
+The desktop application depends on model-generated Pyodide code being allowed
+to contact a loopback HTTP service. On a public HTTPS Open WebUI deployment,
+current Chromium local-network protections can block that request from Open
+WebUI's default opaque-origin sandbox before it reaches the application. CORS
+headers and a bridge token cannot repair a request the browser never sends.
+
+The extension removes that dependency: the skill talks through a constrained
+page/worker message relay, and the extension works directly with a folder the
+user selected through the browser. There is no resident process, listening
+port, per-OS installer, or local-network permission prompt.
+
+The legacy application remains available for compatible localhost/LAN Open
+WebUI deployments and environments that permit browser-to-loopback access. It
+also retains native-only behavior such as LibreOffice conversion and opening
+files in the operating system. It receives compatibility and security fixes,
+but new product development targets the extension.
 
 ```
 User: "read notes.txt in my folder"
   └─ Open WebUI model (your server) ── generates Python code
        └─ Pyodide runs it IN THE USER'S BROWSER
-            └─ pyfetch → http://127.0.0.1:8765 (Open File Bridge, user's machine)
-                 └─ reads/writes ONE folder the user chose
+            └─ postMessage / BroadcastChannel → extension relay
+                 └─ extension reads/writes ONE browser-granted folder
 ```
-
-![Architecture](docs/diagrams/architecture.png)
 
 ## Why you'd want this
 
@@ -40,48 +69,44 @@ User: "read notes.txt in my folder"
   per-user infrastructure, no MCP servers, no tunnels, no cloud drives.
 - **Privacy by architecture** — there is no route for file bytes to reach
   the server; the server only ever hosts chat and the skill text.
-- **Real office work, not toys** — 35+ versioned endpoints: Word/Excel/
-  PowerPoint/PDF creation & editing, OCR of scanned documents, LibreOffice
-  format conversion, mail merge, zip/unzip, versioned writes with a trash
-  bin and a full audit log.
-- **Model-agnostic** — ships a standard skill for strong models and a
-  strict variant (fixed recipes + verify-after-write) validated on weak
-  models; see [Verified results](#verified-results).
+- **Real office work, not toys** — Word/Excel/PowerPoint/PDF creation and
+  editing, OCR of scanned documents, mail merge, zip/unzip, versioned writes
+  with a trash bin and a full audit log.
+- **Model-guided** — extension skills carry complete transport and document
+  recipes in plain and token-authenticated variants; only successful bridge
+  responses count as work completed on the user's machine.
 
 ## How it works
 
 Open WebUI's Code Interpreter (Pyodide engine) is WebAssembly Python that
-executes **in the user's browser**. Python running there can reach the
-user's own localhost — which is exactly where Open File Bridge listens.
-A public **Skill** (markdown instructions) teaches the model the fetch
-pattern; a **model preset** turns the Code Interpreter on by default so
-users just pick a model and ask.
+executes **in the user's browser**. A public **Skill** teaches the model the
+extension's narrow message protocol; a **model preset** turns the Code
+Interpreter on by default so users just pick a model and ask. The extension
+validates the sending site and requested operation before touching a file.
 
 | Piece | Where it lives | This repo |
 |---|---|---|
-| Skill (instructions, 2 variants) | OWUI Workspace, public | `skill/open-file-bridge/` |
-| Model preset (CI on + skill) | OWUI Workspace, public | `scripts/setup_owui.py` |
-| Open File Bridge app | Each user's machine | `src/file_bridge.py` + `build/` |
+| Extension skill (plain/token variants) | OWUI Workspace | `skill/open-file-bridge/SKILL-EXT*.md` |
+| Open File Bridge extension | Each user's Chromium browser | `extension/` |
+| Legacy desktop application | Each user's machine | `src/file_bridge.py` + `build/` |
 
-Other agent systems: if your runtime executes model-generated code
-browser-side (WebAssembly sandbox, user scripts) it can talk to the same
-HTTP API; if it runs on the user's machine, even simpler — the bridge is
-just a localhost JSON API with token auth.
+The current extension integration depends on Open WebUI's browser-side
+Pyodide engine. Open WebUI describes Pyodide as a legacy engine, so a future
+transport independent of Pyodide remains an explicit compatibility goal.
 
 ## Security model
 
 Model-generated code is treated as **untrusted**. A request must pass
 every layer below before touching a file:
 
-![Security model](docs/diagrams/security.png)
-
-- **L0 Network** — loopback-only listener; other machines can't connect.
-- **L1 Auth** — two tiers: origin lock (CORS exact-match) or org token
-  (`X-Bridge-Token`, constant-time compare). A fresh bridge **fails
-  closed**: every file endpoint returns 503 until an admin configures one.
-- **L2 Transport policy** — CORS/PNA headers only for the matching origin,
-  write-rate breaker, payload caps.
-- **L3 Filesystem gate** — exactly ONE user-chosen folder; `../` traversal
+- **L0 Browser grant** — the user explicitly selects the folder through the
+  browser; its handle is stored locally in extension IndexedDB.
+- **L1 Sender lock** — the extension accepts only the exact Open WebUI site
+  configured by the user, with an optional bridge token as a second lock. A
+  fresh extension fails closed until a site is allowed.
+- **L2 Transport policy** — only shaped bridge messages cross the page relay;
+  requests and responses are correlated, rate-limited, and size-capped.
+- **L3 Filesystem gate** — only browser-granted folders are visible; `../` traversal
   rejected, symlink components refused, credential-looking filenames
   (`id_rsa`, `.env`, `*.pem`…) blocked outright.
 - **L4 Operation semantics** — writes execute immediately; recovery is
@@ -89,15 +114,44 @@ every layer below before touching a file:
   first; deletes are trash-moves (purge is 403 by design); restores are
   themselves snapshotted. JSONL audit log with secret scrubbing; optional
   read-only mode; write-rate breaker. Users can browse versions/trash via
-  chat and tune the brake + read-only mode on the settings page's
-  🛟 Safety card, which links a built-in recovery guide (`/guide`, shipped
-  per-version in every package).
-
-Current Open WebUI `:main` builds run Pyodide in a sandboxed iframe
-(`Origin: null`) — use tier-2 token mode there. Details, upgrade
-checklist and the full analysis: [docs/OWUI-COMPAT.md](docs/OWUI-COMPAT.md).
+  chat and tune the brake + read-only mode on the extension settings page's
+  🛟 Safety card, which includes the version-matched recovery guide.
 
 ## Setup
+
+### Official browser extension
+
+1. **Install Open File Bridge 3.x** from the Chrome Web Store. Version 3.3.1
+   has been submitted and is currently under review. For development or
+   pre-release testing, download the extension ZIP from the latest `v3.*`
+   [GitHub release](https://github.com/Sparkling-AI/open-file-bridge/releases),
+   extract it, and use Chrome/Edge → Extensions → Developer mode → Load
+   unpacked.
+2. **Open the extension settings**, choose the folder to share, and set the
+   exact allowed Open WebUI site. Optionally configure a bridge token.
+3. **Publish the matching extension skill** in Open WebUI: use
+   [`SKILL-EXT.md`](skill/open-file-bridge/SKILL-EXT.md) when the extension
+   has no token, or
+   [`SKILL-EXT-TOKEN.md`](skill/open-file-bridge/SKILL-EXT-TOKEN.md) when it
+   does. Replace the token placeholder before publishing the token variant.
+4. **Enable Code Interpreter and attach the skill** to the Open WebUI model.
+   Both the model capability and its default feature switch must be enabled.
+5. Start a new chat and ask: *"List the files in my shared folder."*
+
+The current `scripts/setup_owui.py` automates the legacy application skill
+variants, not the extension variants. Extension setup is manual until that
+script is migrated.
+
+Full Store submission and reviewer details are in
+[docs/CHROME-WEB-STORE.md](docs/CHROME-WEB-STORE.md).
+
+## Legacy desktop application setup
+
+The instructions below apply only to the `2.x` desktop application. Use this
+line when the Open WebUI browser execution context is permitted to reach
+`127.0.0.1:8765`, typically with a local or private/LAN Open WebUI deployment.
+It is not the recommended path for public HTTPS deployments: the browser can
+block the loopback request before CORS or token authentication takes place.
 
 ### Admin (once) — manual setup
 
@@ -122,15 +176,16 @@ by hand in the Open WebUI UI:
    can never run code. Under **Skills**, attach `open-file-bridge`.
    (Weak models that wander into the sandbox? Publish the stricter
    `SKILL-STRICT.md` as a second skill + second model.)
-3. **Distribute the app** — point users at the
-   [GitHub Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)
+3. **Distribute the legacy app** — point users at the `app-v2.*`
+   [GitHub Releases](https://github.com/Sparkling-AI/open-file-bridge/releases)
    (per-OS zips + `SHA256SUMS`; macOS build is signed & notarized since
    2.8.1) or mirror the zips internally — or users run from source with
    `python3 src/file_bridge.py <folder>` (zero pip dependencies).
-4. **Set up the access token (required on current Open WebUI builds)** —
-   the sandboxed interpreter sends `Origin: null`, so tier-1 origin lock
-   alone can't work; users need a token. Two clear options, each with its
-   own skill variant so the model is never left guessing:
+4. **Set up an access token when the compatible execution context sends
+   `Origin: null`** — tier-1 origin lock alone cannot authenticate that
+   opaque origin. A token solves the authentication/CORS layer, but it cannot
+   bypass a browser-level local-network block. Two options, each with its own
+   skill variant, keep the model from guessing:
    - **Org token (zero per-user chat friction):** generate one org token
      (any strong random string), publish the **token variant**
      `SKILL-TOKEN.md` as the skill with the token filled into its
@@ -181,8 +236,8 @@ Preconditions — confirm these before anything else:
       skill is published and Code Interpreter pre-enabled for you
 - [ ] **The org token from your admin** (if your org uses one): you'll
       paste it into the app once — request it if you weren't given it
-- [ ] **The app**: download Open File Bridge for your OS from
-      [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)
+- [ ] **The legacy app**: find the latest `app-v2.*` Open File Bridge release
+      under [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases)
       (or whatever internal mirror your admin points you to — run from
       source works too: `python3 src/file_bridge.py <folder>`)
 - [ ] **Browser**: Chrome, Edge or Firefox — *not* Safari (it blocks the
@@ -208,7 +263,7 @@ Then:
 Full walkthrough incl. permission prompts and troubleshooting:
 [docs/user-guide.md](docs/user-guide.md).
 
-### Solo setup (no admin staging — private skill + your own app)
+### Solo legacy setup (no admin staging — private skill + your own app)
 
 If your org hasn't staged a public skill and presets — or you're on a
 server where you're just a regular user — you can run the whole thing
@@ -224,8 +279,9 @@ checkboxes, no staging on their side.
 
 Then:
 
-1. **Get the app** yourself: download your OS bundle from
-   [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases/latest)
+1. **Get the legacy app** yourself: download your OS bundle from the latest
+   `app-v2.*` entry under
+   [Releases](https://github.com/Sparkling-AI/open-file-bridge/releases)
    (per-OS install steps: [user guide](docs/user-guide.md#install--first-run))
    or run from source (`python3 src/file_bridge.py <folder>`).
 2. **Create a private skill** — your OWUI *Workspace → Skills → Create*:
@@ -252,7 +308,7 @@ the token — it doesn't care who published the skill. Solo mode trades
 the org preset's convenience for zero admin staging and a token nobody
 else can read.
 
-## Verified results
+## Legacy app model-validation results
 
 Real-browser chat runs, asserting the file **actually lands on disk**
 (not claimed in prose) — harness and evidence in
@@ -275,20 +331,21 @@ user"), not list features. Both shipped skill variants carry this wording.
 
 | | Status |
 |---|---|
-| Open WebUI | v0.11+ (Skills feature); verified on 0.11.1 and 0.10.2 — per-upgrade checklist in [OWUI-COMPAT](docs/OWUI-COMPAT.md) |
-| Browsers | ✅ Chrome, Edge, Firefox · ❌ **Safari** (blocks localhost fetches) |
-| OS | Windows 10/11 · macOS 11+ · Linux |
-| Python (running from source) | 3.8+, **zero pip dependencies** for the core; optional add-ons (pymupdf, tesseract) enable OCR/PDF endpoints (clear 501 without) |
+| Open WebUI | Extension verified with the browser-side Pyodide transports used by 0.10.x/0.11.x; re-test every minor release |
+| Official extension | Chrome/Edge desktop with the File System Access API; no localhost or local-network permission required |
+| Legacy application | Windows 10/11, macOS 11+, Linux; requires an OWUI/browser context that may reach `127.0.0.1:8765` |
+| Python (legacy app from source) | 3.8+, zero pip dependencies for the core; optional add-ons enable OCR/PDF endpoints |
 
 ## Repository layout
 
 ```
-├── src/file_bridge.py            # the app — single file, stdlib-only (3.8+)
-│                                 #   (+ src/wheels/, src/tessdata/ assets)
-├── skill/open-file-bridge/      # OWUI skill: SKILL.md, SKILL-STRICT.md, CHANGELOG
-├── scripts/setup_owui.py         # idempotent admin setup via OWUI REST API
-├── build/                        # Linux/Windows/macOS packaging (PyInstaller, Inno)
-├── .github/workflows/build.yml   # CI: all 3 OSes on tag push
+├── extension/                    # official 3.x browser extension
+├── skill/open-file-bridge/       # extension + legacy-app OWUI skill variants
+├── .github/workflows/extension.yml # extension CI + v3.* GitHub releases
+├── src/file_bridge.py            # legacy 2.x desktop app
+├── build/                        # legacy per-OS packaging
+├── .github/workflows/build.yml   # legacy app-v2.* builds/releases
+├── scripts/setup_owui.py         # legacy app skill/preset setup
 ├── tests/e2e_test.sh             # 215 endpoint + security assertions
 ├── tests/addon_test.sh           # 136 add-on suite (Office/PDF/OCR/convert)
 └── docs/                         # guides, compat window, support runbook, diagrams
@@ -298,11 +355,12 @@ user"), not list features. Both shipped skill variants carry this wording.
 
 | Doc | For |
 |---|---|
-| [user-guide.md](docs/user-guide.md) | end users — install, first chat, prompts |
-| [admin-guide.md](docs/admin-guide.md) | admins — setup, hardening, tiers, variants |
-| [OWUI-COMPAT.md](docs/OWUI-COMPAT.md) | compatibility window + per-upgrade checklist |
-| [SUPPORT.md](docs/SUPPORT.md) | SmartScreen, port 8765, Safari runbook |
-| [BUILDING.md](docs/BUILDING.md) | building the per-OS packages |
+| [CHROME-WEB-STORE.md](docs/CHROME-WEB-STORE.md) | official extension publishing and reviewer checklist |
+| [user-guide.md](docs/user-guide.md) | legacy app end-user installation and first chat |
+| [admin-guide.md](docs/admin-guide.md) | legacy app deployment and hardening |
+| [OWUI-COMPAT.md](docs/OWUI-COMPAT.md) | legacy app compatibility history and upgrade checks |
+| [SUPPORT.md](docs/SUPPORT.md) | legacy app SmartScreen, port 8765, and Safari runbook |
+| [BUILDING.md](docs/BUILDING.md) | building the legacy per-OS packages |
 | [MICROSOFT-STORE.md](docs/MICROSOFT-STORE.md) | free Store/MSIX publishing checklist |
 | [PRIVACY.md](docs/PRIVACY.md) | privacy-policy source for Store publication |
 | [RCLONE.md](docs/RCLONE.md) | mounting cloud drives into the shared folder |
@@ -313,10 +371,10 @@ user"), not list features. Both shipped skill variants carry this wording.
 
 - Not a file-sync or RAG system — it's live read/write of the current
   folder contents into the chat.
-- Not a way to bypass the user: the folder is chosen by the user, the
-  browser asks consent for local-network access, and the bridge only
-  ever serves that one folder.
-- Not Safari-compatible (fundamental browser limitation).
+- Not a way to bypass the user: the browser requires the user to choose and
+  grant each folder, and the extension serves only enabled grants.
+- Not currently Firefox or Safari compatible: the official product uses
+  Chromium extension and File System Access APIs.
 
 ## License
 

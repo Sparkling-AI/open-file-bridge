@@ -1,12 +1,30 @@
-name: build
+name: legacy desktop app
 
 on:
   push:
-    tags: ['v*']
+    tags: ['app-v2.*']
   workflow_dispatch:
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Validate application tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          set -euo pipefail
+          app_version="$(python3 -c \
+            'import re; print(re.search(r"(?m)^VERSION = \"([^\"]+)\"$", open("src/file_bridge.py").read()).group(1))')"
+          tag_version="${GITHUB_REF_NAME#app-v}"
+          if [[ "$tag_version" != "$app_version" ]]; then
+            echo "tag $GITHUB_REF_NAME does not match application version $app_version" >&2
+            exit 1
+          fi
+
   build:
+    needs: validate
     strategy:
       matrix:
         include:
@@ -302,3 +320,50 @@ jobs:
             dist/docs/
             dist/wheels/
           if-no-files-found: error
+
+  release:
+    if: github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download desktop artifacts
+        uses: actions/download-artifact@v6
+        with:
+          path: artifacts
+
+      - name: Prepare release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p release
+
+          cp artifacts/OpenFileBridge-macos/OpenFileBridge-macos.zip release/
+          cp artifacts/OpenFileBridge-windows-x64/OpenFileBridge-windows-x64.msix release/
+          (
+            cd artifacts/OpenFileBridge-windows-x64
+            zip -qr ../../release/OpenFileBridge-windows-x64.zip OpenFileBridge
+          )
+          (
+            cd artifacts/OpenFileBridge-linux
+            zip -qr ../../release/OpenFileBridge-linux.zip OpenFileBridge docs wheels
+          )
+          (cd release && sha256sum * > SHA256SUMS)
+
+      - name: Publish legacy desktop release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" release/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" release/* \
+              --verify-tag \
+              --title "Legacy Desktop App ${GITHUB_REF_NAME#app-v}" \
+              --notes "Maintenance release of the legacy localhost desktop bridge. The browser extension is the official product line." \
+              --latest=false
+          fi

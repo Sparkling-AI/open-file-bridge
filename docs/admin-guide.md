@@ -1,5 +1,9 @@
 # Open File Bridge — Admin Guide
 
+> **Legacy desktop application (2.x):** the browser extension (3.x) is now
+> the official product line. This guide remains for maintenance deployments
+> whose Open WebUI/browser environment permits access to loopback services.
+
 How to roll out local-file access for your Open WebUI users. Verified against
 **Open WebUI v0.11.1 and v0.10.2** (both lines carry the Skills feature;
 0.10.x deploys work identically — see [OWUI-COMPAT](OWUI-COMPAT.md)).

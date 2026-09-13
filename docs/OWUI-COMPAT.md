@@ -1,5 +1,10 @@
 # Open WebUI version compatibility
 
+> **Legacy desktop application note:** this document records compatibility
+> for the `2.x` localhost bridge. It does not override the browser-level Local
+> Network Access limitation on public HTTPS Open WebUI deployments. The `3.x`
+> browser extension is the official product line and avoids localhost fetches.
+
 **Verified against: Open WebUI v0.11.1** (`:main`, 2026-08) **and v0.10.2**
 (pinned image, 2026-08-30: full setup + data-analysis chat smoke PASS).
 This document defines what we support, what to re-test on upgrade, and the
