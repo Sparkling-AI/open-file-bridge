@@ -63,12 +63,16 @@ User: "read notes.txt in my folder"
                  └─ extension reads/writes ONE browser-granted folder
 ```
 
+![Open File Bridge extension architecture](docs/diagrams/architecture.png)
+
 ## Why you'd want this
 
 - **Zero server-side file handling** — works for 10 or 10,000 users with no
   per-user infrastructure, no MCP servers, no tunnels, no cloud drives.
-- **Privacy by architecture** — there is no route for file bytes to reach
-  the server; the server only ever hosts chat and the skill text.
+- **Local access by architecture** — there is no Open File Bridge cloud
+  service or direct server-to-folder route. Requested results return through
+  the allowed Open WebUI page, where normal chat/model data policies still
+  apply.
 - **Real office work, not toys** — Word/Excel/PowerPoint/PDF creation and
   editing, OCR of scanned documents, mail merge, zip/unzip, versioned writes
   with a trash bin and a full audit log.
@@ -99,6 +103,8 @@ transport independent of Pyodide remains an explicit compatibility goal.
 Model-generated code is treated as **untrusted**. A request must pass
 every layer below before touching a file:
 
+![Open File Bridge extension security model](docs/diagrams/security.png)
+
 - **L0 Browser grant** — the user explicitly selects the folder through the
   browser; its handle is stored locally in extension IndexedDB.
 - **L1 Sender lock** — the extension accepts only the exact Open WebUI site
@@ -106,16 +112,15 @@ every layer below before touching a file:
   fresh extension fails closed until a site is allowed.
 - **L2 Transport policy** — only shaped bridge messages cross the page relay;
   requests and responses are correlated, rate-limited, and size-capped.
-- **L3 Filesystem gate** — only browser-granted folders are visible; `../` traversal
-  rejected, symlink components refused, credential-looking filenames
-  (`id_rsa`, `.env`, `*.pem`…) blocked outright.
-- **L4 Operation semantics** — writes execute immediately; recovery is
-  structural, not prompt-based. Every overwrite snapshots the prior version
-  first; deletes are trash-moves (purge is 403 by design); restores are
-  themselves snapshotted. JSONL audit log with secret scrubbing; optional
-  read-only mode; write-rate breaker. Users can browse versions/trash via
-  chat and tune the brake + read-only mode on the extension settings page's
-  🛟 Safety card, which includes the version-matched recovery guide.
+- **L3 Filesystem gate** — only browser-granted folders are visible; absolute
+  paths and `../` escapes are rejected, and credential-looking filenames
+  (`id_rsa`, `.env`, `*.pem`…) are blocked outright.
+- **L4 Operation semantics** — risky operations require confirmation. Every
+  overwrite snapshots the prior version first; deletes are trash-moves (purge
+  is 403 by design); restores are themselves snapshotted. The capped audit log
+  scrubs secrets, and read-only mode plus the write-rate breaker provide extra
+  brakes. Users can browse versions/trash via chat and tune safety settings on
+  the extension's 🛟 Safety card.
 
 ## Setup
 
