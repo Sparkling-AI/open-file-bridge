@@ -2,6 +2,22 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.3.3-EXT — 2026-09-19 (with extension 3.3.2)
+
+New `/mkdir` endpoint (extension 3.3.2): the model can now CREATE
+folders on the user's machine — until now folders only appeared
+implicitly when a file was written inside one, and the skill could
+only warn that sandbox os.makedirs "creates NOTHING on the user's
+computer". `make_folder(path)` helper added next to write_text/
+write_binary (nested paths create parents, mkdir -p style;
+re-creating an existing folder is a no-op that reports existed:true;
+a file sitting on the path is a clean 409); listed in the method
+cheat's POST set; the sandbox section now points folder asks at it
+(the response's `created` is the proof; empty folders are visible to
+/list and /directory_tree; 404 on /mkdir = extension older than
+3.3.2, tell the user to update). Creation never triggers the
+confirmation popup (non-destructive, same rule as new-file writes).
+
 ## 2.11.3 — 2026-09-12
 
 App-line port of the EXT 3.3.2 fix (the live failure where a trivial

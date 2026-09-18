@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text'. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.3.2-EXT (extension backend, no token)
+# Local File Bridge — skill v3.3.3-EXT (extension backend, no token)
 
 > **Variant picker (for whoever publishes this skill):** this is the
 > NO-TOKEN variant — publish it when the extension's 🔒 Security card
@@ -46,7 +46,13 @@ still means a file they can open, i.e. in their shared folder. Every
 file the user should end up with is created/edited ONLY through the
 bridge helpers below; the write response's `written` is your proof it
 exists for the user. If a file matters enough to mention in your
-answer, it matters enough to bridge-write.
+answer, it matters enough to bridge-write. Folders too:
+`make_folder(path)` creates a real folder (nested paths create
+parents, `mkdir -p` style; re-creating an existing folder is a no-op);
+the response's `created` is your proof, and empty folders ARE visible
+to `/list` and `/directory_tree`. (`/mkdir` needs extension 3.3.2+ —
+a 404 "unknown endpoint" means the extension is older; tell the user
+to update it, then retry.)
 
 ## What is different from the app-backed skill
 
@@ -304,6 +310,9 @@ async def write_text(path, text: str):
 async def write_binary(path, data: bytes):
     return await bridge_post("/write_b64",
         {"path": path, "b64": base64.b64encode(data).decode()})
+
+async def make_folder(path):
+    return await bridge_post("/mkdir", {"path": path})
 ```
 
 **First call:** `h = await bridge_get("/health")` — one call answers
@@ -356,7 +365,7 @@ failed request unchanged.
 **Method cheat** (405 enforces it): reads are **GET** with query
 params — `/list /read /peek /stat /search /directory_tree /image_info
 /image_b64 /pdf_text /ocr`; writes & actions are **POST** with a JSON
-body — `/write /write_b64 /write_many /edit /delete /zip /unzip
+body — `/write /write_b64 /write_many /edit /delete /mkdir /zip /unzip
 /versions/* /trash/* /ocr_pdf /pdf_op`. `/list` is THE listing
 endpoint — `/files`, `/ls`, `/dir`, `/entries` do not exist; don't
 discovery-scan, the endpoint table above is complete.

@@ -173,6 +173,22 @@ Bridge must be running during chats. Non-technical users will forget.
       (verbatim extract, fnmatchStar path-glob cases ALL PASS); the
       e2e run needs a granted folder → folded into the Linux re-run
       item at the top of this section.
+- [ ] Folder RENAME/MOVE has no endpoint (2026-09-19 finding, ext
+      3.3.2): /delete + /mkdir exist, but renaming or moving a folder
+      means the model recursively copies every file (read+write each)
+      and /deletes the source — slow, and snapshot/trash noise for a
+      pure metadata op. A true /rename (recursive move within a root,
+      collision rules, snapshot policy for overwrites) is a separate
+      design round; Dandan's call whether it's worth it. (File rename
+      is unaffected: write-new + delete is already cheap.)
+- [ ] UPDATE 2026-09-19 (ext 3.3.2, /mkdir): negatives_test.py gained
+      n16 (create+idempotent+tree-visible+409 file-collision+400
+      escape), n17 (GET /mkdir → 405), n8b (mkdir 403 on a readonly
+      root) — Mac-verified via the SW-context smoke (OPFS stubbed
+      root, 11/11) but NOT through the picker-driven harness; fold
+      into the Linux re-run above. Cells sit BEFORE zz_rate_breaker
+      on purpose: /mkdir calls rateCheck, so the breaker must trip
+      last.
 
 ## 7. CI gaps
 

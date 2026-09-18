@@ -869,3 +869,17 @@ the OCR/safety sections). Zip rebuilt at 3.3.1, 3.3.0 removed. Skill line
 untouched (3.3.2-EXT; floor ≥ 3.3.0 unchanged — patch bump only). What
 remains is the upload itself from Dandan's Google account
 (CHROME-WEB-STORE.md §6: trusted-testers first, then everyone).
+
+## Stage 3 (extension): /mkdir — the model can create folders (2026-09-19, ext 3.3.2 / skill 3.3.3-EXT)
+
+Gap found from Dandan's ask: folders could only be created implicitly
+(a file written inside one); the skill could only warn that sandbox
+os.makedirs reaches nothing. New `POST /mkdir {path}`: mkdir -p, idempotent
+(`existed:true`), 409 on a file-in-the-way, all resolveGuarded write gates,
+never confirmation-gated (creation is non-destructive). Registered in the
+router + ROUTE_POST (405 contract). Skill 3.3.3-EXT teaches
+`make_folder(path)` (both variants, method cheat + sandbox section) with
+the 3.3.2 floor note. Verified 11/11 by SW smoke on the Mac (OPFS-backed
+root, full handler path); negatives suite gained n16/n17/n8b for the next
+Linux run; live OWUI chat round pending Dandan. Deferred: folder
+rename/move still has no endpoint (TODO §6b).

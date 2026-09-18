@@ -94,7 +94,8 @@ async function confirmScope() {
  *
  * Semantics (Dandan 2026-09-07: "deletes + overwrites"):
  *   - a write to a path that does NOT exist yet = creation, not
- *     destructive → never asks (same as Claude Code new-file writes)
+ *     destructive → never asks (same as Claude Code new-file writes);
+ *     /mkdir is pure creation (idempotent on an existing dir) → never asks
  *   - a write to an EXISTING path = overwrite → asks under scope "all"
  *   - bulk ops (/write_many, /zip) ask once per request under "all"
  *     when any target exists; /unzip asks once (members unknowable

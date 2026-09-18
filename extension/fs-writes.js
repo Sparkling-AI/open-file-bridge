@@ -326,6 +326,28 @@ async function copyDirRecursive(srcDirHandle, dstParentHandle, name) {
   return dst;
 }
 
+/* ---------------- /mkdir (folder creation, mkdir -p) ---------------- */
+
+async function epMkdir(body) {
+  const rg = await resolveGuarded(unquoteComp(body.path || ""), { forWrite: true });
+  const rc = await rateCheck(0);
+  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  const existed = await dirExists(rg.rootRec, rg.parts);
+  if (!existed) {
+    try {
+      const w = await walkToParent(rg.rootRec, rg.parts, true); // creates parents
+      await w.dir.getDirectoryHandle(w.fileName, { create: true });
+    } catch (e) {
+      // a FILE on the path (leaf or intermediate) makes getDirectoryHandle
+      // throw TypeMismatchError — surface it as a clean 409, not a 500
+      return fsFail(409, { error: "cannot create '" + rg.relInRoot +
+        "' — a file already exists on that path" });
+    }
+  }
+  await auditRow({ endpoint: "/mkdir", method: "POST", path: rg.relInRoot, status: 200 });
+  return fsOk({ ok: true, created: writtenPathFor(rg), existed });
+}
+
 /* ---------------- /versions + /trash lists + restore ---------------- */
 
 async function epVersionsList(body) {

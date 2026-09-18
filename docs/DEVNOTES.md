@@ -3069,3 +3069,58 @@ Listing now says "anywhere you can install the bridge skill… hosted
 services that don't let you install skills aren't supported". Honest
 caveat recorded here (not the listing): cloud-https OWUI is verified by
 mechanism, not live-tested — all live runs were local http OWUI.
+
+## Stage-3 session #47: /mkdir — the model can create folders (2026-09-19, ext 3.3.2 / skill 3.3.3-EXT)
+
+Dandan's ask: "the extension is missing the ability to create a
+folder; it already has rename folder, delete folder". Premise check
+first: the OPTIONS PAGE has no rename/delete-folder UI at all (only
+per-root Reconnect / Disable-writes / Remove-grant + the read-only
+"What the AI can see" tree) — what he remembered is the CHAT surface:
+/delete works on folders (trash-move) and file rename is emulated
+(write new + delete old). The real gap: NO folder-create anywhere in
+the line — no endpoint, no skill recipe; folders only appeared
+implicitly when a file was written inside one, and the skill could
+only warn that sandbox os.makedirs "creates NOTHING on the user's
+computer". Scope decision (Dandan): endpoint + skill docs ONLY, no
+settings-page UI.
+
+Shipped (ext 3.3.2):
+- `POST /mkdir {path}` — `epMkdir` in fs-writes.js, registered in the
+  fs-adapter if-chain AND ROUTE_POST (405 method contract). Semantics:
+  mkdir -p (nested creates parents, consistent with /write); idempotent
+  (existing dir → 200 `existed:true`); a FILE on the path (leaf or
+  intermediate, FSA TypeMismatchError) → clean 409, not a 500; `..`
+  escape / root path → 400 via resolveGuarded; all write gates free
+  (readonly global/root, writes-off, sensitive floor, ignore, 503
+  no-folder). Response `{ok, created:"/<rel>", existed}` mirrors
+  /write's `written`. Creation NEVER triggers the confirmation popup
+  (non-destructive — comment added to fs-confirm's semantics block; no
+  code change needed there).
+- Skill 3.3.3-EXT (both variants): `/mkdir` in the method-cheat POST
+  set; `make_folder(path)` helper next to write_text/write_binary;
+  the "sandbox is NOT the user's computer" section now points folder
+  asks at it (created is the proof; empty folders visible to /list
+  and /directory_tree; 404 = extension older than 3.3.2 → user
+  updates). CHANGELOG entry. Floor stays ≥ 3.3.0 (CI gate parses it
+  from both files — verified untouched).
+
+Verification (Mac; negatives suite is Linux/Xvfb-only): SW-context
+smoke per the proven node+playwright pattern (full Chrome for Testing
+chromium-1234 + the REAL extension/, SW.evaluate with string
+expressions, `enabledRoots` stubbed to an OPFS handle = a REAL
+FileSystemDirectoryHandle, so the full handler path ran) — 11/11 PASS:
+nested create, idempotent recreate, 400 escape, 400 root-path, 409
+file-collision, 405 GET /mkdir ("POST-only"), 404 unknown endpoint
+still, empty leaf in /directory_tree, on-disk dir walk, /health
+version 3.3.2-EXT. negatives_test.py gained n16 (mkdir contract:
+create+idempotent+tree+409+400), n17 (405), n8b (mkdir 403 on a
+readonly root, same flip as n8) — ORDER: before zz_rate_breaker, since
+/mkdir calls rateCheck; NOT run on this Mac (folded into the §6b
+Linux re-run). Live OWUI chat round still pending Dandan: reload the
+unpacked extension at 3.3.2 + update the skill row (token-preserving
+recipe), then ask for a folder by name.
+
+Deferred finding (recorded in TODO §6b): folder RENAME/MOVE also has
+no endpoint — the model would have to recursively copy + /delete.
+Separate round if wanted; not silently emulated.

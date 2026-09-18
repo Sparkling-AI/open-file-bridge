@@ -13,6 +13,11 @@
   n10 /convert dropped -> 501 office-app wording
   n11 rate breaker: hammer writes -> 429 rate_limited
   n12 overwrite of a file via /write returns snapshot info
+  n16 /mkdir contract: nested create (mkdir -p) + created/existed
+      fields, idempotent re-create, leaf visible in /directory_tree,
+      409 when a FILE sits on the path, 400 on ../ escape
+  n17 GET /mkdir -> 405 POST-only (router method contract)
+  n8b mkdir on a readonly root -> 403 (same flip as n8)
 """
 import functools
 import json
@@ -106,6 +111,31 @@ print(_r); RESULT = _r
 b = json.loads(d["body"]) if d.get("body") else {{}}
 _r = "n10 status=" + str(d["status"])
 assert d["status"] == 501 and "office app" in str(b.get("hint", "")), _r + " raw: " + str(d)[:300]
+print(_r); RESULT = _r
+''',
+        "n16_mkdir": f'''d = (await ofb_fetch("POST", "/mkdir", json.dumps({{"path": "{F}/mk-{RUN}/a/b"}}))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "n16 create=" + str(b.get("created")) + " existed=" + str(b.get("existed"))
+assert d["status"] == 200 and b.get("created") == "/{F}/mk-{RUN}/a/b" and b.get("existed") is False, _r + " raw: " + str(d)[:300]
+d2 = (await ofb_fetch("POST", "/mkdir", json.dumps({{"path": "{F}/mk-{RUN}/a/b"}}))).to_py()
+b2 = json.loads(d2["body"]) if d2.get("body") else {{}}
+assert d2["status"] == 200 and b2.get("existed") is True, "idempotent re-create failed: " + str(d2)[:300]
+t = (await ofb_fetch("GET", "/directory_tree?path={F}/mk-{RUN}&max_depth=3")).to_py()
+tb = json.loads(t["body"]) if t.get("body") else {{}}
+assert t["status"] == 200 and "'name': 'b'" in str(tb.get("tree", "")), "tree missing empty leaf: " + str(tb)[:200]
+wr = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/mk-{RUN}/file.txt", "content": "x"}}))).to_py()
+assert wr["status"] == 200, "write prereq failed: " + str(wr)[:200]
+d3 = (await ofb_fetch("POST", "/mkdir", json.dumps({{"path": "{F}/mk-{RUN}/file.txt"}}))).to_py()
+assert d3["status"] == 409, "file-on-path must 409: " + str(d3)[:200]
+d4 = (await ofb_fetch("POST", "/mkdir", json.dumps({{"path": "{F}/../esc"}}))).to_py()
+assert d4["status"] == 400, "escape must 400: " + str(d4)[:200]
+_r += " · idempotent+tree+409+400 ok"
+print(_r); RESULT = _r
+''',
+        "n17_mkdir_method": f'''d = (await ofb_fetch("GET", "/mkdir")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "n17 status=" + str(d["status"])
+assert d["status"] == 405 and "POST-only" in str(b.get("error", "")), _r + " raw: " + str(d)[:200]
 print(_r); RESULT = _r
 ''',
         "zz_rate_breaker": f'''hit = None
@@ -263,6 +293,12 @@ def main():
             'd = (await ofb_fetch("POST", "/write", json.dumps({"path": "%s/n8-%s.txt", "content": "no"}))).to_py()\n'
             'b = json.loads(d["body"]) if d.get("body") else {}\n'
             '_r = "n8 status=" + str(d["status"]) + " err=" + str(b.get("error", ""))[:60]\n'
+            'assert d["status"] == 403 and "read-only" in str(b.get("error", "")), _r + " raw: " + str(d)[:300]\n'
+            'print(_r); RESULT = _r\n') % (FIXREL, RUN),
+            "n8b_mkdir_readonly": (
+            'd = (await ofb_fetch("POST", "/mkdir", json.dumps({"path": "%s/mk-ro-%s"}))).to_py()\n'
+            'b = json.loads(d["body"]) if d.get("body") else {}\n'
+            '_r = "n8b status=" + str(d["status"]) + " err=" + str(b.get("error", ""))[:60]\n'
             'assert d["status"] == 403 and "read-only" in str(b.get("error", "")), _r + " raw: " + str(d)[:300]\n'
             'print(_r); RESULT = _r\n') % (FIXREL, RUN)}
         h8 = SCRATCH / "harness-n8.html"

@@ -195,6 +195,7 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     if (method === "POST" && path === "/write_many") return await epWriteMany(body);
     if (method === "POST" && path === "/edit") return await epEdit(body);
     if (method === "POST" && path === "/delete") return await epDelete(body);
+    if (method === "POST" && path === "/mkdir") return await epMkdir(body);
     if (method === "POST" && path === "/versions/list") return await epVersionsList(body);
     if (method === "POST" && path === "/versions/read") return await epVersionsRead(body);
     if (method === "POST" && path === "/versions/restore") return await epRestore("versions", body);
@@ -255,7 +256,7 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     "/stat", "/search", "/directory_tree", "/image_info", "/image_b64",
     "/pdf_text", "/ocr"].concat([...MOVED_READ_ENDPOINTS]));
   const ROUTE_POST = new Set(["/ocr/lang", "/write", "/write_b64",
-    "/write_b64_chunk", "/write_many", "/edit", "/delete",
+    "/write_b64_chunk", "/write_many", "/edit", "/delete", "/mkdir",
     "/versions/list", "/versions/read", "/versions/restore",
     "/trash/list", "/trash/restore",
     "/zip", "/unzip", "/link", "/ocr_pdf", "/pdf_op"]
