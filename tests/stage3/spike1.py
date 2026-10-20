@@ -169,26 +169,20 @@ def picker_flow(driver, page, pick_win_id):
     Returns the number of roots in IndexedDB after the flow (0 = fail).
     """
     driver.screenshot("spike-b0-open")
-    # bookmark row: the proven y=373, but GTK row geometry drifts with
-    # theme/font state (2026-10-20: observed 411 on a clean session) —
-    # fan a few candidate rows top-down; each screenshot records which
-    # landed. A wrong-row click inside the dialog is harmless (selects
-    # another place); we re-shoot after.
-    clicked_bm = False
-    for by in (373, 395, 411, 430, 355):
-        driver.click(85, by)
-        time.sleep(0.9)
-        driver.screenshot(f"spike-b1-bookmark-{by}")
-        # if the navigation happened, the Open button enables and the
-        # main list shows the granted fixture dirs; we cannot cheaply
-        # introspect GTK, so click Open and check IDB afterwards — the
-        # outer loop verifies. Try Open at the proven coord.
-        driver.click(1077, 798)
-        time.sleep(1.2)
+    # bookmark row: GTK row geometry drifts with session theme state
+    # (2026-10-20: Granted measured at y≈411, the old proven 373 now hits
+    # the Demo bookmark). Try Granted-first candidates; after each
+    # candidate + Open, answer Chrome's permission bubble IMMEDIATELY
+    # (a successful Open CLOSES the dialog and pops the bubble — clicking
+    # more dialog coords after that is what broke the first fan).
+    def _roots_count():
+        # versionless open: a pinned LOWER version throws VersionError
+        # once fs-idb moves on (v2 since 2026-09-09) — readers must
+        # never request an upgrade (options.js had the same bug)
         try:
-            n = page.evaluate(
+            return page.evaluate(
                 "new Promise((res) => {"
-                "  const rq = indexedDB.open('ofb-ext', 1);"
+                "  const rq = indexedDB.open('ofb-ext');"
                 "  rq.onsuccess = () => {"
                 "    try {"
                 "      const tx = rq.result.transaction('roots', 'readonly');"
@@ -199,43 +193,38 @@ def picker_flow(driver, page, pick_win_id):
                 "  };"
                 "  rq.onerror = () => res(-3);"
                 "})")
-            if isinstance(n, int) and n >= 1:
-                return n
         except Exception:
-            pass
-        # not granted — the dialog may have been dismissed by Open on an
-        # unselected row; re-open it for the next candidate
+            return -4
+
+    for by in (411, 395, 430, 447, 373):
+        driver.click(85, by)
+        time.sleep(1.0)
+        driver.screenshot(f"spike-b1-bookmark-{by}")
+        driver.click(1077, 798)      # Open (dialog) — closes it on success
+        time.sleep(2.0)              # big dirs + dialog teardown settle
+        # Chrome "Allow this site to edit files?" bubble — probe the fan.
+        # Check IDB between clicks: a slow bubble may appear late, and a
+        # click fired BEFORE it maps can dismiss it the instant it shows.
+        for ax, ay in ((790, 254), (740, 254), (700, 254)):
+            time.sleep(0.8)
+            n = _roots_count()
+            if isinstance(n, int) and n >= 1:
+                driver.screenshot(f"spike-b3-allow-hit-{by}")
+                return n
+            driver.click(ax, ay)
+            time.sleep(1.0)
+            n = _roots_count()
+            if isinstance(n, int) and n >= 1:
+                driver.screenshot(f"spike-b3-allow-hit-{by}")
+                return n
+        n = _roots_count()
+        if isinstance(n, int) and n >= 1:
+            return n
+        # not granted — the dialog was closed by Open (or never opened);
+        # re-open it for the next candidate
         try:
             page.click("#pick", timeout=3000)
             time.sleep(1.0)
-        except Exception:
-            pass
-    driver.screenshot("spike-b2-after-open")
-    # Allow-bubble probe fan: (790,254) is the PROVEN hit (session #2,
-    # pick_drive.py); browser window spawns at (140,60). Order matters —
-    # a missed click can DISMISS the bubble (click-outside), so start
-    # at the proven coordinate.
-    for attempt, (ax, ay) in enumerate(
-            [(790, 254), (740, 254), (700, 254)]):
-        driver.click(ax, ay)
-        time.sleep(1.0)
-        driver.screenshot(f"spike-b3-allow-{attempt}")
-        try:
-            n = page.evaluate(
-                "new Promise((res) => {"
-                "  const rq = indexedDB.open('ofb-ext', 1);"
-                "  rq.onsuccess = () => {"
-                "    try {"
-                "      const tx = rq.result.transaction('roots', 'readonly');"
-                "      const rq2 = tx.objectStore('roots').getAll();"
-                "      rq2.onsuccess = () => res(rq2.result.length);"
-                "      rq2.onerror = () => res(-1);"
-                "    } catch (e) { res(-2); }"
-                "  };"
-                "  rq.onerror = () => res(-3);"
-                "})")
-            if isinstance(n, int) and n >= 1:
-                return n
         except Exception:
             pass
     return 0

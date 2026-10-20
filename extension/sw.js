@@ -50,7 +50,10 @@ async function handleOfbRequest(msg, sender) {
   const senderTabId = sender && sender.tab ? sender.tab.id : null;
 
   // ---- shape gate: narrow pipe only ----
-  if (!/^\/[A-Za-z0-9_\-./?&=%+]*$/.test(path)) {
+  // (','/'.'/etc. must pass: 3.4.0 /list accepts fields=path,type.
+  //  Note: "//" is NOT refused here — n1 pins it to the RESOLVER's
+  //  400-with-body so the caller learns WHY; resolveGuarded refuses it.)
+  if (!/^\/[A-Za-z0-9_\-./?&=%+,;:!$'()*@]*$/.test(path)) {
     return swFail(id, PATH_WHY, 0);
   }
   if (!["GET", "POST", "DELETE"].includes(method)) {

@@ -68,7 +68,9 @@ print(_r); RESULT = _r
         "n2_foreign_fields": f'''wr = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/n2-{RUN}.txt", "content": "x", "url": "http://evil.example/", "port": 9999, "host": "evil.example"}}))).to_py()
 b = json.loads(wr["body"]) if wr.get("body") else {{}}
 _r = "n2 status=" + str(wr["status"]) + " written=" + str(b.get("written"))
-assert wr["status"] == 200 and b.get("written", "").startswith("/{F}/"), _r + " raw: " + str(wr)[:300]
+# 3.4.0: foreign fields still ignored; written is root-relative WITHOUT
+# a leading slash, and the write answer names the root (pilot item 10)
+assert wr["status"] == 200 and b.get("written", "") == "{F}/n2-{RUN}.txt" and b.get("root_id") == "main", _r + " raw: " + str(wr)[:300]
 rd = (await ofb_fetch("GET", "/read?path={F}/n2-{RUN}.txt")).to_py()
 assert rd["status"] == 200, "readback failed"
 print(_r); RESULT = _r
@@ -236,6 +238,10 @@ def build_harness_file(path, cells):
     start = src.index("    py = '''") + len("    py = '''")
     end = src.index("'''\n    py = py.replace", start)
     py = src[start:end]
+    # the harness bootstrap's _TOKEN default must be swapped for the
+    # test token exactly as spike1's own flow does (sec tier-2 gate);
+    # this suite extracts py directly, so apply the replace here too
+    py = py.replace("__OFB_TEST_TOKEN__", spike1.TEST_TOKEN)
     from engines_test import assemble_harness_page  # reuse
     page = assemble_harness_page(spike1.OWUI, py, cells)
     path.write_text(page)
@@ -261,6 +267,7 @@ def main():
     start = src.index("    py = '''") + len("    py = '''")
     end = src.index("'''\n    py = py.replace", start)
     py = src[start:end]
+    py = py.replace("__OFB_TEST_TOKEN__", spike1.TEST_TOKEN)  # sec tier-2
 
     drv = spike1.XDriver()
 
@@ -353,7 +360,7 @@ def main():
         # n8: flip the root readonly in IDB (extension page context), retry write
         setup.evaluate("""
         new Promise((res) => {
-          const rq = indexedDB.open('ofb-ext', 1);
+          const rq = indexedDB.open('ofb-ext');  // versionless: v2 DB + pinned v1 open = VersionError hang (same as _roots_count)
           rq.onsuccess = () => {
             const tx = rq.result.transaction('roots', 'readwrite');
             const store = tx.objectStore('roots');
