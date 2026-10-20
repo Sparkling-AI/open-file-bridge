@@ -169,11 +169,47 @@ def picker_flow(driver, page, pick_win_id):
     Returns the number of roots in IndexedDB after the flow (0 = fail).
     """
     driver.screenshot("spike-b0-open")
-    driver.click(85, 373)        # bookmark 'Granted' → GRANT_DIR
-    time.sleep(1.2)
-    driver.screenshot("spike-b1-bookmark")
-    driver.click(1077, 798)      # Open
-    time.sleep(1.6)
+    # bookmark row: the proven y=373, but GTK row geometry drifts with
+    # theme/font state (2026-10-20: observed 411 on a clean session) —
+    # fan a few candidate rows top-down; each screenshot records which
+    # landed. A wrong-row click inside the dialog is harmless (selects
+    # another place); we re-shoot after.
+    clicked_bm = False
+    for by in (373, 395, 411, 430, 355):
+        driver.click(85, by)
+        time.sleep(0.9)
+        driver.screenshot(f"spike-b1-bookmark-{by}")
+        # if the navigation happened, the Open button enables and the
+        # main list shows the granted fixture dirs; we cannot cheaply
+        # introspect GTK, so click Open and check IDB afterwards — the
+        # outer loop verifies. Try Open at the proven coord.
+        driver.click(1077, 798)
+        time.sleep(1.2)
+        try:
+            n = page.evaluate(
+                "new Promise((res) => {"
+                "  const rq = indexedDB.open('ofb-ext', 1);"
+                "  rq.onsuccess = () => {"
+                "    try {"
+                "      const tx = rq.result.transaction('roots', 'readonly');"
+                "      const rq2 = tx.objectStore('roots').getAll();"
+                "      rq2.onsuccess = () => res(rq2.result.length);"
+                "      rq2.onerror = () => res(-1);"
+                "    } catch (e) { res(-2); }"
+                "  };"
+                "  rq.onerror = () => res(-3);"
+                "})")
+            if isinstance(n, int) and n >= 1:
+                return n
+        except Exception:
+            pass
+        # not granted — the dialog may have been dismissed by Open on an
+        # unselected row; re-open it for the next candidate
+        try:
+            page.click("#pick", timeout=3000)
+            time.sleep(1.0)
+        except Exception:
+            pass
     driver.screenshot("spike-b2-after-open")
     # Allow-bubble probe fan: (790,254) is the PROVEN hit (session #2,
     # pick_drive.py); browser window spawns at (140,60). Order matters —
