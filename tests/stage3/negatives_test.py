@@ -17,6 +17,7 @@
 import functools
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -417,7 +418,12 @@ def main():
             " (r) => { window.__sweep = JSON.stringify(r); })")
         time.sleep(1.5)
         sweep_res = setup.evaluate("window.__sweep")
-        ok13 = ('"removed":1' in (sweep_res or "")
+        # removed >= 1 (not ==1): real trash dirs use 4-char stamps
+        # (hexRand(2)) — since the trashEntryTsMs {2,4} fix the sweep also
+        # removes stale real-trash dirs from earlier cells in this run
+        # (observed removed:6 on 2026-10-21), which is the DESIRED behavior.
+        m13 = re.search(r'"removed":(\d+)', sweep_res or "")
+        ok13 = (m13 is not None and int(m13.group(1)) >= 1
                 and not stale.exists() and fresh.exists() and (fresh / "new.txt").exists())
         print("n13 trash expiry:", sweep_res,
               "| stale exists:", stale.exists(),
