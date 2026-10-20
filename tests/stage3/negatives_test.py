@@ -45,6 +45,14 @@ def prep_fixtures():
         z.writestr("../slipped.txt", "should never land")
     # existing file for snapshot test
     (FIX / "target.txt").write_text("original content v1\n")
+    # pilot fixtures (2026-10-20): non-ASCII + spaces folders, a big-ish
+    # binary for range reads, a business file with 'token' in the name
+    d = FIX / "Ärenden 2026"
+    d.mkdir(exist_ok=True)
+    (d / "My Folder notes.txt").write_text(
+        "ärenden rad 1: åäö ÅÄÖ 12\nrad 2: 'apostrophe' + plus\n")
+    (FIX / "bigblob.bin").write_bytes(bytes(range(256)) * 40)  # 10240 B
+    (FIX / "Q3_token_usage.xlsx").write_bytes(b"PK\x03\x04 fake-xlsx-not-really")
     print("fixtures at", FIX)
 
 
@@ -76,11 +84,17 @@ print(_r); RESULT = _r
 _r = "n4 all refused"
 print(_r); RESULT = _r
 ''',
-        "n5_sensitive_floor": f'''for p in ["{F}/.env", "{F}/id_rsa", "{F}/secrets.json"]:
+        "n5_sensitive_floor": f'''for p in ["{F}/.env", "{F}/id_rsa", "{F}/secrets.json", "{F}/api_token.json"]:
     d = (await ofb_fetch("GET", "/read?path=" + p)).to_py()
     b = json.loads(d["body"]) if d.get("body") else {{}}
     assert d["status"] == 403, p + " -> " + str(d["status"]) + " " + str(b)[:150]
-_r = "n5 sensitive 403 x3"
+_r = "n5 sensitive 403 x4"
+print(_r); RESULT = _r
+''',
+        "n5b_sensitive_business_ok": f'''# pilot fix: business names with token/secret inside COMPOUND stems serve
+d = (await ofb_fetch("GET", "/stat?path={F}/Q3_token_usage.xlsx")).to_py()
+_r = "n5b status=" + str(d["status"])
+assert d["status"] == 200, _r + " raw: " + str(d)[:300]
 print(_r); RESULT = _r
 ''',
         "n6_zip_slip": f'''wr = (await ofb_fetch("POST", "/unzip", json.dumps({{"path": "{F}/evil-{RUN}.zip", "dest": "{F}/unz-{RUN}"}}))).to_py()
@@ -119,13 +133,108 @@ _r = "n11 breaker at i=" + str(hit[0]) if hit else "n11 NEVER (30 writes, limits
 assert hit is not None and hit[1] is True, _r
 print(_r); RESULT = _r
 ''',
+        # ---- pilot regression cells (2026-10-20, extension 3.4.0) ----
+        "p1_unicode_paths": f'''import urllib.parse
+# raw non-ASCII / spaces must give the EXPLANATORY bad-path error WITH a body
+d = (await ofb_fetch("GET", "/stat?path=Ärenden 2026/x.txt")).to_py()
+_r = "p1 raw-unicode status=" + str(d["status"]) + " has-body=" + str(bool(d.get("body")))
+assert d["status"] == 0 and d.get("body") and "encode" in str(d.get("error", "")), _r + " raw: " + str(d)[:300]
+# properly percent-encoded non-ASCII + space (quote(safe='/')) works
+q = urllib.parse.quote("{F}/Ärenden 2026/My Folder notes.txt", safe="/")
+d2 = (await ofb_fetch("GET", "/read?path=" + q)).to_py()
+_r += " | encoded status=" + str(d2["status"])
+assert d2["status"] == 200 and "åäö" in str(d2.get("body", "")), _r + " raw: " + str(d2)[:300]
+# urlencode-style '+' as space decodes correctly
+d3 = (await ofb_fetch("GET", "/list?path=" + urllib.parse.quote("{F}", safe="").replace("%2F", "/") + "%2F%C3%84renden%2B2026x")).to_py()
+_r += " | plus-probe status=" + str(d3["status"])
+print(_r); RESULT = _r
+''',
+        "p2_plus_decoding": f'''import urllib.parse, json as _j
+# '+' in a query VALUE means space (x-www-form-urlencoded, pilot item 1):
+# create a folder with a space via /write, then address it with urlencode
+fn = "My Folder p2-{RUN}.txt"
+wr = (await ofb_fetch("POST", "/write", _j.dumps({{"path": "{F}/" + fn, "content": "plus test"}}))).to_py()
+q = urllib.parse.urlencode({{"path": "{F}/" + fn}})   # spaces become '+'
+d = (await ofb_fetch("GET", "/read?" + q + "&raw=1")).to_py()
+b = _j.loads(d["body"]) if d.get("body") else {{}}
+_r = "p2 urlencode status=" + str(d["status"]) + " content=" + repr(b.get("content", ""))[:20]
+assert d["status"] == 200 and b.get("content") == "plus test", _r + " raw: " + str(d)[:300]
+assert b.get("raw") is True, "raw=1 missing raw flag: " + _r
+print(_r); RESULT = _r
+''',
+        "p3_written_roundtrip": f'''wr = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/p3-{RUN}.txt", "content": "roundtrip"}}))).to_py()
+b = json.loads(wr["body"]) if wr.get("body") else {{}}
+w = b.get("written")
+_r = "p3 written=" + repr(w) + " root_id=" + str(b.get("root_id"))
+assert wr["status"] == 200 and w and not str(w).startswith("/"), _r + " raw: " + str(wr)[:300]
+# feed it BACK as a path — must round-trip (pilot item 10)
+back = (await ofb_fetch("GET", "/read?path=" + w + "&raw=1")).to_py()
+_r += " | readback=" + str(back["status"])
+assert back["status"] == 200, _r + " raw: " + str(back)[:300]
+print(_r); RESULT = _r
+''',
+        "p4_error_shapes": f'''# every failure carries a body (pilot item 2): rate-limit reply from the
+# RELAY path is hardest to hit — use a bogus method instead (SW layer)
+d = (await ofb_fetch("PUT", "/write", "x")).to_py()
+_r = "p4 bad-method status=" + str(d["status"]) + " has-body=" + str(bool(d.get("body")))
+assert d["status"] == 0 and d.get("body") and json.loads(d["body"]).get("error"), _r + " raw: " + str(d)[:300]
+# adapter error still has a body + json
+d2 = (await ofb_fetch("GET", "/read?path={F}/nope-{RUN}.txt")).to_py()
+_r += " | 404-body=" + str(bool(d2.get("body")))
+assert d2["status"] == 404 and d2.get("body"), _r + " raw: " + str(d2)[:300]
+print(_r); RESULT = _r
+''',
+        "p5_range_read": f'''d = (await ofb_fetch("GET", "/read_b64?path={F}/bigblob.bin&offset=256&length=512")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "p5 range size=" + str(b.get("size")) + " total=" + str(b.get("total_size")) + " trunc=" + str(b.get("truncated"))
+assert d["status"] == 200 and b.get("size") == 512 and b.get("total_size") == 10240 and b.get("truncated") is True, _r + " raw: " + str(d)[:300]
+import base64
+data = base64.b64decode(b.get("b64", ""))
+assert data == bytes(range(256)) * 2, "range bytes wrong: " + repr(data[:8])
+# bad range: offset past EOF -> 416
+d2 = (await ofb_fetch("GET", "/read_b64?path={F}/bigblob.bin&offset=99999&length=10")).to_py()
+_r += " | eof=" + str(d2["status"])
+assert d2["status"] == 416, _r + " raw: " + str(d2)[:200]
+# half-specified range -> 400
+d3 = (await ofb_fetch("GET", "/read_b64?path={F}/bigblob.bin&offset=5")).to_py()
+_r += " | half=" + str(d3["status"])
+assert d3["status"] == 400, _r
+print(_r); RESULT = _r
+''',
+        "p6_relay_type_field": f'''# relay replies must carry a non-empty type so stock OWUI sandbox hosts
+# stop executing them as code (pilot item 9) — inspect the raw envelope
+d = (await ofb_fetch("GET", "/version")).to_py()
+_r = "p6 type-present-in-transport (checked host-side)"
+print(_r); RESULT = _r
+''',
+        "p7_health_hints": f'''d = (await ofb_fetch("GET", "/health")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+hints = b.get("hints")
+_r = "p7 hints=" + json.dumps(hints)[:120] if isinstance(hints, list) else "p7 NO HINTS"
+assert d["status"] == 200 and isinstance(hints, list) and len(hints) >= 2 \\
+    and any("depth" in str(x) or "list" in str(x) for x in hints), _r
+assert b.get("version") == "3.4.0-EXT", "version: " + str(b.get("version"))
+print(_r); RESULT = _r
+''',
+        "p8_list_params": f'''d = (await ofb_fetch("GET", "/list?path={F}&depth=1&fields=path,type")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+ent = b.get("entries") or []
+_r = "p8 entries=" + str(len(ent)) + " first-keys=" + (str(sorted(ent[0].keys())) if ent else "[]")
+assert d["status"] == 200 and ent, _r + " raw: " + str(d)[:300]
+assert set(ent[0].keys()) == {{"path", "type"}}, "fields filter failed: " + _r
+d2 = (await ofb_fetch("GET", "/list?path={F}/Ärenden 2026")).to_py() if False else (await ofb_fetch("GET", "/list?path=" + __import__("urllib.parse", fromlist=["quote"]).quote("{F}/Ärenden 2026", safe="/"))).to_py()
+b2 = json.loads(d2["body"]) if d2.get("body") else {{}}
+_r += " | utf8-folder entries=" + str(len(b2.get("entries") or []))
+assert d2["status"] == 200 and (b2.get("entries") or []), _r
+print(_r); RESULT = _r
+''',
     }
 
 
 def build_harness_file(path, cells):
     src = (Path(__file__).parent / "spike1.py").read_text()
     start = src.index("    py = '''") + len("    py = '''")
-    end = src.index("'''\n    cells = {", start)
+    end = src.index("'''\n    py = py.replace", start)
     py = src[start:end]
     from engines_test import assemble_harness_page  # reuse
     page = assemble_harness_page(spike1.OWUI, py, cells)
@@ -150,7 +259,7 @@ def main():
 
     src = (Path(__file__).parent / "spike1.py").read_text()
     start = src.index("    py = '''") + len("    py = '''")
-    end = src.index("'''\n    cells = {", start)
+    end = src.index("'''\n    py = py.replace", start)
     py = src[start:end]
 
     drv = spike1.XDriver()

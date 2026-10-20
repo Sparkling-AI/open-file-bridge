@@ -12,6 +12,12 @@
 //  - rate-limits: <=30 in-flight, <=120 requests/min, payload cap 10 MB;
 //  - forwards responses ONLY to the exact iframe window that asked
 //    (targeted postMessage), never a broadcast.
+//  - RESPONSES carry type:"ofb" (3.4.0): Open WebUI's sandbox host
+//    (pyodideSandboxHost.ts, all versions incl. 0.12.2/main 2026-10-16)
+//    executes EVERY message without a `type` field as code — each reply
+//    used to reset the running cell's stdout and add a bogus stderr line
+//    (pilot item 9). A non-empty type makes stock OWUI ignore them; the
+//    skill's _on_msg never looked at type, so nothing else changes.
 //  - NOTE: this page's OWN scripts can always ride this pipe (a page is
 //    trivially its own "descendant", and the BC channel is same-origin).
 //    The AUTHORITY is the service worker's sender gate (fs-sec.js): an
@@ -90,15 +96,15 @@
           (typeof m.token !== "string" || m.token.length > 256)) return;
       const cap = capReject();
       if (cap) {
-        try { ev.source.postMessage({ ofb: true, id: m.id, ok: false, status: 0,
-          error: cap }, "*"); } catch (e) {}
+        try { ev.source.postMessage({ type: "ofb", ofb: true, id: m.id, ok: false, status: 0,
+          error: cap, body: JSON.stringify({ error: cap }) }, "*"); } catch (e) {}
         return;
       }
       if (m.body !== undefined && m.body !== null) {
         if (typeof m.body !== "string") return;
         if (m.body.length > MAX_PAYLOAD) {
-          try { ev.source.postMessage({ ofb: true, id: m.id, ok: false, status: 0,
-            error: "payload too large" }, "*"); } catch (e) {}
+          try { ev.source.postMessage({ type: "ofb", ofb: true, id: m.id, ok: false, status: 0,
+            error: "payload too large", body: JSON.stringify({ error: "payload too large" }) }, "*"); } catch (e) {}
           return;
         }
       }
@@ -115,8 +121,9 @@
           (resp) => {
             inflight.delete(id);
             const out = resp || { ofb: true, id, ok: false, status: 0,
-                                  error: "extension context unavailable" };
-            out.ofb = true; out.id = id;
+                                  error: "extension context unavailable",
+                                  body: JSON.stringify({ error: "extension context unavailable — the extension was reloaded or updated; reload this page" }) };
+            out.type = "ofb"; out.ofb = true; out.id = id;
             try { ev.source.postMessage(out, "*"); } catch (e) {}
           }
         );
@@ -124,8 +131,9 @@
         // orphaned content script (extension reloaded, page not refreshed):
         // fail fast instead of letting the caller hang to its full timeout
         inflight.delete(id);
-        try { ev.source.postMessage({ ofb: true, id, ok: false, status: 0,
-          error: "extension context invalidated — reload this page" }, "*"); } catch (e2) {}
+        try { ev.source.postMessage({ type: "ofb", ofb: true, id, ok: false, status: 0,
+          error: "extension context invalidated — reload this page",
+          body: JSON.stringify({ error: "extension context invalidated — reload this page" }) }, "*"); } catch (e2) {}
       }
     }
   }, false);
@@ -164,8 +172,8 @@
           (typeof m.body !== "string" || m.body.length > MAX_PAYLOAD)) return;
       const cap = capReject();
       if (cap) {
-        try { bc.postMessage({ ofb: true, id: m.id, ok: false, status: 0,
-          error: cap }); } catch (e) {}
+        try { bc.postMessage({ type: "ofb", ofb: true, id: m.id, ok: false, status: 0,
+          error: cap, body: JSON.stringify({ error: cap }) }); } catch (e) {}
         return;
       }
       minuteStamps.push(Date.now());
@@ -177,15 +185,17 @@
           (resp) => {
             bcInflight--;
             const out = resp || { ofb: true, id: m.id, ok: false, status: 0,
-                                  error: "extension context unavailable" };
-            out.ofb = true; out.id = m.id;
+                                  error: "extension context unavailable",
+                                  body: JSON.stringify({ error: "extension context unavailable — the extension was reloaded or updated; reload this page" }) };
+            out.type = "ofb"; out.ofb = true; out.id = m.id;
             try { bc.postMessage(out); } catch (e) {}
           }
         );
       } catch (e) {
         bcInflight--;
-        try { bc.postMessage({ ofb: true, id: m.id, ok: false, status: 0,
-          error: "extension context invalidated — reload this page" }); } catch (e2) {}
+        try { bc.postMessage({ type: "ofb", ofb: true, id: m.id, ok: false, status: 0,
+          error: "extension context invalidated — reload this page",
+          body: JSON.stringify({ error: "extension context invalidated — reload this page" }) }); } catch (e2) {}
       }
     };
   } catch (e) { /* BroadcastChannel unavailable — iframe transport still works */ }

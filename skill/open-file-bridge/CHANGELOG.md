@@ -2,6 +2,57 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.4.0-EXT — 2026-10-20 (with extension 3.4.0)
+
+Pilot-feedback release: everything below fixes something that failed in
+a 4-week, 7-user, ~100-chat corporate trial on extension 3.3.1 with
+skill 3.3.3/3.3.4-EXT (Windows network shares, OneDrive, Swedish folder
+names). The trial company maintained a derived skill (3.3.7-EXT) with
+bootstrap-level fixes, tested in Pyodide 0.28 against a mock relay;
+their findings and tested patterns are folded back in here.
+
+Bootstrap (the biggest win — models dropped parts of the 150-line
+block in 107/149 copies, and both error shapes caused 86×
+`KeyError: 'body'` + 31× `KeyError: 'bodyB64'`):
+- EVERY helper in the one block: `read_binary`, `read_binary_range`,
+  `read_text`, `write_text`, `write_binary`, `install_bridge_wheels`,
+  `ofb_fetch_b64`, `bridge_path`, `out`.
+- Parameters are URL-encoded for the caller (`quote(v, safe='/')`) —
+  raw å/ä/ö, spaces and apostrophes stopped working mid-2026.
+- One `_check()` handles BOTH failure shapes (relay/SW failures carry
+  `error` + a JSON body; adapter failures carry `status` + `body`) and
+  raises `BridgeError` with the extension's own message.
+- Request timeout 45 s (hosts kill cells at 60 s and reset the sandbox —
+  the old 60/120 s timeouts outlived their own cell; 27 cells died).
+- `bridge_path(user_path)` maps pasted Windows paths (`N:\…\<shared>\…`)
+  to bridge paths, adding the root id when several folders are shared.
+- `out(obj, limit=4000)` print cap; first cell prints ROOTS ONLY
+  (a recursive root /list returned ~50 000 chars or timed out, 25×).
+- Rules block up front (7 rules, each tied to an observed failure),
+  including "NameError on a helper = sandbox was reset, run the block
+  again".
+
+Docs/recipes:
+- Image display via the host's `data:image/png;base64,` upload line
+  (never echo base64 data-URLs — cost 15–20 K output tokens per chart
+  and corrupted images).
+- Office: try `import docx/pptx/openpyxl` FIRST (hosts 0.11.4+/0.12.0+
+  install them on import); host-version table; big-workbook read_only
+  pattern; csv `;`+`utf-8-sig` for Swedish Excel; olefile for
+  Outlook `.msg`.
+- PDF: full `/pdf_op` body shapes; `/pdf_text?mode=images`; the fixed
+  fpdf2 recipe (ssl first, FPDF not FPdf, DejaVu fonts, `new_x=LMARGIN`
+  layout helpers, page-1 preview); "adding to a PDF" = build pages +
+  merge.
+- Reads you parse go through `read_text` (clean bytes) — `/read`'s
+  numbered lines broke CSV/JSON parsing; `raw=1` documented.
+- Reply in the language of the user's latest message (Swedish example
+  phrases previously dragged sessions into Swedish).
+- Skill shrunk and re-ordered: rules first, prose cut (~24 K chars).
+
+Requires extension ≥ 3.4.0.
+
+
 ## 2.11.3 — 2026-09-12
 
 App-line port of the EXT 3.3.2 fix (the live failure where a trivial

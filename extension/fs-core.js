@@ -7,7 +7,7 @@
 
 "use strict";
 
-const FS_VERSION = "3.3.1-EXT";
+const FS_VERSION = "3.4.0-EXT";
 const FS_SKILL_MIN = "2.11";
 const MAX_LIST = 500;
 const MAX_BINARY = 8000000;          // b64 endpoints
@@ -46,9 +46,19 @@ const SENSITIVE_NAMES = new Set([
   "serviceaccount.json", "firebase-adminsdk",
 ]);
 const SENSITIVE_EXTS = new Set([".pem", ".key", ".p12", ".pfx", ".keystore", ".kdbx", ".env"]);
-const SENSITIVE_PATTERNS = new RegExp(
-  "(^|[-_])(id_rsa|id_dsa|id_ecdsa|id_ed25519|authorized_keys|" +
-  "credentials|secret|token|\\.htpasswd|\\.netrc|\\.pypirc|\\.npmrc)", "i");
+// Credential-name floor, narrowed 2026-10-20 after a 4-week pilot: the old
+// substring regex (^|[-_])(…|token|secret|credentials) refused BUSINESS
+// files like "Q3_token_usage.xlsx". Rule now: exact known names (set
+// below), known key extensions, or the basename STEM (extension stripped)
+// whose last '-'/'_'/'.'-separated segment is a bare credential word —
+// "api_token.json" and "backup-secrets.yml" are refused, "token_usage.xlsx"
+// and "Q3-token-report.xlsx" are served.
+const SENSITIVE_STEM_WORDS = new Set([
+  "token", "tokens", "secret", "secrets", "credential", "credentials",
+  "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ecdsa_sk",
+  "id_ed25519_sk", "authorized_keys", "htpasswd", "netrc", "pypirc",
+  "npmrc", "keyring", "keystore", "wallet", "serviceaccount",
+]);
 
 const OFFICE_ZIP_EXTS = new Set([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub"]);
 const DEFAULT_IGNORE = [".DS_Store", "._*", "Thumbs.db", "desktop.ini",
@@ -176,6 +186,16 @@ async function fsImageToDataUrl(file, opts) {
 function unquoteComp(s) {
   try { return decodeURIComponent(String(s)); } catch (e) { return String(s); }
 }
+// x-www-form-urlencoded convention, adopted 2026-10-20 after the pilot:
+// models overwhelmingly encode spaces as '+' (Python's urlencode), and
+// decodeURIComponent alone left "My+Folder" un-decoded → "not a
+// directory". '+' means space BEFORE %-decoding, exactly like
+// URLSearchParams. A literal '+' in a name must be sent %2B.
+function formUnquote(s) {
+  return unquoteComp(String(s).replace(/\+/g, "%20"));
+}
+// parseQueryString values are '+'-aware. Keys stay raw (endpoint names
+// never contain '+').
 function parseQueryString(qs) {
   const out = {};
   let s = String(qs || "");
@@ -185,7 +205,7 @@ function parseQueryString(qs) {
     if (!kv) return;
     const i = kv.indexOf("=");
     if (i < 0) out[kv] = "";
-    else out[kv.slice(0, i)] = kv.slice(i + 1);
+    else out[kv.slice(0, i)] = kv.slice(i + 1).replace(/\+/g, "%20");
   });
   return out;
 }
@@ -248,8 +268,16 @@ function sensitiveName(name) {
   const base = String(name).split("/").pop().toLowerCase();
   if (SENSITIVE_NAMES.has(base)) return true;
   const i = base.lastIndexOf(".");
-  if (i > 0 && SENSITIVE_EXTS.has(base.slice(i))) return true;
-  return SENSITIVE_PATTERNS.test(base);
+  const stem = i > 0 ? base.slice(0, i) : base;
+  const ext = i > 0 ? base.slice(i) : "";
+  if (ext && SENSITIVE_EXTS.has(ext)) return true;
+  // bare-credential-STEM rule: split the stem on -, _ and . and look at
+  // its segments — refuse when a segment is a credential WORD, but serve
+  // compound business names (token_usage, token-report) whose stem does
+  // not reduce to the bare word.
+  const lastSeg = stem.split(/[-_.]/).pop() || stem;
+  if (SENSITIVE_STEM_WORDS.has(stem) || SENSITIVE_STEM_WORDS.has(lastSeg)) return true;
+  return false;
 }
 // Async since the settings-page ignore editor landed: the global list
 // lives in the kv store (ignore_global), per-root extras on the root row.
@@ -308,17 +336,36 @@ async function resolveGuarded(rel, opts) {
     });
   }
   let s = String(rel || "").trim();
-  if (s.startsWith("/") || (s.length > 1 && s[1] === ":")) {
+  if (s.startsWith("//") || (s.length > 1 && s[1] === ":")) {
     throw new OpFail(400, {
-      error: "absolute paths are not allowed — address files relative to a shared root",
+      error: "absolute paths are not allowed — address files relative to a shared root" +
+        (roots.length > 1 ? " (prefix with a root id: " +
+          roots.map((r) => r.id).join(", ") + ")" : ""),
     });
   }
-  s = s.replace(/^\/+/, "").replace(/\\/g, "/");
+  // a SINGLE leading / is root-relative and accepted (3.4.0): write
+  // answers return "/path" and models feed that back — it must round-trip.
+  s = s.replace(/^\//, "").replace(/\\/g, "/");
   let rootRec = roots[0];
-  const seg0 = s.split("/")[0];
+  let ambiguous = false;
+  const seg0 = s.replace(/^\//, "").split("/")[0];
   if (seg0 && ROOT_ID_RE.test(seg0) && roots.some((r) => r.id === seg0)) {
     rootRec = roots.find((r) => r.id === seg0);
-    s = s.slice(seg0.length).replace(/^\/+/, "");
+    s = s.slice(s.indexOf(seg0) + seg0.length).replace(/^\/+/, "");
+  } else if (roots.length > 1) {
+    // multi-root: does the first segment name ANOTHER root (by alias or
+    // exact path match)? Say so instead of silently using roots[0].
+    const aliasHit = roots.find((r) => {
+      const a = String(r.alias || "").toLowerCase();
+      const p = String(r.path || "").toLowerCase();
+      return a && a === seg0.toLowerCase() || p && p === seg0.toLowerCase();
+    });
+    if (aliasHit) {
+      rootRec = aliasHit;
+      s = s.slice(s.indexOf(seg0) + seg0.length).replace(/^\/+/, "");
+    } else {
+      ambiguous = true; // resolved to roots[0] below + flagged in the answer
+    }
   }
   const parts = s.split("/").filter((p) => p && p !== ".");
   if (parts.includes("..")) {
@@ -368,7 +415,15 @@ async function resolveGuarded(rel, opts) {
       throw new OpFail(403, { error: "writes are disabled for this folder in the Open File Bridge settings" });
     }
   }
-  return { rootRec, parts, relInRoot };
+  return { rootRec, parts, relInRoot, ambiguous };
+}
+
+/** Canonical path echo for endpoint answers (pilot item 7): includes the
+ * root id prefix ONLY when several folders are shared, so the value can
+ * be fed back as a path and lands in the same root. */
+async function echoPath(rg) {
+  const roots = await enabledRoots();
+  return (roots.length > 1 ? rg.rootRec.id + "/" : "") + rg.relInRoot;
 }
 
 /** Walk to the parent dir of `parts`; returns {dir, fileName} or null. */

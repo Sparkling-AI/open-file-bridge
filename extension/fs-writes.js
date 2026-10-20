@@ -8,6 +8,25 @@
 
 /* ---------------- plain writes ---------------- */
 
+/** Pilot items 7+10: the write answer's path fields must round-trip.
+ * written = the path WITHOUT a leading / (models used to feed "/x" back
+ * and older bridges rejected it); with several roots shared it KEEPS the
+ * root id prefix so it lands in the same folder. root_id is always
+ * present; root_name is the display alias for answers. */
+function writtenFields(rg) {
+  return {
+    written: (rootsCountCached > 1 ? rg.rootRec.id + "/" : "") + rg.relInRoot,
+    root_id: rg.rootRec.id,
+    root_name: rg.rootRec.alias || rg.rootRec.id,
+  };
+}
+
+// refreshed before each write answer (cheap; avoids re-querying IDB per field)
+let rootsCountCached = 1;
+async function refreshRootsCount() {
+  try { rootsCountCached = (await enabledRoots()).length; } catch (e) { rootsCountCached = 1; }
+}
+
 async function epWrite(body, isB64) {
   const rg = await resolveGuarded(unquoteComp(body.path || ""), { forWrite: true });
   let bytes;
@@ -24,19 +43,19 @@ async function epWrite(body, isB64) {
   const rr = await rateCheck(bytes.length);
   if (!rr.ok) return fsFail(429, { error: rr.err, rate_limited: true, hint: "relay this to the user and wait for their confirmation" });
   const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts);
+  await refreshRootsCount();
+  const wf = writtenFields(rg);
+  const extra = (rg.ambiguous ? { root_note: "several folders are shared — this path resolved to '" +
+    (rg.rootRec.alias || rg.rootRec.id) + "'. Prefix future paths with a root id." } : {});
   if (bytes.length > CHUNK) {
     // chunked transfer (plan §4.1) — same response shape on success
     const res = await chunkedWrite(rg.rootRec, rg.parts, bytes);
     await auditRow({ endpoint: isB64 ? "/write_b64" : "/write", method: "POST", path: rg.relInRoot, size: bytes.length, status: 200 });
-    return fsOk(Object.assign(res, { snapshot: snap }));
+    return fsOk(Object.assign(res, { snapshot: snap }, wf, extra));
   }
   await writeFileBytes(rg.rootRec, rg.parts, bytes);
   await auditRow({ endpoint: isB64 ? "/write_b64" : "/write", method: "POST", path: rg.relInRoot, size: bytes.length, status: 200 });
-  return fsOk({ ok: true, written: writtenPathFor(rg), bytes: bytes.length, snapshot: snap });
-}
-
-function writtenPathFor(rg) {
-  return "/" + rg.relInRoot;
+  return fsOk(Object.assign({ ok: true, bytes: bytes.length, snapshot: snap }, wf, extra));
 }
 
 /* ---------------- chunked transfer protocol ---------------- */
@@ -66,7 +85,9 @@ async function chunkedWrite(rootRec, parts, bytes) {
   }
   await writeChunkParts(rootRec, tid, bytes, 0);
   await finalizeTransfer(rootRec, parts, rec, tid);
-  return { ok: true, written: "/" + parts.join("/"), bytes: bytes.length, chunked: true, tid: tid };
+  return { ok: true, written: (rootsCountCached > 1 ? rootRec.id + "/" : "") + parts.join("/"),
+    root_id: rootRec.id, root_name: rootRec.alias || rootRec.id,
+    bytes: bytes.length, chunked: true, tid: tid };
 }
 
 async function writeChunkParts(rootRec, tid, bytes, startPartIdx) {
@@ -183,7 +204,7 @@ async function epWriteB64Chunk(body) {
     const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts);
     await finalizeTransfer(rg.rootRec, rg.parts, rec, tid);
     await auditRow({ endpoint: "/write_b64_chunk", method: "POST", path: rg.relInRoot, size: rec.received, status: 200 });
-    return fsOk({ ok: true, written: "/" + rg.relInRoot, bytes: rec.received, tid: tid, snapshot: snap, last: true });
+    return fsOk(Object.assign({ ok: true, bytes: rec.received, tid: tid, snapshot: snap, last: true }, writtenFields(rg)));
   }
   return fsOk({ ok: true, tid: tid, received: rec.received, total: body.total, last: false });
 }
@@ -279,7 +300,7 @@ async function epDelete(body) {
     await copyFileToFile(file, dst);
     await w.dir.removeEntry(w.fileName);
     await auditRow({ endpoint: "/delete", method: "POST", path: rg.relInRoot, size: file.size, status: 200 });
-    return fsOk({ ok: true, deleted: rg.relInRoot, trash: TRASH_DIR + "/" + ts + "/", size: file.size });
+    return fsOk({ ok: true, deleted: rg.relInRoot, root_id: rg.rootRec.id, trash: TRASH_DIR + "/" + ts + "/", size: file.size });
   }
   // directory: move the subtree
   try {
@@ -289,7 +310,7 @@ async function epDelete(body) {
   }
   await moveDirToTrash(rg.rootRec, rg.parts, ts);
   await auditRow({ endpoint: "/delete", method: "POST", path: rg.relInRoot, status: 200 });
-  return fsOk({ ok: true, deleted: rg.relInRoot, trash: TRASH_DIR + "/" + ts + "/" });
+  return fsOk({ ok: true, deleted: rg.relInRoot, root_id: rg.rootRec.id, trash: TRASH_DIR + "/" + ts + "/" });
 }
 
 async function moveDirToTrash(rootRec, parts, ts) {
@@ -422,7 +443,7 @@ async function epRestore(kind, body) {
   const file = await srcFileHandle.getFile();
   await writeFileBytes(rg.rootRec, rg.parts, new Uint8Array(await file.arrayBuffer()));
   await auditRow({ endpoint: "/" + kind + "/restore", method: "POST", path: rg.relInRoot, status: 200, size: file.size });
-  return fsOk({ ok: true, restored: rg.relInRoot, from: kind + "/" + ts, snapshot: snap });
+  return fsOk({ ok: true, restored: rg.relInRoot, root_id: rg.rootRec.id, from: kind + "/" + ts, snapshot: snap });
 }
 
 /* ---------------- maintenance sweep: trash expiry + audit cap --------
@@ -569,7 +590,8 @@ async function epZip(body) {
   const snap = await snapshotBeforeWrite(rgOut.rootRec, rgOut.parts);
   await writeFileBytes(rgOut.rootRec, rgOut.parts, zipped);
   await auditRow({ endpoint: "/zip", method: "POST", path: rgOut.relInRoot, size: zipped.length, status: 200 });
-  return fsOk({ ok: true, written: "/" + rgOut.relInRoot, bytes: zipped.length, members: members.length, snapshot: snap });
+  await refreshRootsCount();
+  return fsOk(Object.assign({ ok: true, bytes: zipped.length, members: members.length, snapshot: snap }, writtenFields(rgOut)));
 }
 
 async function epUnzip(body) {

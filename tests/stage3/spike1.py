@@ -312,8 +312,13 @@ except Exception:
 if "entries" not in data:
     raise AssertionError("S2 no entries, status=" + str(d["status"]) + " body=" + str(d["body"])[:400])
 files = sorted(e["path"] for e in data["entries"] if e["type"] == "file")
-_r = "S2 /list files=" + str(files)
-assert "notes/readme.txt" in files, _r
+_r = "S2 /list top-level files=" + str(files)
+assert "notes/readme.txt" not in files, "bare /list must be depth-1 (pilot): " + _r
+d0 = (await ofb_fetch("GET", "/list?depth=0")).to_py()
+data0 = json.loads(d0["body"])
+files0 = sorted(e["path"] for e in data0["entries"] if e["type"] == "file")
+_r += " | depth=0 files=" + str(files0)
+assert "notes/readme.txt" in files0, _r
 print(_r); RESULT = _r
 ''',
         "s3_read": '''d = (await ofb_fetch("GET", "/read?path=notes/readme.txt")).to_py()

@@ -3069,3 +3069,53 @@ Listing now says "anywhere you can install the bridge skill… hosted
 services that don't let you install skills aren't supported". Honest
 caveat recorded here (not the listing): cloud-https OWUI is verified by
 mechanism, not live-tested — all live runs were local http OWUI.
+
+## Pilot-feedback release 3.4.0 (2026-10-20)
+
+Input: a 4-week corporate pilot report (13 items, 7 users, ~100 chats,
+extension 3.3.1 + skill 3.3.3/3.3.4-EXT) + the trial company's derived
+skill 3.3.7-EXT (bootstrap fixes tested against a mock relay). All 13
+items shipped in ext 3.4.0 + skill 3.4.0-EXT — details in
+docs/ROADMAP.md § "pilot-feedback release 3.4.0". Gotchas learned:
+
+- Stock OWUI executes TYPE-LESS postMessages as code
+  (pyodideSandboxHost.ts `if (!data.type || data.type === 'execute')`,
+  still true in 0.12.2 + main 2026-10-16): each bridge reply reset the
+  running cell's stdout + added a bogus stderr line. Fix: relay replies
+  now carry `type:"ofb"`. One-way compatible both directions (the
+  skill's _on_msg never read `type`). The upstream guard (require a
+  `code` field) is worth proposing separately.
+- `+`-as-space: models overwhelmingly use Python urlencode (spaces ->
+  `+`); decodeURIComponent alone left "My+Folder" literal. Query values
+  now get `+`→%20 BEFORE %-decoding (URLSearchParams semantics); a
+  literal `+` in a filename must be sent %2B (documented in skill +
+  bad-path error). Desktop app was already correct (parse_qs).
+- Error-shape unification: SW/relay failures used to answer
+  {ok:false,status:0,error} with NO body while the adapter answered
+  {status,body} — the skill died KeyError:'body' (86x in the pilot).
+  Now EVERY envelope failure carries body=JSON.stringify({error,…}).
+- /list depth contract chosen to break nobody: bare /list (no path) =
+  top level + hint (kills the pilot's context-flood/timeout mode);
+  /list?path=X stays recursive; depth=0 forces recursion at the root;
+  depth=N/max_entries/fields=path,type work everywhere. spike1 s2
+  updated to pin BOTH behaviors.
+- written round-trip: write answers return `written` WITHOUT a leading
+  `/` (multi-root: `r3/rel/path`) plus `root_id`/`root_name`;
+  resolveGuarded now ACCEPTS a single leading `/` (models fed "/x"
+  back and got 400; `//` stays rejected — n1 negative unchanged).
+- Credential filter: bare-credential-STEM rule (split stem on -_. ;
+  refuse when the stem or its LAST segment is a credential word) —
+  Q3_token_usage.xlsx serves, api_token.json refuses. 18-case node
+  unit check + n5/n5b harness cells.
+- Pre-existing master bug: tests/stage3/negatives_test.py's spike1
+  extraction needle never matched after the 09-11 spike1 change —
+  the suite was broken on master since 2026-09-11. Needle = closing
+  `'''` + `py = py.replace` now.
+- CI build.yml wheel-count smoke 8 -> 9 (olefile for Outlook .msg).
+- relay.js byte-identical constraint (Stage-3 session #8) LIFTED for
+  this release: pilot item 9 required a relay.js change (type:"ofb").
+- Env fragility (test runs): a stray Nautilus on :99 shifts GTK
+  bookmark coordinates (Granted at y≈469 vs the assumed 373) — pkill
+  nautilus before suite runs; worker_transport_test needs
+  DISPLAY=:99 exported (it does not set it itself); playwright
+  browsers drift (wt needed chromium-1248).

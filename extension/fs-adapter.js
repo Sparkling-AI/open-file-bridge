@@ -18,6 +18,7 @@ const FS_WHEELS = [
   "et_xmlfile-2.0.0-py3-none-any.whl",
   "fonttools-4.63.0-py3-none-any.whl",
   "fpdf2-2.8.8-py3-none-any.whl",
+  "olefile-0.47-py2.py3-none-any.whl",
   "openpyxl-3.1.5-py2.py3-none-any.whl",
   "python_docx-1.2.0-py3-none-any.whl",
   "python_pptx-1.0.2-py3-none-any.whl",
@@ -63,6 +64,16 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     info.wheels = FS_WHEELS.length;
     info.security = await secMode();
     info.locked = info.security === "UNLOCKED";
+    // pilot 3.4.0: short actionable hints — models acted on /health without
+    // reading the skill (root /list on network shares flooded contexts)
+    info.hints = ros.length ? [
+      "list with a path (never the bare root of a big or network share): /list?path=<folder>&depth=1",
+      (ros.length > 1
+        ? "several folders shared — prefix every path with a root id (" +
+          ros.map((r) => r.id).join(", ") + "): " + ros[0].id + "/sub/file.ext"
+        : "paths are relative to the shared folder; no leading / needed"),
+      "keep each request under ~45 s — the host kills code cells at 60 s",
+    ] : ["no folder chosen yet — the user must click the Open File Bridge toolbar icon and pick one"];
     return fsOk(info);
   }
 
@@ -145,17 +156,32 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
 
   try {
     if (method === "GET" && path === "/list") {
-      const rel = unquoteComp(q.path || ".");
+      const rel = formUnquote(q.path || ".");
       const roots = await enabledRoots();
       if (!roots.length) throw new OpFail(503, { error: "no shared folder configured — click the Open File Bridge toolbar icon and choose a folder" });
       let rootRec = roots[0];
       let startParts = [];
+      let ambiguous = false;
       if (rel && rel !== "." && rel !== "/") {
         const seg0 = rel.split("/")[0];
         if (seg0 && ROOT_ID_RE.test(seg0) && roots.some((r) => r.id === seg0)) {
           rootRec = roots.find((r) => r.id === seg0);
           const rest = rel.slice(seg0.length).replace(/^\/+/, "");
           startParts = rest.split("/").filter(Boolean);
+        } else if (roots.length > 1) {
+          const aliasHit = roots.find((r) => {
+            const a = String(r.alias || "").toLowerCase();
+            const p = String(r.path || "").toLowerCase();
+            return a && a === seg0.toLowerCase() || p && p === seg0.toLowerCase();
+          });
+          if (aliasHit) {
+            rootRec = aliasHit;
+            const rest = rel.slice(seg0.length).replace(/^\/+/, "");
+            startParts = rest.split("/").filter(Boolean);
+          } else {
+            startParts = rel.split("/").filter(Boolean);
+            ambiguous = true;
+          }
         } else {
           startParts = rel.split("/").filter(Boolean);
         }
@@ -173,7 +199,25 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
           hint: "tell the user: click the Open File Bridge toolbar icon and press Reconnect — the folder is NOT re-picked, permission is re-asked on the stored handle",
         });
       }
-      return await listEndpoint(rootRec, startParts);
+      // pilot 3.4.0: a BARE root listing is depth-1 + hints (a recursive
+      // root /list on a network share flooded model contexts / timed out,
+      // 25× in the pilot); an explicit path keeps the recursive default
+      // (existing callers rely on it), and depth/max_entries/fields work
+      // everywhere. depth=0 means "as deep as before" (unbounded).
+      const atRoot = !startParts.length;
+      const depthReq = q.depth !== undefined
+        ? parseInt(q.depth, 10)
+        : (atRoot ? 1 : 0);
+      const maxEntries = q.max_entries !== undefined
+        ? Math.max(1, Math.min(parseInt(q.max_entries, 10) || MAX_LIST, 2000))
+        : MAX_LIST;
+      const fieldsParam = String(q.fields || "").split(",").map((s) => s.trim())
+        .filter(Boolean);
+      const wantFields = fieldsParam.length
+        ? new Set(fieldsParam.map((f) => f.toLowerCase()))
+        : null;
+      const depth = Number.isFinite(depthReq) && depthReq > 0 ? depthReq : 0;
+      return await listEndpoint(rootRec, startParts, { depth, maxEntries, wantFields, ambiguous });
     }
 
     if (method === "GET" && path === "/read") return await epRead(q);
@@ -304,7 +348,7 @@ async function epMovedRead(path, q) {
   // not a generic adapter error)
   let file = null;
   try {
-    const rg = await resolveGuarded(unquoteComp(q.path || ""));
+    const rg = await resolveGuarded(formUnquote(q.path || ""));
     file = await getFileFor(rg.rootRec, rg.parts);
   } catch (e) {
     if (e instanceof OpFail) return fsFail(e.status, e.obj);
@@ -321,7 +365,11 @@ async function epMovedRead(path, q) {
 
 /* ---------------- meta helpers ---------------- */
 
-async function listEndpoint(rootRec, startParts) {
+async function listEndpoint(rootRec, startParts, opts) {
+  const o = opts || {};
+  const depth = o.depth || 0;            // 0 = unbounded (pre-3.4 behavior)
+  const maxEntries = o.maxEntries || MAX_LIST;
+  const wantFields = o.wantFields || null;
   const pats = await allIgnorePatterns(rootRec);
   const entries = [];
   let truncated = false;
@@ -331,42 +379,64 @@ async function listEndpoint(rootRec, startParts) {
     catch (e) { return fsFail(404, { error: "not a directory: " + startParts.join("/") }); }
   }
   const t0 = Date.now();
-  async function rec(dir, prefixParts) {
+  async function rec(dir, prefixParts, d) {
     for await (const [name, h] of dir.entries()) {
-      if (entries.length >= MAX_LIST) { truncated = true; return; }
+      if (entries.length >= maxEntries) { truncated = true; return; }
       const relParts = prefixParts.concat(name);
       const rel = relParts.join("/");
       const isDir = h.kind === "directory";
       if (ignoreMatch(rel, isDir, pats)) continue;
       if (isDir) {
-        entries.push({ path: rel, type: "dir", size: null, mtime: null });
-        await rec(h, relParts);
-        if (entries.length >= MAX_LIST) { truncated = true; return; }
+        entries.push(mkEntry(rel, "dir", null, null));
+        if (!depth || d < depth) {
+          await rec(h, relParts, d + 1);
+          if (entries.length >= maxEntries) { truncated = true; return; }
+        }
       } else {
         let size = null, mtime = null;
-        try { const f = await h.getFile(); size = f.size; mtime = Math.floor(f.lastModified / 1000); }
-        catch (e) {}
-        entries.push({ path: rel, type: "file", size: size, mtime: mtime });
+        if (!wantFields || wantFields.has("size") || wantFields.has("mtime")) {
+          try {
+            const f = await h.getFile();
+            if (!wantFields || wantFields.has("size")) size = f.size;
+            if (!wantFields || wantFields.has("mtime")) mtime = Math.floor(f.lastModified / 1000);
+          } catch (e) {}
+        }
+        entries.push(mkEntry(rel, "file", size, mtime));
       }
       if (Date.now() - t0 > 10000) { truncated = true; return; }
     }
   }
-  await rec(startDir, startParts);
+  function mkEntry(rel, type, size, mtime) {
+    const e = { path: rel, type: type };
+    if (type === "dir") return e;                       // dirs never had size/mtime
+    if (!wantFields) { e.size = size; e.mtime = mtime; return e; }
+    if (wantFields.has("size")) e.size = size;
+    if (wantFields.has("mtime")) e.mtime = mtime;
+    return e;
+  }
+  await rec(startDir, startParts, 1);
   await auditRow({ endpoint: "/list", method: "GET", path: startParts.join("/") || ".", status: 200, size: entries.length });
-  return fsOk(Object.assign(
-    { root: rootRec.alias || rootRec.id, root_id: rootRec.id, entries: entries, truncated: truncated },
-    truncated ? { hint: "partial listing — folder exceeded the entry/time cap; narrow with path=" } : {}));
+  const out = { root: rootRec.alias || rootRec.id, root_id: rootRec.id, entries: entries, truncated: truncated };
+  if (depth === 1 && !startParts.length) {
+    out.depth = 1;
+    out.hint = "top level only — call /list?path=<folder> to go deeper, or depth=N for N levels (a recursive root listing can flood the context on big shares)";
+  } else if (depth > 1) {
+    out.depth = depth;
+  }
+  if (truncated && !out.hint) out.hint = "partial listing — folder exceeded the entry/time cap; narrow with path= or max_entries=";
+  if (o.ambiguous) {
+    out.root_note = "several folders are shared and this path had NO root id — it resolved to '" +
+      (rootRec.alias || rootRec.id) + "' (" + rootRec.id + "). Prefix paths with a root id (" +
+      (await enabledRoots()).map((r) => r.id).join(", ") + ") to target another folder.";
+  }
+  return fsOk(out);
 }
 
 /* ---------------- read endpoints ---------------- */
 
 async function epRead(q) {
-  const rg = await resolveGuarded(unquoteComp(q.path || ""));
+  const rg = await resolveGuarded(formUnquote(q.path || ""));
   const file = await getFileFor(rg.rootRec, rg.parts);
-  if (file.size > 2 * MAX_READ * 4) {
-    // overall cap guard (the windowed reader streams slices, but a
-    // multi-GB file would still be read fully — refuse up front)
-  }
   const name = rg.parts[rg.parts.length - 1];
   const ext = extOf(name);
   const base = name.toLowerCase();
@@ -382,7 +452,20 @@ async function epRead(q) {
   }
   const text = await file.text();
   await auditRow({ endpoint: "/read", method: "GET", path: rg.relInRoot, status: 200, size: file.size });
-  return fsOk(windowedRead(text, q, rg.relInRoot));
+  const echo = await echoPath(rg);
+  // pilot item 11: models parsed the "     N\t" prefixes as file content
+  // (JSONDecodeError on JSON, broken CSV). raw=1 returns the plain text;
+  // the numbered view stays the default for looking, not parsing.
+  if (String(q.raw || "") === "1" || String(q.raw || "").toLowerCase() === "true") {
+    let raw = text;
+    let truncated = false;
+    if (raw.length > MAX_READ) { raw = raw.slice(0, MAX_READ); truncated = true; }
+    const out = { path: echo, raw: true, content: raw,
+      total_lines: raw === text ? text.split("\n").length : undefined };
+    if (truncated) out.truncated = true;
+    return fsOk(out);
+  }
+  return fsOk(windowedRead(text, q, echo));
 }
 
 function windowedRead(text, q, relPath) {
@@ -417,7 +500,7 @@ function windowedRead(text, q, relPath) {
 }
 
 async function epPeek(q) {
-  const rg = await resolveGuarded(unquoteComp(q.path || ""));
+  const rg = await resolveGuarded(formUnquote(q.path || ""));
   const file = await getFileFor(rg.rootRec, rg.parts);
   const n = Math.max(16, Math.min(parseInt(q.bytes || "512", 10) || 512, 4096));
   const head = new Uint8Array(await file.slice(0, n).arrayBuffer());
@@ -445,18 +528,42 @@ async function epPeek(q) {
 }
 
 async function epReadB64(q) {
-  const rg = await resolveGuarded(unquoteComp(q.path || ""));
+  const rg = await resolveGuarded(formUnquote(q.path || ""));
   const file = await getFileFor(rg.rootRec, rg.parts);
+  // pilot item 6: range reads. offset/length let the client pull big
+  // files (over the 8 MB whole-file cap) in chunks, mirroring the write
+  // side's /write_b64_chunk. Both must be given together.
+  const off = q.offset !== undefined ? parseInt(q.offset, 10) : NaN;
+  const len = q.length !== undefined ? parseInt(q.length, 10) : NaN;
+  if (Number.isFinite(off) || Number.isFinite(len)) {
+    if (!(Number.isFinite(off) && Number.isFinite(len)) || off < 0 || len <= 0) {
+      return fsFail(400, { error: "range read needs BOTH offset>=0 and length>0 (bytes)" });
+    }
+    if (off >= file.size) {
+      return fsFail(416, { error: "offset " + off + " is past end of file (size " + file.size + ")", size: file.size });
+    }
+    if (len > MAX_BINARY) {
+      return fsFail(413, { error: "length exceeds the " + MAX_BINARY + "-byte cap — request smaller ranges" });
+    }
+    const slice = new Uint8Array(await file.slice(off, Math.min(off + len, file.size)).arrayBuffer());
+    await auditRow({ endpoint: "/read_b64", method: "GET", path: rg.relInRoot, status: 200, size: slice.length });
+    return fsOk({ path: await echoPath(rg), offset: off, size: slice.length,
+      total_size: file.size, b64: b64enc(slice),
+      truncated: off + slice.length < file.size });
+  }
   if (file.size > MAX_BINARY) {
-    throw new OpFail(413, { error: "file too large: " + file.size + " > " + MAX_BINARY + " bytes" });
+    throw new OpFail(413, {
+      error: "file too large: " + file.size + " > " + MAX_BINARY + " bytes",
+      hint: "read it in ranges: /read_b64?path=…&offset=0&length=8000000, then offset=8000000, … (a Python helper can loop)",
+    });
   }
   const bytes = new Uint8Array(await file.arrayBuffer());
   await auditRow({ endpoint: "/read_b64", method: "GET", path: rg.relInRoot, status: 200, size: bytes.length });
-  return fsOk({ path: q.path, size: bytes.length, b64: b64enc(bytes) });
+  return fsOk({ path: await echoPath(rg), size: bytes.length, b64: b64enc(bytes) });
 }
 
 async function epStat(q) {
-  const rg = await resolveGuarded(unquoteComp(q.path || ""));
+  const rg = await resolveGuarded(formUnquote(q.path || ""));
   const name = rg.parts[rg.parts.length - 1];
   const w = await walkToParent(rg.rootRec, rg.parts, false);
   if (!w) return fsFail(404, { error: "not found: " + q.path });
@@ -485,7 +592,7 @@ async function epStat(q) {
 }
 
 async function epSearch(q) {
-  const term = unquoteComp(q.q || "");
+  const term = formUnquote(q.q || "");
   if (!term) return fsFail(400, { error: "missing q" });
   const roots = await enabledRoots();
   if (!roots.length) throw new OpFail(503, { error: "no shared folder configured — click the Open File Bridge toolbar icon and choose a folder" });
@@ -498,7 +605,7 @@ async function epSearch(q) {
   const ctx = Math.max(0, Math.min(parseInt(q.context || "1", 10) || 1, 5));
   // app parity: exclude is a comma-separated list, matched against the rel path
   const excl = String(q.exclude || "").split(",").map((s) => s.trim()).filter(Boolean);
-  const glob = q.glob ? unquoteComp(q.glob) : null;
+  const glob = q.glob ? formUnquote(q.glob) : null;
   const needle = caseSensitive ? term : term.toLowerCase();
   const matches = [];
   let scanned = 0;
@@ -541,7 +648,7 @@ async function epSearch(q) {
 }
 
 async function epTree(q) {
-  const rg0 = unquoteComp(q.path || ".");
+  const rg0 = formUnquote(q.path || ".");
   const roots = await enabledRoots();
   if (!roots.length) throw new OpFail(503, { error: "no shared folder configured — click the Open File Bridge toolbar icon and choose a file" });
   let rootRec = roots[0];
@@ -696,7 +803,7 @@ async function epImageInfo(q) {
 }
 
 async function epImageB64(q) {
-  const rg = await resolveGuarded(unquoteComp(q.path || ""));
+  const rg = await resolveGuarded(formUnquote(q.path || ""));
   const file = await getFileFor(rg.rootRec, rg.parts);
   if (file.size > MAX_BINARY) {
     return fsFail(413, { error: "file too large: " + file.size + " > " + MAX_BINARY + " bytes" });

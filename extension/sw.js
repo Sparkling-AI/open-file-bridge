@@ -22,9 +22,21 @@ const MAX_INFLIGHT = 30;
 
 let inflight = 0;
 
-function swFail(id, error, status = 0) {
-  return { ofb: true, id, ok: false, status, error: String(error) };
+function swFail(id, error, status = 0, extra) {
+  // Pilot fix (2026-10-20): EVERY failure carries a body with the same
+  // {error, …} JSON shape adapter errors use — relay/SW failures used to
+  // answer {ok:false, status:0, error} with no body, and the skill's
+  // helpers died with KeyError: 'body' instead of showing the reason
+  // (86× in a 4-week pilot).
+  const obj = Object.assign({ error: String(error) }, extra || {});
+  return { ofb: true, id, ok: false, status, error: String(error),
+    body: JSON.stringify(obj) };
 }
+
+const PATH_WHY = "bad path: URL-encode the query — non-ASCII, spaces and " +
+  "'+' must be percent-encoded by the CALLER's helper (the skill's " +
+  "bridge_get does this; in raw Python use urllib.parse.quote(v, safe='/') " +
+  "and %2B for a literal '+'). Raw spaces/non-ASCII bytes are rejected.";
 
 async function handleOfbRequest(msg, sender) {
   const id = msg.id;
@@ -39,13 +51,13 @@ async function handleOfbRequest(msg, sender) {
 
   // ---- shape gate: narrow pipe only ----
   if (!/^\/[A-Za-z0-9_\-./?&=%+]*$/.test(path)) {
-    return swFail(id, "bad path", 0);
+    return swFail(id, PATH_WHY, 0);
   }
   if (!["GET", "POST", "DELETE"].includes(method)) {
     return swFail(id, "bad method", 0);
   }
   if (path.includes("..")) {
-    return swFail(id, "bad path", 0);
+    return swFail(id, "bad path: '..' is not allowed — address files relative to a shared root", 0);
   }
   let bodyText = null;
   if (msg.body !== undefined && msg.body !== null) {

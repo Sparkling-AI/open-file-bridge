@@ -120,13 +120,16 @@ except Exception as e:
 # lands while worker A is pending on the same id and the old _on_msg
 # resolved A's future with B's REQUEST (live incident: ofb_fetch "returned"
 # the request; bridge_get died with KeyError 'status'). The fixed bootstrap
-# gives every worker session-unique ids (_wid prefix) and only lets
+# gives every worker session-unique ids (wid prefix) and only lets
 # RESPONSES (messages with ok, never method) resolve futures.
+# 2026-10-20: bootstrap 3.4.0 moved state into _S — read the wid from
+# whichever variable exists so the cell works with both layouts.
 TWO_WORKER_CELL = '''
 import json
 from js import hlog
+_w = _S["wid"] if ("_S" in dir() or "_S" in globals()) else _wid
 d = await ofb_fetch("GET", "/version")
-hlog(json.dumps({"kind": "ver2w", "wid": _wid, "id": d.get("id"),
+hlog(json.dumps({"kind": "ver2w", "wid": _w, "id": d.get("id"),
                  "ok": d.get("ok"), "status": d.get("status"),
                  "method": d.get("method")}))
 '''
@@ -310,8 +313,10 @@ document.body.appendChild(f);
             except Exception:
                 continue
         return None
-    health = find_obj(log, '"health"')
-    version = find_obj(log, '"version"')
+    health = find_obj(log, '"kind": "health"')
+    # 2026-10-20: bootstrap 3.4.0 prints a {"version": …} summary on
+    # success — match the cell's own kind marker, not bare "version"
+    version = find_obj(log, '"kind": "version"')
 
     check("W1 worker /health 200 (skill bootstrap verbatim)",
           bool(health and health.get("status") == 200),

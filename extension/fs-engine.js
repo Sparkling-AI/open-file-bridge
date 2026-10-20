@@ -278,7 +278,10 @@ async function engineWriteOut(w) {
   const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts);
   await writeFileBytes(rg.rootRec, rg.parts, bytes);
   await auditRow({ endpoint: "/pdf_op", method: "POST", path: rg.relInRoot, size: bytes.length, status: 200 });
-  return { written: "/" + rg.relInRoot, bytes: bytes.length, snapshot: snap };
+  await refreshRootsCount();
+  return { written: (rootsCountCached > 1 ? rg.rootRec.id + "/" : "") + rg.relInRoot,
+    root_id: rg.rootRec.id, root_name: rg.rootRec.alias || rg.rootRec.id,
+    bytes: bytes.length, snapshot: snap };
 }
 
 function enginePageMaybeOpen() {

@@ -106,7 +106,7 @@ jobs:
             throw "bridge did not come up"
           }
           if (-not $health.addons.pdf) { throw "pymupdf missing from frozen build" }
-          if ($health.wheels -ne 8) { throw "expected 8 bundled wheels, got $($health.wheels)" }
+          if ($health.wheels -ne 9) { throw "expected 9 bundled wheels, got $($health.wheels)" }
           Write-Output "smoke OK: root=$($health.root) addons=$($health.addons) wheels=$($health.wheels)"
           Stop-Process -Id $p.Id -Force
 
@@ -255,7 +255,7 @@ jobs:
           echo "$H"
           echo "$H" | grep -q '"ok": *true'  || { echo "FAIL: health not ok"; kill $BP; exit 1; }
           echo "$H" | grep -q '"pdf": *true' || { echo "FAIL: pymupdf missing from frozen build"; kill $BP; exit 1; }
-          echo "$H" | grep -q '"wheels": *8' || { echo "FAIL: wheels not bundled"; kill $BP; exit 1; }
+          echo "$H" | grep -q '"wheels": *9' || { echo "FAIL: wheels not bundled"; kill $BP; exit 1; }
           kill $BP
           echo "smoke OK"
 

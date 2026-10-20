@@ -6,11 +6,11 @@ the Microsoft Store, not the CWS).
 
 ## 1. Package to upload
 
-`dist-stage3/open-file-bridge-extension-3.3.1.zip`
+`dist-extension/open-file-bridge-extension-3.4.0.zip`
 
-- Version 3.3.1 was manually zipped from the git-tracked `extension/`
-  directory and has been submitted for review. `manifest.json` is at the ZIP
-  root; 77 files; no `__MACOSX`/`.DS_Store`.
+- Version 3.4.0 (2026-10-20, pilot-feedback release) is zipped from the
+  git-tracked `extension/` directory (CI packages `v3.*` tags the same way).
+  `manifest.json` is at the ZIP root; no `__MACOSX`/`.DS_Store`.
 - ~46 MB compressed (~99 MB raw), driven by the bundled `vendor/tessdata-fast`
   OCR languages. Well under the store limit; the broad content-script matches
   and substantial bundled OCR assets may still increase review time.
@@ -18,9 +18,19 @@ the Microsoft Store, not the CWS).
   official `v3.*` tags and attached to the matching GitHub release. Chrome
   Web Store upload/publication remains manual. After any packaged extension
   change, bump `"version"`; the Store rejects a re-used version number.
-- Version 3.3.1 notes: manifest description shortened to 116 chars (store max
-  132); vestigial `storage` permission removed (all state lives in
-  IndexedDB; persistence + offscreen smoke re-verified after removal).
+- Version 3.4.0 notes: pilot-feedback release (13 items from a 4-week,
+  7-user corporate trial): '+'-as-space query decoding + explanatory
+  bad-path errors, every failure carries a JSON body, `/list` depth/
+  max_entries/fields params with depth-1 default at the share root,
+  `/read_b64` offset/length range reads, multi-root disambiguation
+  (root id in write answers, alias-prefixed paths, root_note warnings),
+  single leading `/` accepted on paths, `/read?raw=1`, `/health` hints
+  array, relay replies carry `type:"ofb"` (stock Open WebUI sandbox hosts
+  no longer execute them as code), narrowed credential-name filter
+  (business files like `Q3_token_usage.xlsx` are served), olefile wheel
+  bundled for Outlook `.msg`. Skill 3.4.0-EXT adopts the trial-hardened
+  bootstrap (URL-encoding helpers, BridgeError for both error shapes,
+  45 s timeouts, every helper in one block, `bridge_path`, `out()`).
 
 ## 2. Listing fields
 
