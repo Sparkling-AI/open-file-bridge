@@ -387,7 +387,11 @@ async function epVersionsRead(body) {
   const rel = unquoteComp(body.path || "");
   const ts = String(body.ts || "");
   if (!rel || !ts) return fsFail(400, { error: "missing path/ts" });
-  if (!/^\d{8}-\d{6}-[0-9a-f]{2}$/.test(ts)) {
+  // hexRand(2) yields FOUR hex chars (n bytes → 2n chars) while older
+  // docs implied 2 — accept both: all on-disk snapshot stamps are 4-char
+  // (seen in .ofb-snapshots/ since 2026-09-08); a 2-char-tight regex
+  // rejected every REAL stamp (bug found live by c7 on 2026-10-21).
+  if (!/^\d{8}-\d{6}-[0-9a-f]{2,4}$/.test(ts)) {
     return fsFail(400, { error: "bad ts — use one from /versions/list" });
   }
   const rg = await resolveGuarded(rel);
@@ -464,7 +468,10 @@ const AUDIT_MAX_ROWS = 1000;
 let _trashSweepMem = 0;
 
 function trashEntryTsMs(name) {
-  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-[0-9a-f]{2}$/
+  // [0-9a-f]{2,4}: tsStamp() = hexRand(2) = FOUR hex chars; the old
+  // {2}-tight regex never matched a real trash dir, so the 30-day TTL
+  // sweep silently skipped everything (found live 2026-10-21).
+  const m = /^(\d{4})(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})-[0-9a-f]{2,4}$/
     .exec(String(name || ""));
   if (!m) return null;
   const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]);

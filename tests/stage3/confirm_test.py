@@ -106,7 +106,7 @@ vb = json.loads(v["body"]) if v.get("body") else {{}}
 ts = (vb.get("versions") or [{{}}])[0].get("ts", "")
 r = (await ofb_fetch("POST", "/versions/read", json.dumps({{"path": f, "ts": ts}}))).to_py()
 rb = json.loads(r["body"]) if r.get("body") else {{}}
-cur = (await ofb_fetch("GET", "/read?path=" + f)).to_py()
+cur = (await ofb_fetch("GET", "/read?path=" + f + "&raw=1")).to_py()  # 3.4.0 raw=1: numbered view was never parseable (c7 written blind 2026-09-09, first runnable 2026-10-21)
 cb = json.loads(cur["body"]) if cur.get("body") else {{}}
 _r = "c7 w1=" + str(w1["status"]) + " w2=" + str(w2["status"]) + " ts=" + str(ts) + " read=" + str(rb.get("content")) + " live=" + str(cb.get("content"))
 assert w1["status"] == 200 and w2["status"] == 200, _r
@@ -353,8 +353,11 @@ def main():
             and "HARNESS-ERROR" not in txt2)
 
         if cid:
+            # confirmVerdict is async (IndexedDB) — evaluate must await it,
+            # else it stringifies the pending Promise as "{}" and the
+            # ok:true check can never pass (blind since 2026-09-09).
             vr = sw.evaluate(
-                f"() => JSON.stringify(confirmVerdict('{cid}', 'approved'))")
+                f"async () => JSON.stringify(await confirmVerdict('{cid}', 'approved'))")
             print("verdict resp:", vr)
             verdicts["B_verdict_ok"] = '"ok":true' in vr
         else:
@@ -378,14 +381,22 @@ def main():
         pg5.goto(base + "/harness-c5.html")
         deny_id = None
         t0 = time.time()
-        while time.time() - t0 < 15 and not deny_id:
+        # snapshot ids BEFORE the cell's ask exists: c4's timed-out ask
+        # stays armed (verdict=null) forever after — "newest null" still
+        # races and grabs it before c5's own ask is raised. Only an id
+        # that did NOT exist at scan start is c5's fresh ask.
+        pend0 = sw.evaluate(
+            "() => JSON.stringify(Array.from(CONFIRM_PENDING.keys()))")
+        known = set(json.loads(pend0)) if pend0 else set()
+        while time.time() - t0 < 25 and not deny_id:
             pend = sw.evaluate(
                 "() => JSON.stringify(Array.from(CONFIRM_PENDING.entries())"
                 ".map(e => [e[0], e[1].verdict, e[1].pathKey]))")
             try:
                 for eid, v, pk in json.loads(pend):
-                    if v is None and "target.txt" in pk:
+                    if eid not in known and v is None and "target.txt" in (pk or ""):
                         deny_id = eid
+                        break
             except Exception as e:
                 print("parse err", e)
             if not deny_id:
@@ -471,7 +482,7 @@ def main():
         # data-ofb-cards attribute are the observable surface.
         hp8 = SCRATCH / "harness-c8.html"
         hp8.write_text(engines_test.assemble_harness_page(
-            spike1.OWUI, engines_test.spike1_cells_python,
+            spike1.OWUI, engines_test.spike1_cells_python(),  # c8 unreachable since 09-11: c5 died first, so this missing () was never hit
             {"c8": cell("c8_card_lifecycle")}))
         pg8 = ctx.new_page()
         pg8.goto(base + "/harness-c8.html")
