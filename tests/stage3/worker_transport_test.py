@@ -57,12 +57,20 @@ def check(name, ok, detail=""):
 
 
 def skill_bootstrap():
-    """Extract the first python block after '## Bootstrap' from SKILL-EXT.md."""
+    """Extract the FULL python bootstrap from SKILL-EXT.md.
+
+    2026-10-23: the Bootstrap section gained the one-line fast path
+    (first ```python block). The full block is the LAST python block
+    before '## Paths' — extract that one."""
     text = SKILL.read_text()
-    m = re.search(r"## Bootstrap.*?```python\n(.*?)```", text, re.S)
+    m = re.search(r"## Bootstrap.*?## Paths", text, re.S)
     if not m:
+        raise SystemExit("cannot find Bootstrap section in SKILL-EXT.md")
+    blocks = re.findall(r"```python\n(.*?)```", m.group(0), re.S)
+    if not blocks:
         raise SystemExit("cannot extract bootstrap block from SKILL-EXT.md")
-    return m.group(1)
+    # the full bootstrap is the longest block (fast path is 1 line)
+    return max(blocks, key=len)
 
 
 def fetch_pyodide():

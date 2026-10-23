@@ -1,4 +1,4 @@
-"""Open File Bridge — Pyodide client (ofb_client) 3.5.0-inj.
+"""Open File Bridge — Pyodide client (ofb_client) 3.6.0-inj.
 
 Same helpers as the SKILL-EXT bootstrap, refactored for injection:
 exec()'d from js.OFB_CLIENT_PY inside Open WebUI's sandbox iframe.
@@ -20,7 +20,7 @@ try:
 except ImportError:
     parent = None
 
-OFB_CLIENT_VERSION = "3.5.0-inj"
+OFB_CLIENT_VERSION = "3.6.0-inj"
 _TOKEN = [""]
 _S = {"pending": {}, "n": 0, "bc": None, "relay": None, "roots": [],
       "wid": "w%08x" % random.getrandbits(32), "transport": None}

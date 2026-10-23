@@ -6,7 +6,7 @@ the Microsoft Store, not the CWS).
 
 ## 1. Package to upload
 
-`dist-extension/open-file-bridge-extension-3.5.0.zip`
+`dist-extension/open-file-bridge-extension-3.6.0.zip`
 
 - Version 3.4.0 (2026-10-20, pilot-feedback release) is zipped from the
   git-tracked `extension/` directory (CI packages `v3.*` tags the same way).
@@ -18,6 +18,14 @@ the Microsoft Store, not the CWS).
   official `v3.*` tags and attached to the matching GitHub release. Chrome
   Web Store upload/publication remains manual. After any packaged extension
   change, bump `"version"`; the Store rejects a re-used version number.
+- Version 3.6.0 (2026-10-23, pilot round 2 + runtime client injection):
+  everything in 3.5.0 plus the client injector — registered at runtime
+  for exactly the allowed OWUI origin (`scripting` +
+  `optional_host_permissions`, NO static broad match), one-line
+  bootstrap in sandbox cells, stdout-wipe fix for injected cells,
+  Remove-site tears registration down. Chrome 111+ for MAIN-world
+  dynamic registration.
+
 - Version 3.5.0 (2026-10-23, pilot round 2): `/find` filename search
   (case/accent-insensitive, wildcards), `/move` + `/mkdir` + batch
   `{"moves":[...]}` / `{"paths":[...]}` bodies (ONE approval card per

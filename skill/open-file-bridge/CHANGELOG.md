@@ -2,6 +2,14 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.6.0 — 2026-10-23 (extension 3.6.0: pilot round 2 + injection)
+
+Release line merging `fix/pilot-feedback-3.4` (3.4.0 → 3.5.0) and
+`feat/runtime-injection` into one build for external testing.
+Versions bumped: manifest 3.6.0, FS_VERSION 3.6.0-EXT, injected
+client 3.6.0-inj. Skill fast-path text unchanged from the
+feat/runtime-injection entry below.
+
 ## feat/runtime-injection — 2026-10-23 (with extension 3.5.0 + injection)
 
 - **One-line bootstrap fast path.** When the extension's 🔒 Security
