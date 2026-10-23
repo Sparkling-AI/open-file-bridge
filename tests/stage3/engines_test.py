@@ -389,7 +389,7 @@ def main():
                 "--window-size=1000,700",
                 "--window-position=140,60",
             ],
-            env={**os.environ, "DISPLAY": spike1.XDISPLAY},
+            env=spike1.xvfb_env(),
             no_viewport=True,
         )
 

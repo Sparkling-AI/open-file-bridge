@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text', and when the user attached a file in the chat and wants a changed or new file back. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.4.0-EXT (extension backend, TOKEN variant)
+# Local File Bridge — skill v3.5.0-EXT (extension backend, TOKEN variant)
 
 > **TOKEN variant — publish this only when the extension's 🔒 Security
 > card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`
@@ -60,6 +60,30 @@ re-elects automatically).
 7. **Errors are explicit — read them, don't guess.** Helpers raise
    `BridgeError` carrying the extension's own message. Never repeat a
    failed request unchanged.
+8. **Find a file before you use it — never guess a path** (E03/D03
+   failures). When the folder is unknown, call
+   `/find?name=<part of the name>` FIRST. A listing that says
+   `truncated: true` never means "not there" — narrow the `path` or
+   `/find` again. If `/find` (with `truncated: false`) finds nothing,
+   say what you searched and offer close names.
+9. **"Change / fix / update this file" means write the SAME path**
+   (E01: edits saved as `…_v2_updated.docx` — users lost track of
+   which file is current). The snapshot system makes overwrites
+   undoable; a NEW name only for a genuinely new, derived output
+   (summary, chart, export) or an asked-for copy.
+10. **Destructive steps run ONE at a time, sequentially** — never
+   `asyncio.gather` on deletes/moves/overwrites (E03: 12 parallel
+   deletes, 12 approval cards, 9 duplicates left behind). For batches,
+   use the batch endpoints (`/move {"moves": [...]}`,
+   `/delete {"paths": [...]}`) — ONE approval card covers the whole
+   batch. For more than ~5 items, show the plan and wait for a yes.
+11. **Never probe for packages** (`__import__`/`importlib`/try-import
+   loops): hosts install a package only when a cell has a literal
+   `import name` line, so probes report available packages as missing.
+   Write the import directly, as in the recipes.
+12. **Safety filters are not obstacles.** If a file is refused as a
+   credential or ignored by policy, tell the user why. NEVER suggest
+   renaming, copying or moving a file to get around a filter (F01).
 
 ## The sandbox is NOT the user's computer (details)
 
@@ -376,9 +400,11 @@ run the whole block again (rule 2).
 
 | Need | Call |
 |---|---|
-| does X exist / size / mtime | `bridge_get("/stat", {"path": p})` |
+| **where is file X (folder unknown)** | `bridge_get("/find", {"name": "part of the name"})` — case-/accent-insensitive, `*`/`?` wildcards, `path=`/`type=`/`max=` optional |
+| does X exist / size / mtime (path known) | `bridge_get("/stat", {"path": p})` |
 | what is in ONE folder (top level) | `bridge_get("/list", {"path": folder})` — non-recursive |
 | N levels under a folder | `bridge_get("/list", {"path": p, "depth": 3, "max_entries": 200, "fields": "path,type"})` |
+| entries whose NAME matches, in one folder tree | `bridge_get("/list", {"path": p, "name": "ärenden"})` (same folding as /find) |
 | full recursive listing | `bridge_get("/list", {"path": p, "depth": 0})` — 500 entries / 10 s cap; `truncated: true` = narrow the path |
 | folder structure (tree) | `bridge_get("/directory_tree", {"path": p, "max_depth": 2, "max_entries": 200})` |
 | find text in files | `bridge_get("/search", {"q": term, "glob": "docs/*.md", "context": 1, "max": 50})` |
@@ -392,8 +418,10 @@ names you need: `out([e["path"] for e in r["entries"] if …])`.
 network shares).
 
 Limits: reads ≤ 8 MB per whole file (`413` — but `read_binary` switches
-to ranges automatically for bigger files); ≤ 120 bridge requests per
-minute and ≤ 30 in flight; `BridgeError` messages name the real reason.
+to ranges automatically for bigger files); `/read?raw=1` pages are
+2 MB each (a full pass over a big log = a handful of calls, not ~50);
+≤ 120 bridge requests per minute and ≤ 30 in flight; `BridgeError`
+messages name the real reason.
 
 ## Reading & writing
 
@@ -401,16 +429,31 @@ minute and ≤ 30 in flight; `BridgeError` messages name the real reason.
   no line numbers. (`/read`'s REST answer adds a `"     N\t"` prefix to
   every line; `raw=1` returns plain text if you ever call it directly.)
 - Binary (xlsx, docx, pptx, pdf, images): `read_binary(p)`.
-- Write: `write_text(p, s)` / `write_binary(p, b)`. Prefer a NEW name
-  for results (`…_v2.xlsx`).
+- Write: `write_text(p, s)` / `write_binary(p, b)`. When asked to
+  CHANGE an existing file, write the SAME path (rule 9 — snapshots
+  make it undoable); a NEW name only for derived outputs. Writing to
+  a new folder path creates the folders; `/mkdir {"path": p}` exists
+  for empty-folder creation.
 - The write answer carries `written` (reuse it as a path — no leading
   `/`, root-prefixed when several folders are shared), `root_id`,
   `root_name` — name files for the user as `root_name/written`.
 - Overwrites and deletes of EXISTING files pop an Approve/Deny box in
   the user's page and wait ~20 s: approved → your call returns
-  normally; `confirmation_required` + `timed_out` → tell the user to
-  click Approve, wait, retry once; `denied` → do not retry, ask what
-  they want.
+  normally; `denied` → do not retry, ask what they want;
+  `confirmation_required` + `timed_out` → the box has DISAPPEARED.
+  Tell the user: "I need your approval to change `<file>`. When you
+  say go, an Approve box appears on this page for 20 seconds." Wait
+  for their reply, then retry the SAME request ONCE — the retry shows
+  a NEW box. (A late click on the old box is impossible; it closed.)
+
+**Moving / renaming / sorting files** — `POST /move {"from": p, "to": p}`
+moves or renames a file or folder inside the shared root (one approval
+card, worded as a move; destination must not exist — 409). Batch:
+`POST /move {"moves": [{"from", "to"}, …]}` and
+`POST /delete {"paths": [p, …]}` — ONE card for the whole batch
+("move 12 files"), every item's result reported in `results[]`; a
+partial failure returns 207 with `failed` and per-item reasons — say
+which originals are still in place, never leave silent duplicates.
 - Every overwrite keeps a snapshot (`/versions/list`, `/versions/read`,
   `/versions/restore`); deletes go to `.ofb-trash/` (`/trash/list`,
   `/trash/restore`). `/edit {"path", "edits": [{"from", "to"}],
@@ -574,6 +617,16 @@ only. Never type/copy base64 yourself, never print a data URL to look
 at it, and never echo it as `![name](data_url)` (15–20 K wasted output
 tokens and corrupted images in the trial).
 
+**A local image file** (screenshot, photo, slide export): fetch it as
+PNG with `/image_b64?path=…&format=png` (3.5.0) and print the data
+line — no base64 copying, no matplotlib round trip:
+
+```python
+img = await bridge_get("/image_b64", {"path": p, "format": "png"})
+w = None   # optionally also copy into the folder via write_binary
+print(img["data_url"])          # starts with data:image/png;base64,
+```
+
 ```python
 import io, base64
 import matplotlib.pyplot as plt
@@ -637,9 +690,9 @@ into a dict/list across iterations, print it ONCE at the end (`out()`).
 
 ## Method cheat (405 enforces it)
 
-Reads are **GET** with query params — `/list /read /peek /stat /search
-/directory_tree /image_info /image_b64 /pdf_text /ocr`; writes &
+Reads are **GET** with query params — `/list /find /read /peek /stat
+/search /directory_tree /image_info /image_b64 /pdf_text /ocr`; writes &
 actions are **POST** with a JSON body — `/write /write_b64
-/write_b64_chunk /write_many /edit /delete /zip /unzip /versions/*
-/trash/* /ocr_pdf /pdf_op`. `/list` is THE listing endpoint — `/files`,
-`/ls`, `/dir` do not exist; the endpoint table above is complete.
+/write_b64_chunk /write_many /edit /delete /move /mkdir /zip /unzip
+/versions/* /trash/* /ocr_pdf /pdf_op`. `/list` is THE listing endpoint —
+`/files`, `/ls`, `/dir` do not exist; the endpoint table above is complete.

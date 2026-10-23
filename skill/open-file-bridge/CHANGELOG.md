@@ -2,6 +2,21 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.5.0-EXT — 2026-10-23 (with extension 3.5.0)
+
+Pilot round 2 (a scripted 38-test run against ext 3.3.1, 2026-10-22,
+plus the 4-week trial write-ups): reading and Q&A were correct in every
+test; the remaining failures were file mechanics. New rules: find a
+file before using it (`/find`, never guess a path, `truncated` never
+means "not there"); "change this file" writes the SAME path (edits
+saved as `_v2` copies confused users); destructive steps run one at a
+time with batch endpoints for multi-file work; never probe packages
+with `__import__`; never suggest routing around safety filters.
+Documented `/move` + `/mkdir` + batch bodies, the corrected
+timed-out-approval wording (the card self-closes; retry raises a new
+one), `/list name=` filter, 2 MB raw read pages, `/image_b64
+format=png`, and image display via the host's `data:image/png` line.
+
 ## 3.4.0-EXT — 2026-10-20 (with extension 3.4.0)
 
 Pilot-feedback release: everything below fixes something that failed in

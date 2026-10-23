@@ -216,7 +216,7 @@ hints = b.get("hints")
 _r = "p7 hints=" + json.dumps(hints)[:120] if isinstance(hints, list) else "p7 NO HINTS"
 assert d["status"] == 200 and isinstance(hints, list) and len(hints) >= 2 \\
     and any("depth" in str(x) or "list" in str(x) for x in hints), _r
-assert b.get("version") == "3.4.0-EXT", "version: " + str(b.get("version"))
+assert b.get("version") == "3.5.0-EXT", "version: " + str(b.get("version"))
 print(_r); RESULT = _r
 ''',
         "p8_list_params": f'''d = (await ofb_fetch("GET", "/list?path={F}&depth=1&fields=path,type")).to_py()
@@ -229,6 +229,107 @@ d2 = (await ofb_fetch("GET", "/list?path={F}/Ärenden 2026")).to_py() if False e
 b2 = json.loads(d2["body"]) if d2.get("body") else {{}}
 _r += " | utf8-folder entries=" + str(len(b2.get("entries") or []))
 assert d2["status"] == 200 and (b2.get("entries") or []), _r
+print(_r); RESULT = _r
+''',
+        # ---- round-2 pilot cells (2026-10-23, extension 3.5.0) ----
+        "p9_find": f'''# /find (item 16): accent+case-insensitive filename search
+d = (await ofb_fetch("GET", "/find?name=" + __import__("urllib.parse", fromlist=["quote"]).quote("my folder notes"))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+mm = b.get("matches") or []
+_r = "p9 matches=" + str(len(mm)) + " first=" + (mm[0]["path"] if mm else "none")
+assert d["status"] == 200 and mm and mm[0]["path"].endswith("My Folder notes.txt"), _r + " raw: " + str(d)[:300]
+# wildcard
+d2 = (await ofb_fetch("GET", "/find?name=bigblob*&type=file")).to_py()
+b2 = json.loads(d2["body"]) if d2.get("body") else {{}}
+mm2 = b2.get("matches") or []
+_r += " | wildcards=" + str(len(mm2))
+assert d2["status"] == 200 and any("bigblob.bin" in m["path"] for m in mm2), _r
+# no pattern -> 400
+d3 = (await ofb_fetch("GET", "/find")).to_py()
+_r += " | nopat=" + str(d3["status"])
+assert d3["status"] == 400, _r
+print(_r); RESULT = _r
+''',
+        "p10_move_mkdir": f'''# /mkdir + /move (item 15). confirm_scope=off in this suite: moves are
+# destructive-scope ops but scope "off" gates nothing (c6 pattern).
+d = (await ofb_fetch("POST", "/mkdir", json.dumps({{"path": "{F}/Sorted {RUN}"}}))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "p10 mkdir=" + str(d["status"]) + " created=" + str(b.get("created"))
+assert d["status"] == 200 and b.get("created") == "{F}/Sorted {RUN}", _r + " raw: " + str(d)[:300]
+# move a file into it
+src = "{F}/p10-{RUN}.txt"
+w = (await ofb_fetch("POST", "/write", json.dumps({{"path": src, "content": "movable"}}))).to_py()
+mv = (await ofb_fetch("POST", "/move", json.dumps({{"from": src, "to": "{F}/Sorted {RUN}/moved.txt"}}))).to_py()
+mb = json.loads(mv["body"]) if mv.get("body") else {{}}
+_r += " | move=" + str(mv["status"]) + " moved=" + str(mb.get("moved"))
+assert mv["status"] == 200 and mb.get("moved") == "{F}/Sorted {RUN}/moved.txt", _r + " raw: " + str(mv)[:300]
+# old path gone, new path readable (quote: the folder name has a space)
+_qp = __import__("urllib.parse", fromlist=["quote"]).quote
+old = (await ofb_fetch("GET", "/read?path=" + _qp(src) + "&raw=1")).to_py()
+new = (await ofb_fetch("GET", "/read?path=" + _qp("{F}/Sorted {RUN}/moved.txt") + "&raw=1")).to_py()
+_r += " | old=" + str(old["status"]) + " new=" + str(new["status"])
+assert old["status"] == 404 and new["status"] == 200, _r
+# destination-exists refused (409) — onto a DIFFERENT existing file
+w2 = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/Sorted {RUN}/occupied.txt", "content": "occupied"}}))).to_py()
+mv2 = (await ofb_fetch("POST", "/move", json.dumps({{"from": "{F}/Sorted {RUN}/moved.txt", "to": "{F}/Sorted {RUN}/occupied.txt"}}))).to_py()
+_r += " | exists=" + str(mv2["status"])
+assert mv2["status"] == 409, _r + " raw: " + str(mv2)[:200]
+# move into itself refused (400) — from == to and to inside from
+mv3 = (await ofb_fetch("POST", "/move", json.dumps({{"from": "{F}/Sorted {RUN}", "to": "{F}/Sorted {RUN}/sub"}}))).to_py()
+_r += " | self=" + str(mv3["status"])
+assert mv3["status"] == 400, _r
+print(_r); RESULT = _r
+''',
+        "p11_batch_ops": f'''# batch move + batch delete (item 15): ONE call, results[] per item
+movs = []
+for i in range(3):
+    src = "{F}/p11-{RUN}-" + str(i) + ".txt"
+    await ofb_fetch("POST", "/write", json.dumps({{"path": src, "content": "x" * i}}))
+    movs.append({{"from": src, "to": "{F}/Sorted {RUN}/b" + str(i) + ".txt"}})
+bm = (await ofb_fetch("POST", "/move", json.dumps({{"moves": movs}}))).to_py()
+bb = json.loads(bm["body"]) if bm.get("body") else {{}}
+_r = "p11 bmove=" + str(bm["status"]) + " moved=" + str(bb.get("moved")) + " failed=" + str(bb.get("failed"))
+assert bm["status"] == 200 and bb.get("moved") == 3 and bb.get("failed") == 0, _r + " raw: " + str(bm)[:300]
+bd = (await ofb_fetch("POST", "/delete", json.dumps({{"paths": ["{F}/Sorted {RUN}/b0.txt", "{F}/Sorted {RUN}/b1.txt", "{F}/Sorted {RUN}/nope-{RUN}.txt"]}}))).to_py()
+db = json.loads(bd["body"]) if bd.get("body") else {{}}
+_r += " | bdel=" + str(bd["status"]) + " deleted=" + str(db.get("deleted")) + " failed=" + str(db.get("failed"))
+assert bd["status"] == 207 and db.get("deleted") == 2 and db.get("failed") == 1, _r + " raw: " + str(bd)[:400]
+res = db.get("results") or []
+assert any("no such file" in str(r.get("error")) for r in res if not r.get("ok")), "failure reason missing: " + _r
+print(_r); RESULT = _r
+''',
+        "p12_list_name_filter": f'''# /list?name= (item 17): folded filter + fields
+d = (await ofb_fetch("GET", "/list?path={F}&name=" + __import__("urllib.parse", fromlist=["quote"]).quote("ärenden"))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+ent = b.get("entries") or []
+_r = "p12 entries=" + str(len(ent)) + " paths=" + str([e["path"] for e in ent])[:120]
+assert d["status"] == 200 and ent and all("Ärenden" in e["path"] for e in ent), _r + " raw: " + str(d)[:300]
+d2 = (await ofb_fetch("GET", "/list?path={F}&name=zzz-nothing")).to_py()
+b2 = json.loads(d2["body"]) if d2.get("body") else {{}}
+_r += " | empty=" + str(len(b2.get("entries") or []))
+assert d2["status"] == 200 and not (b2.get("entries") or []), _r
+print(_r); RESULT = _r
+''',
+        "p13_raw_read_pages": f'''# /read?raw=1 page is now 2 MB (item 18) — 250k chars must NOT truncate
+big = "x" * 250000
+w = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/p13-{RUN}.txt", "content": big}}))).to_py()
+d = (await ofb_fetch("GET", "/read?path={F}/p13-{RUN}.txt&raw=1")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "p13 len=" + str(len(b.get("content") or "")) + " trunc=" + str(b.get("truncated"))
+assert d["status"] == 200 and b.get("content") == big and not b.get("truncated"), _r
+print(_r); RESULT = _r
+''',
+        "p14_svg_mime": f'''# /image_b64 SVG labeling (bug report): .svg must NOT be image/jpeg
+import base64
+svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#4d83d8"/></svg>'
+w = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/p14-{RUN}.svg", "content": svg}}))).to_py()
+d = (await ofb_fetch("GET", "/image_b64?path={F}/p14-{RUN}.svg")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+pre = (b.get("data_url") or "")[:30]
+_r = "p14 mime=" + str(b.get("mime")) + " prefix=" + pre
+assert d["status"] == 200 and b.get("mime") == "image/svg+xml" and pre.startswith("data:image/svg+xml"), _r + " raw: " + str(d)[:300]
+payload = base64.b64decode(b.get("b64") or "")
+assert payload.lstrip().startswith(b"<svg"), "payload is not svg text: " + repr(payload[:20])
 print(_r); RESULT = _r
 ''',
     }
@@ -281,7 +382,7 @@ def main():
             args=[f"--disable-extensions-except={ext}", f"--load-extension={ext}",
                   "--no-first-run", "--no-default-browser-check",
                   "--window-size=1000,700", "--window-position=140,60"],
-            env={**os.environ, "DISPLAY": spike1.XDISPLAY}, no_viewport=True)
+            env=spike1.xvfb_env(), no_viewport=True)
 
         ext_origin = None
         deadline = time.time() + 15

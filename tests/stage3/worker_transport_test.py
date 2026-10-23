@@ -259,11 +259,15 @@ document.body.appendChild(f);
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
 
     from playwright.sync_api import sync_playwright
+    sys.path.insert(0, str(Path(__file__).parent))
+    import spike1  # noqa: E402  (env strip needed even though no picker:
+    # DBUS inherited from a desktop session breaks Chromium under Xvfb)
     with sync_playwright() as p:
         ctx = p.chromium.launch_persistent_context(
             str(SCRATCH / "profile"), headless=False,
             args=["--disable-extensions-except=" + str(EXT),
-                  "--load-extension=" + str(EXT)])
+                  "--load-extension=" + str(EXT)],
+            env=spike1.xvfb_env())
         base = f"http://127.0.0.1:{PORT}"
         # sender gate: allow the harness origin, NO token tier — the skill
         # bootstrap runs verbatim here (it sends a token only when the user

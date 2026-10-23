@@ -7,11 +7,41 @@
 
 "use strict";
 
-const FS_VERSION = "3.4.0-EXT";
+const FS_VERSION = "3.5.0-EXT";
 const FS_SKILL_MIN = "2.11";
 const MAX_LIST = 500;
 const MAX_BINARY = 8000000;          // b64 endpoints
-const MAX_READ = 200000;             // chars (text)
+// pilot item 18 (2026-10-23): raw=1 pages may be much larger than the
+// numbered view — a 9 MB log needed ~50 pages at 200k chars and tripped
+// the request-rate breaker twice (case C06). 2 MB per raw page ≈ 5 calls
+// for such a file. The numbered view keeps MAX_READ (it is for looking).
+const MAX_READ_RAW = 2000000;         // chars (text, raw=1 mode)
+const MAX_READ = 200000;             // chars (text, numbered view)
+
+/* ---------------- name folding (pilot item 16, /find) ----------------
+ * Case- AND accent-insensitive match: "ÖPPNA ÄRENDEN" matches the query
+ * "oppna arenden" and vice versa (NFD + strip combining marks + fold
+ * case). Shared by /find and /list?name=. */
+function foldName(s) {
+  return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+/** Wildcard/substring name matcher over folded strings.
+ *  Pattern containing * or ? → fnmatch-style (glob); else substring.
+ *  Multi-word patterns without wildcards: every word must appear. */
+function nameMatches(foldedName, foldedPattern) {
+  const q = foldedPattern.trim();
+  if (!q) return true;
+  if (/[*?]/.test(q)) {
+    const rx = new RegExp("^" + q.split(/(\*|\?)/).map((p) =>
+      p === "*" ? ".*" : p === "?" ? "." : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    ).join("") + "$");
+    return rx.test(foldedName);
+  }
+  const words = q.split(/\s+/);
+  return words.every((w) => foldedName.includes(w));
+}
 const MAX_LINE_CHARS = 500;
 const DEFAULT_MAX_LINES = 2000;
 const CHUNK = 1024 * 1024;           // 1 MB write chunks
@@ -121,6 +151,19 @@ async function fsImageToDataUrl(file, opts) {
   const maxBytes = opts.maxBytes, maxEdge = opts.maxEdge;
   const raw = new Uint8Array(await file.arrayBuffer());
   const name = String(file.name || "").toLowerCase();
+  // 3.5.0 (pilot 2026-10-23): an .svg never decodes via
+  // createImageBitmap → it fell through the JPEG default and shipped
+  // XML text labelled image/jpeg — a data URL no browser can render.
+  // SVG is text: return it as-is under its REAL mime (no resize, no
+  // engine). Undecodable OTHER formats keep the raw-passthrough path.
+  if (name.endsWith(".svg") || sniffTextStartsWithSvg(raw)) {
+    if (raw.length > maxBytes) {
+      return { ok: false, mime: "image/svg+xml", bytes: raw.length,
+               width: null, height: null, shrunk: false, b64: null };
+    }
+    return { ok: true, mime: "image/svg+xml", bytes: raw.length,
+             width: null, height: null, shrunk: false, b64: b64enc(raw) };
+  }
   let mime = name.endsWith(".png") ? "image/png"
     : name.endsWith(".gif") ? "image/gif"
     : name.endsWith(".webp") ? "image/webp"
@@ -138,18 +181,26 @@ async function fsImageToDataUrl(file, opts) {
   }
 
   const ow = bitmap.width, oh = bitmap.height;
-  if (raw.length <= maxBytes && (maxEdge <= 0 || Math.max(ow, oh) <= maxEdge)) {
+  // (3.5.0: the under-cap early-return moved BELOW the wantPng check —
+  // format=png must convert even when the original is under every cap)
+
+  // Re-encode target: keep the original mime where the canvas codec
+  // supports it; gif/bmp decode to a still frame → png.
+  // 3.5.0 (pilot ask): format=png re-encodes to PNG so the b64 line can
+  // use OWUI's data:image/png upload feature (PNG-only). When forced,
+  // the under-cap fast path is skipped so conversion always happens.
+  const wantPng = opts.forceMime === "image/png";
+  const encodeAs = wantPng ? "image/png"
+    : (mime === "image/gif" || mime === "image/bmp") ? "image/png" : mime;
+  let scale = maxEdge > 0 ? Math.min(1, maxEdge / Math.max(ow, oh)) : 1;
+  if (raw.length > maxBytes && scale >= 1) scale = 0.5;  // byte-driven only
+  if (raw.length <= maxBytes && !wantPng &&
+      (maxEdge <= 0 || Math.max(ow, oh) <= maxEdge)) {
     bitmap.close();
     return { ok: true, mime, bytes: raw.length, width: ow, height: oh,
              origBytes: raw.length, origWidth: ow, origHeight: oh,
              shrunk: false, b64: b64enc(raw) };
   }
-
-  // Re-encode target: keep the original mime where the canvas codec
-  // supports it; gif/bmp decode to a still frame → png.
-  const encodeAs = (mime === "image/gif" || mime === "image/bmp") ? "image/png" : mime;
-  let scale = maxEdge > 0 ? Math.min(1, maxEdge / Math.max(ow, oh)) : 1;
-  if (raw.length > maxBytes && scale >= 1) scale = 0.5;  // byte-driven only
   for (let tries = 0; tries < 6; tries++) {
     const w = Math.max(1, Math.round(ow * scale));
     const h = Math.max(1, Math.round(oh * scale));
@@ -160,7 +211,7 @@ async function fsImageToDataUrl(file, opts) {
     ctx.drawImage(bitmap, 0, 0, w, h);
     let blob = await canvas.convertToBlob({ type: encodeAs, quality: 0.9 });
     let outMime = encodeAs;
-    if (blob.size > maxBytes && outMime !== "image/jpeg") {
+    if (!wantPng && blob.size > maxBytes && outMime !== "image/jpeg") {
       const j = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.85 });
       if (j.size < blob.size) { blob = j; outMime = "image/jpeg"; }
     }
@@ -185,6 +236,19 @@ async function fsImageToDataUrl(file, opts) {
 
 function unquoteComp(s) {
   try { return decodeURIComponent(String(s)); } catch (e) { return String(s); }
+}
+
+/** Cheap SVG-by-content sniff (3.5.0): leading whitespace then "<svg"
+ *  or an XML prolog followed by it, within the first 512 bytes. Used
+ *  by /image_b64 so an extension-less SVG file is not labelled JPEG. */
+function sniffTextStartsWithSvg(raw) {
+  const n = Math.min(raw.length, 512);
+  let head = "";
+  for (let i = 0; i < n; i++) head += String.fromCharCode(raw[i]);
+  head = head.replace(/^[\s\xEF\xBB\xBF]+/, "");          // ws + BOM only
+  const low = head.toLowerCase();
+  return low.startsWith("<svg") ||
+    (low.startsWith("<?xml") && low.slice(0, 512).includes("<svg"));
 }
 // x-www-form-urlencoded convention, adopted 2026-10-20 after the pilot:
 // models overwhelmingly encode spaces as '+' (Python's urlencode), and

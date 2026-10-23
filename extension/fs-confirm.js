@@ -106,8 +106,22 @@ async function confirmRequiredFor(method, path, body) {
   let b = {};
   try { b = typeof body === "string" ? JSON.parse(body || "{}") : (body || {}); } catch (e) {}
 
-  if (path === "/delete") return "delete";
-  if (scope !== "all") return null; // "destructive" = deletes only
+  if (path === "/delete") {
+    // 3.5.0 (pilot item 15): batch delete — ONE card for a whole list.
+    // E03: 12 parallel deletes each raised their own card, each timed
+    // out separately, 9 originals survived as duplicates.
+    if (Array.isArray(b.paths) && b.paths.length) return "bulk_delete";
+    return "delete";
+  }
+  // 3.5.0 (pilot item 15): a move makes the ORIGINAL disappear — it is
+  // destructive at any scope, like a delete. Single move = one card
+  // worded as a move; batch move (moves:[...]) = one card for the batch.
+  if (path === "/move") {
+    if (Array.isArray(b.moves) && b.moves.length) return "bulk_move";
+    return "move";
+  }
+  if (path === "/mkdir") return null; // pure creation, never destructive
+  if (scope !== "all") return null; // "destructive" = deletes/moves only
 
   if (path === "/write" || path === "/write_b64" || path === "/edit") {
     return (await confirmTargetExists(b.path || "")) ? "overwrite" : null;
@@ -232,10 +246,16 @@ async function confirmGate(method, path, body, senderTabId) {
   // next identical retry (findLiveGrant above)
   const out = confirmBody(id, entry, null);
   out.timed_out = true;
+  // 3.5.0 (pilot item 14, 2026-10-23): the CARD self-closed after the
+  // 20 s countdown (2026-09-09 change, at this pilot's request) — the
+  // old wording told the model to send the user to a popup that is
+  // gone. E07 burned a turn on it. The grant IS still armed, but the
+  // reliable path for the user is a retry: it raises a FRESH card.
   out.hint = "no approval within " + Math.round(CONFIRM_WAIT_MS / 1000) +
-    " s — tell the user to click Approve on the popup (or to say when " +
-    "they have), then retry this exact request ONCE. A late click still " +
-    "counts; denied means do not retry.";
+    " s and the popup has closed. Tell the user you will ask again, wait " +
+    "for their go-ahead, then retry this exact request ONCE — a new popup " +
+    "appears and waits " + Math.round(CONFIRM_WAIT_MS / 1000) +
+    " s. (A click on the old box is impossible; it is gone.)";
   return out;
 }
 
@@ -243,7 +263,11 @@ function pathKeyFor(path, body) {
   // the retry must match the SAME op; body path is the file identity
   try {
     const b = typeof body === "string" ? JSON.parse(body || "{}") : (body || {});
-    return path + "|" + String(b.path || b.out || "");
+    // batch ops (3.5.0): the LIST is the identity — one grant covers
+    // the whole batch, and the retry must repeat the same list
+    if (Array.isArray(b.paths) && b.paths.length) return path + "|paths:" + b.paths.slice().sort().join("\u0001");
+    if (Array.isArray(b.moves) && b.moves.length) return path + "|moves:" + b.moves.map((m) => String((m && m.from) || "") + ">" + String((m && m.to) || "")).sort().join("\u0001");
+    return path + "|" + String(b.path || b.out || (b.from ? b.from + ">" + b.to : ""));
   } catch (e) {
     return path + "|";
   }
@@ -253,6 +277,11 @@ function describeOp(op, path, body) {
   try {
     const b = typeof body === "string" ? JSON.parse(body || "{}") : (body || {});
     if (op === "delete") return "delete " + (b.path || "?");
+    if (op === "move") return "move " + (b.from || b.path || "?") + " → " + (b.to || "?");
+    if (op === "bulk_delete") return "delete " +
+      ((Array.isArray(b.paths) ? b.paths.length : 0) || "?") + " files";
+    if (op === "bulk_move") return "move " +
+      ((Array.isArray(b.moves) ? b.moves.length : 0) || "?") + " files";
     if (op === "restore") {
       // say RESTORE, not overwrite (Dandan 2026-09-09) — the live file is
       // replaced by the old version, but that's the POINT of the request

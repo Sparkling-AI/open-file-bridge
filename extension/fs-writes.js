@@ -279,12 +279,34 @@ async function epEdit(body) {
 
 /* ---------------- /delete (trash-move) ---------------- */
 
-async function epDelete(body) {
+async function epDelete(body, opts) {
+  const internal = opts && opts.internal; // batch inner op: the ONE card
+  // already confirmed this whole mass edit — the per-op rate breaker
+  // would otherwise abort a 30-file batch at item 21
+  if (Array.isArray(body.paths) && body.paths.length) {
+    const results = [];
+    let fails = 0;
+    for (const p of body.paths.slice(0, 50)) {
+      const one = await epDelete({ path: String(p || "") }, { internal: true });
+      if (one.status !== 200) fails++;
+      let ob = null;
+      try { ob = JSON.parse(one.body || "{}"); } catch (e) {}
+      results.push({ path: String(p || ""), ok: one.status === 200,
+        error: one.status === 200 ? undefined : (ob && ob.error) || ("HTTP " + one.status) });
+    }
+    await auditRow({ endpoint: "/delete", method: "POST", path: "(batch " + results.length + ")", status: fails ? 207 : 200 });
+    const out = { ok: fails === 0, deleted: results.filter((r) => r.ok).length,
+      failed: fails, results: results };
+    if (fails) out.hint = "some paths failed — see results[]; every failure is listed with its reason";
+    return fails ? fsFail(207, out) : fsOk(out);
+  }
   const rg = await resolveGuarded(unquoteComp(body.path || ""), { forWrite: true });
   const w = await walkToParent(rg.rootRec, rg.parts, false);
   if (!w) return fsFail(404, { error: "no such file: " + body.path });
-  const rc = await rateCheck(0);
-  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  if (!internal) {
+    const rc = await rateCheck(0);
+    if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  }
   let file = null;
   try {
     const fh = await w.dir.getFileHandle(w.fileName);
@@ -326,6 +348,123 @@ async function moveDirToTrash(rootRec, parts, ts) {
   }
   await copyDirRecursive(srcDirHandle, tcur, parts[parts.length - 1]);
   await srcParent.removeEntry(parts[parts.length - 1], { recursive: true });
+}
+
+/* ---------------- /move + /mkdir (pilot item 15, 2026-10-23) --------
+ * "Sort these 12 files into folders" was 12 copies + 12 deletes + 12
+ * approval cards; parallel deletes each timed out separately and left
+ * 9 duplicates behind (case E03). A native move is ONE confirmation
+ * worded as a move (scope "destructive": the original disappears).
+ * /mkdir exists because a folder could previously only be created by
+ * writing a file into it. Both are snapshot-free: a move never
+ * overwrites content (dest-exists is refused), and mkdir is pure
+ * creation — undo = move back / delete the empty folder. */
+
+async function epMove(body, opts) {
+  const internal = opts && opts.internal; // batch inner op (see epDelete)
+  // 3.5.0 (pilot item 15): batch move — one body, one approval card.
+  if (Array.isArray(body.moves) && body.moves.length) {
+    const results = [];
+    let fails = 0;
+    for (const m of body.moves.slice(0, 50)) {
+      if (!m || typeof m.from !== "string" || typeof m.to !== "string") {
+        results.push({ from: m && m.from, ok: false, error: "each move needs {from, to}" });
+        fails++;
+        continue;
+      }
+      const one = await epMove({ from: m.from, to: m.to }, { internal: true });
+      if (one.status !== 200) fails++;
+      let ob = null;
+      try { ob = JSON.parse(one.body || "{}"); } catch (e) {}
+      results.push({ from: m.from, to: m.to, ok: one.status === 200,
+        error: one.status === 200 ? undefined : (ob && ob.error) || ("HTTP " + one.status) });
+    }
+    await auditRow({ endpoint: "/move", method: "POST", path: "(batch " + results.length + ")", status: fails ? 207 : 200 });
+    const out = { ok: fails === 0, moved: results.filter((r) => r.ok).length,
+      failed: fails, results: results };
+    if (fails) out.hint = "some moves failed — see results[]; failed originals are still in place";
+    return fails ? fsFail(207, out) : fsOk(out);
+  }
+  const from = String(body.from || body.path || "").trim();
+  const to = String(body.to || "").trim();
+  if (!from || !to) {
+    return fsFail(400, { error: "move needs {\"from\": …, \"to\": …}",
+      hint: "moves or renames a file/folder inside the shared root(s); the destination must not exist" });
+  }
+  const rgF = await resolveGuarded(unquoteComp(from), { forWrite: true });
+  const rgT = await resolveGuarded(unquoteComp(to), { forWrite: true });
+  if (rgF.rootRec.id !== rgT.rootRec.id) {
+    return fsFail(400, { error: "cannot move across shared folders (" +
+      rgF.rootRec.id + " → " + rgT.rootRec.id + ")",
+      hint: "copy then delete instead: write_binary(to, await read_binary(from)) then /delete" });
+  }
+  // moving a folder INTO ITSELF would recurse forever (a → a/b copies
+  // a into a into a…) — refuse any destination inside the source
+  if (rgT.relInRoot === rgF.relInRoot ||
+      rgT.relInRoot.startsWith(rgF.relInRoot + "/")) {
+    return fsFail(400, { error: "cannot move '" + from + "' into itself (" + to + ")",
+      hint: "choose a destination outside the folder being moved" });
+  }
+  if (!internal) {
+    const rc = await rateCheck(0);
+    if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  }
+  // resolve source parent + entry kind
+  const wF = await walkToParent(rgF.rootRec, rgF.parts, false);
+  let srcFile = null, srcDir = null;
+  try { const fh = await wF.dir.getFileHandle(wF.fileName); srcFile = await fh.getFile(); } catch (e) {}
+  if (!srcFile) {
+    try { srcDir = await wF.dir.getDirectoryHandle(wF.fileName); } catch (e) {}
+  }
+  if (!srcFile && !srcDir) return fsFail(404, { error: "no such file: " + from });
+  // refuse overwrite semantics — dest must not exist
+  const wT = await walkToParent(rgT.rootRec, rgT.parts, true);
+  try {
+    await wT.dir.getFileHandle(wT.fileName);
+    return fsFail(409, { error: "destination exists: " + to,
+      hint: "move never overwrites — delete or rename the destination first, or copy with /write_b64" });
+  } catch (e) { /* good */ }
+  try {
+    await wT.dir.getDirectoryHandle(wT.fileName);
+    return fsFail(409, { error: "destination exists: " + to,
+      hint: "move never overwrites — delete or rename the destination first" });
+  } catch (e) { /* good */ }
+  // go
+  if (srcFile) {
+    const dst = await wT.dir.getFileHandle(wT.fileName, { create: true });
+    await copyFileToFile(srcFile, dst);
+    await wF.dir.removeEntry(wF.fileName);
+  } else {
+    await copyDirRecursive(srcDir, wT.dir, wT.fileName);
+    await wF.dir.removeEntry(wF.fileName, { recursive: true });
+  }
+  await auditRow({ endpoint: "/move", method: "POST", path: rgF.relInRoot + " -> " + rgT.relInRoot, status: 200 });
+  await refreshRootsCount();
+  return fsOk(Object.assign({
+    ok: true, moved: rgT.relInRoot, from: rgF.relInRoot,
+    type: srcFile ? "file" : "dir",
+  }, writtenFields(rgT)));
+}
+
+async function epMkdir(body) {
+  const p = String(body.path || "").trim();
+  if (!p) return fsFail(400, { error: "mkdir needs {\"path\": \"folder/sub\"}" });
+  const rg = await resolveGuarded(unquoteComp(p), { forWrite: true });
+  const rc = await rateCheck(0);
+  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  const w = await walkToParent(rg.rootRec, rg.parts, true);
+  let existed = false;
+  try { await w.dir.getDirectoryHandle(w.fileName); existed = true; }
+  catch (e) {
+    try { await w.dir.getFileHandle(w.fileName); }
+    catch (e2) {
+      await w.dir.getDirectoryHandle(w.fileName, { create: true });
+    }
+  }
+  await auditRow({ endpoint: "/mkdir", method: "POST", path: rg.relInRoot, status: 200 });
+  await refreshRootsCount();
+  return fsOk(Object.assign({ ok: true, created: rg.relInRoot, existed: existed },
+    writtenFields(rg)));
 }
 
 async function trashRootFor(rootRec, ts) {

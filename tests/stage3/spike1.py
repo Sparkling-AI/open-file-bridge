@@ -38,6 +38,19 @@ CHROME = os.environ.get(
 OWUI = os.environ.get("OFB_EXT_OWUI", "http://127.0.0.1:8788")
 XDISPLAY = os.environ.get("OFB_S3_XDISPLAY", ":99")
 
+
+def xvfb_env():
+    """Launch env for Chromium under Xvfb: os.environ MINUS every
+    DBUS_*/XDG_* key (keep DISPLAY, set :99). Without the strip,
+    showDirectoryPicker detours to xdg-desktop-portal and the GTK
+    dialog paints on the HOST display, never on :99 — the button click
+    resolves, no console error, the picker promise just hangs
+    (gotcha 13; cost a silent roots:0 on 2026-10-23)."""
+    env = {k: v for k, v in os.environ.items()
+           if not (k.startswith("DBUS_") or k.startswith("XDG_"))}
+    env["DISPLAY"] = XDISPLAY
+    return env
+
 # ---------------------------------------------------------------- fixtures
 GRANT_DIR.mkdir(parents=True, exist_ok=True)
 (GRANT_DIR / "notes").mkdir(exist_ok=True)
@@ -639,9 +652,7 @@ def main():
                 # silently killed extension loading in session #2); the
                 # DISPLAY env var below is the correct channel.
             ],
-            env={**os.environ, "DISPLAY": XDISPLAY},
-            no_viewport=True,
-        )
+            env=xvfb_env(), no_viewport=True)
         print("browser up; pages:", [pg.url for pg in ctx.pages])
 
         # wait for the SW (ctx.service_workers is event-driven and can lag
@@ -809,7 +820,7 @@ def main():
                 "--no-first-run", "--no-default-browser-check",
                 "--window-size=1000,700", "--window-position=140,60",
             ],
-            env={**os.environ, "DISPLAY": XDISPLAY},
+            env=xvfb_env(),
             no_viewport=True,
         )
         # find SW origin again (fresh contexts drop old bindings)

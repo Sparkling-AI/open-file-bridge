@@ -161,7 +161,7 @@ def main():
             args=[f"--disable-extensions-except={ext}", f"--load-extension={ext}",
                   "--no-first-run", "--no-default-browser-check",
                   "--window-size=1000,700", "--window-position=140,60"],
-            env={**os.environ, "DISPLAY": spike1.XDISPLAY}, no_viewport=True)
+            env=spike1.xvfb_env(), no_viewport=True)
 
         ext_origin = None
         deadline = time.time() + 20
@@ -265,6 +265,40 @@ def main():
         }""")
         verdicts["A_restore_op_tag"] = a4["op"] == "restore"
         verdicts["A_restore_wording"] = ("restore old version of notes.md" in a4["summary"])
+        # A5 (3.5.0, pilot item 15): /move is destructive-scope (the
+        # original disappears) — gated at ANY scope incl. "destructive";
+        # /mkdir never asks; batch bodies raise bulk op tags, and the
+        # timed-out hint no longer promises a late click (item 14).
+        a5 = sw.evaluate("""() => Promise.all([
+            confirmScope(),
+            kvGet('confirm_scope', 'all').then(() => confirmRequiredFor('POST', '/move',
+                JSON.stringify({from: 'a.txt', to: 'b.txt'}))),
+            confirmRequiredFor('POST', '/move',
+                JSON.stringify({moves: [{from: 'a.txt', to: 'b.txt'}, {from: 'c.txt', to: 'd.txt'}]})),
+            confirmRequiredFor('POST', '/delete',
+                JSON.stringify({paths: ['a.txt', 'b.txt']})),
+            confirmRequiredFor('POST', '/mkdir', JSON.stringify({path: 'newdir'})),
+        ]).then(([scope, moveOp, bulkMoveOp, bulkDelOp, mkdirOp]) => ({
+            scope, moveOp, bulkMoveOp, bulkDelOp, mkdirOp,
+            moveSummary: describeOp(moveOp, '/move', JSON.stringify({from: 'a.txt', to: 'b.txt'})),
+            bulkSummary: describeOp(bulkMoveOp, '/move',
+                JSON.stringify({moves: [{from: 'a.txt', to: 'b.txt'}, {from: 'c.txt', to: 'd.txt'}]})),
+        }))""")
+        verdicts["A_move_gated"] = a5["moveOp"] == "move"
+        verdicts["A_move_wording"] = ("move a.txt → b.txt" in a5["moveSummary"])
+        verdicts["A_bulk_move_tag"] = a5["bulkMoveOp"] == "bulk_move"
+        verdicts["A_bulk_move_wording"] = ("move 2 files" in a5["bulkSummary"])
+        verdicts["A_bulk_delete_tag"] = a5["bulkDelOp"] == "bulk_delete"
+        verdicts["A_mkdir_never_asks"] = a5["mkdirOp"] is None
+        # A6 (3.5.0, pilot item 14): the timed-out hint must point at a
+        # FRESH popup on retry, never at the closed card. Real 20 s wait
+        # is too slow here — pin the SOURCE of the hint (the only place
+        # the string is built) and the skill wording separately.
+        a6 = sw.evaluate("""() => fetch(chrome.runtime.getURL('fs-confirm.js'))
+            .then((r) => r.text())
+            .then((src) => src.includes('popup has closed') &&
+                          !src.includes('A late click still'))""")
+        verdicts["A_timedout_hint_no_late_click"] = bool(a6)
 
         # ---- B. real-pipe cells ----
         def cell(name):

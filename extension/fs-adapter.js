@@ -216,8 +216,15 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       const wantFields = fieldsParam.length
         ? new Set(fieldsParam.map((f) => f.toLowerCase()))
         : null;
+      // pilot item 17 (2026-10-23): name= substring filter, case- and
+      // accent-insensitive — a capped 500-entry /list once hid a file
+      // and the model reported it nonexistent (case D03).
+      // unquoteComp: parseQueryString is deliberately raw (paths decode
+      // per-endpoint); an encoded name=%C3%A4renden must decode first
+      const nameFilter = unquoteComp(String(q.name || "")).trim();
+      const namePat = nameFilter ? foldName(nameFilter) : null;
       const depth = Number.isFinite(depthReq) && depthReq > 0 ? depthReq : 0;
-      return await listEndpoint(rootRec, startParts, { depth, maxEntries, wantFields, ambiguous });
+      return await listEndpoint(rootRec, startParts, { depth, maxEntries, wantFields, namePat, ambiguous });
     }
 
     if (method === "GET" && path === "/read") return await epRead(q);
@@ -228,6 +235,7 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     if (method === "GET" && path === "/directory_tree") return await epTree(q);
     if (method === "GET" && path === "/image_info") return await epImageInfo(q);
     if (method === "GET" && path === "/image_b64") return await epImageB64(q);
+    if (method === "GET" && path === "/find") return await epFind(q);
   } catch (e) { return opFailToResp(e); }
 
   /* ---- writes, engines, moved ---- */
@@ -239,6 +247,8 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
     if (method === "POST" && path === "/write_many") return await epWriteMany(body);
     if (method === "POST" && path === "/edit") return await epEdit(body);
     if (method === "POST" && path === "/delete") return await epDelete(body);
+    if (method === "POST" && path === "/move") return await epMove(body);
+    if (method === "POST" && path === "/mkdir") return await epMkdir(body);
     if (method === "POST" && path === "/versions/list") return await epVersionsList(body);
     if (method === "POST" && path === "/versions/read") return await epVersionsRead(body);
     if (method === "POST" && path === "/versions/restore") return await epRestore("versions", body);
@@ -297,9 +307,11 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
   const ROUTE_GET = new Set(["/health", "/version", "/state", "/wheels",
     "/ocr/config", "/guide", "/list", "/read", "/peek", "/read_b64",
     "/stat", "/search", "/directory_tree", "/image_info", "/image_b64",
+    "/find",
     "/pdf_text", "/ocr"].concat([...MOVED_READ_ENDPOINTS]));
   const ROUTE_POST = new Set(["/ocr/lang", "/write", "/write_b64",
-    "/write_b64_chunk", "/write_many", "/edit", "/delete",
+    "/write_b64_chunk", "/write_many", "/edit", "/delete", "/move",
+    "/mkdir",
     "/versions/list", "/versions/read", "/versions/restore",
     "/trash/list", "/trash/restore",
     "/zip", "/unzip", "/link", "/ocr_pdf", "/pdf_op"]
@@ -370,6 +382,7 @@ async function listEndpoint(rootRec, startParts, opts) {
   const depth = o.depth || 0;            // 0 = unbounded (pre-3.4 behavior)
   const maxEntries = o.maxEntries || MAX_LIST;
   const wantFields = o.wantFields || null;
+  const namePat = o.namePat || null;     // folded /list?name= filter (3.5.0)
   const pats = await allIgnorePatterns(rootRec);
   const entries = [];
   let truncated = false;
@@ -386,6 +399,7 @@ async function listEndpoint(rootRec, startParts, opts) {
       const rel = relParts.join("/");
       const isDir = h.kind === "directory";
       if (ignoreMatch(rel, isDir, pats)) continue;
+      if (namePat && !nameMatches(foldName(name), namePat)) continue;
       if (isDir) {
         entries.push(mkEntry(rel, "dir", null, null));
         if (!depth || d < depth) {
@@ -459,10 +473,15 @@ async function epRead(q) {
   if (String(q.raw || "") === "1" || String(q.raw || "").toLowerCase() === "true") {
     let raw = text;
     let truncated = false;
-    if (raw.length > MAX_READ) { raw = raw.slice(0, MAX_READ); truncated = true; }
+    // 3.5.0 (pilot item 18): raw pages are 2 MB, not 200 k — a 9 MB log
+    // needed ~50 small pages and tripped the rate breaker twice (C06)
+    if (raw.length > MAX_READ_RAW) { raw = raw.slice(0, MAX_READ_RAW); truncated = true; }
     const out = { path: echo, raw: true, content: raw,
       total_lines: raw === text ? text.split("\n").length : undefined };
-    if (truncated) out.truncated = true;
+    if (truncated) {
+      out.truncated = true;
+      out.hint = "raw page cut at " + MAX_READ_RAW + " chars — continue with /read?start=<line> or /read_b64 ranges";
+    }
     return fsOk(out);
   }
   return fsOk(windowedRead(text, q, echo));
@@ -707,6 +726,78 @@ async function epTree(q) {
     truncated ? { hint: "increase max_entries/max_depth for more" } : {}));
 }
 
+/* ---------------- /find (pilot item 16, 2026-10-23) ----------------
+ * Filename search — /search only covers CONTENT, so "where is
+ * Nordvik_Template.pptx?" forced a /directory_tree walk or blind path
+ * guesses (the most common wasted call in the scripted run; a capped
+ * /list once hid the file and the model reported it nonexistent).
+ * Native walk (no engine), case- AND accent-insensitive, * and ?
+ * wildcards (else substring / all-words), capped at `max` (default 200). */
+async function epFind(q) {
+  // unquoteComp: parseQueryString is deliberately raw — an encoded
+  // name=%C3%A4renden must decode before folding (same as paths)
+  const namePat = unquoteComp(String(q.name || q.q || "")).trim();
+  if (!namePat) {
+    return fsFail(400, { error: "find needs a name pattern: /find?name=nordvik*template",
+      hint: "case- and accent-insensitive; * and ? wildcards; optional path= (start folder), type= (file|dir), max=" });
+  }
+  const max = Math.max(1, Math.min(parseInt(q.max || "200", 10) || 200, 1000));
+  const wantType = String(q.type || "").toLowerCase();
+  const startPath = String(q.path || "").trim();
+  const roots = await enabledRoots();
+  if (!roots.length) throw new OpFail(503, { error: "no shared folder configured — click the Open File Bridge toolbar icon and choose a folder" });
+  const starts = [];
+  if (startPath) {
+    const rg = await resolveGuarded(unquoteComp(startPath), {});
+    let d = rg.rootRec.handle;
+    for (const seg of rg.parts) {
+      try { d = await d.getDirectoryHandle(seg); }
+      catch (e) { return fsFail(404, { error: "not a directory: " + startPath }); }
+    }
+    starts.push({ dir: d, prefix: rg.relInRoot, rootRec: rg.rootRec });
+  } else {
+    const ps = await permState(roots[0].handle, "read");
+    if (ps !== "granted") throw new OpFail(403, {
+      error: "permission needed: the browser requires the user to re-confirm access to '" +
+        (roots[0].alias || roots[0].id) + "'",
+      permission_needed: true, root_id: roots[0].id, mode: "read",
+      hint: "tell the user: click the Open File Bridge toolbar icon and press Reconnect — the folder is NOT re-picked, permission is re-asked on the stored handle",
+    });
+    for (const r of roots) starts.push({ dir: r.handle, prefix: "", rootRec: r });
+  }
+  const pat = foldName(namePat);
+  const pats = await allIgnorePatterns(starts[0].rootRec);
+  const matches = [];
+  let truncated = false, visited = 0;
+  const MAX_VISIT = 20000, TIME_BUDGET_MS = 10000;
+  const t0 = Date.now();
+  async function rec(dir, prefixParts) {
+    for await (const [nm, h] of dir.entries()) {
+      if (matches.length >= max || truncated) return;
+      if (Date.now() - t0 > TIME_BUDGET_MS) { truncated = true; return; }
+      if (visited++ > MAX_VISIT) { truncated = true; return; }
+      const relParts = prefixParts.concat(nm);
+      const rel = relParts.join("/");
+      const isDir = h.kind === "directory";
+      if (ignoreMatch(rel, isDir, pats)) continue;
+      if (nameMatches(foldName(nm), pat) && (!wantType || (wantType === "dir") === isDir)) {
+        let size = null, mtime = null;
+        if (!isDir) {
+          try { const f = await h.getFile(); size = f.size; mtime = f.lastModified; }
+          catch (e) {}
+        }
+        matches.push({ path: rel, type: isDir ? "dir" : "file", size: size, mtime: mtime });
+      }
+      if (isDir) await rec(h, relParts);
+    }
+  }
+  for (const st of starts) await rec(st.dir, st.prefix ? st.prefix.split("/") : []);
+  await auditRow({ endpoint: "/find", method: "GET", path: startPath || ".", status: 200, size: matches.length });
+  const out = { matches: matches, truncated: truncated, searched: namePat };
+  if (truncated) out.hint = "result cut at " + matches.length + " — narrow with path= or a more specific name=";
+  return fsOk(out);
+}
+
 /** Parse png/jpeg/gif/webp/bmp headers — port of the app's /image_info
  * walker (src/file_bridge.py): width/height + JPEG EXIF orientation, no
  * decoding. Missing since the Stage-3 port (the call site 500'd with
@@ -817,7 +908,11 @@ async function epImageB64(q) {
   // good for chat display; pass max_bytes lower for smaller echoes.
   const maxBytes = clampParam(q.max_bytes, 10000, MAX_BINARY, 4000000);
   const maxEdge = clampParam(q.max_edge, 0, 8192, 2000);  // 0 disables the edge cap
-  const r = await fsImageToDataUrl(file, { maxBytes, maxEdge });
+  // 3.5.0 (pilot ask): format=png re-encodes so the b64 line can use the
+  // host's data:image/png stdout upload (PNG-only feature)
+  const forceMime = String(q.format || "").toLowerCase() === "png"
+    ? "image/png" : null;
+  const r = await fsImageToDataUrl(file, { maxBytes, maxEdge, forceMime });
   if (!r.ok) {
     return fsFail(413, {
       error: "image is " + file.size + " bytes; could not shrink under the "

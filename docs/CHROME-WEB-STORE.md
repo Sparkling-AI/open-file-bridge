@@ -6,7 +6,7 @@ the Microsoft Store, not the CWS).
 
 ## 1. Package to upload
 
-`dist-extension/open-file-bridge-extension-3.4.0.zip`
+`dist-extension/open-file-bridge-extension-3.5.0.zip`
 
 - Version 3.4.0 (2026-10-20, pilot-feedback release) is zipped from the
   git-tracked `extension/` directory (CI packages `v3.*` tags the same way).
@@ -18,6 +18,18 @@ the Microsoft Store, not the CWS).
   official `v3.*` tags and attached to the matching GitHub release. Chrome
   Web Store upload/publication remains manual. After any packaged extension
   change, bump `"version"`; the Store rejects a re-used version number.
+- Version 3.5.0 (2026-10-23, pilot round 2): `/find` filename search
+  (case/accent-insensitive, wildcards), `/move` + `/mkdir` + batch
+  `{"moves":[...]}` / `{"paths":[...]}` bodies (ONE approval card per
+  batch, per-item results, 207 partial failure), timed-out approval
+  hint rewritten (the card self-closes after 20 s — the old "a late
+  click still counts" wording sent users to a gone popup), `/list`
+  `name=` filter, `/read?raw=1` pages 200 k → 2 MB, `/image_b64` SVG
+  MIME fixed (`image/svg+xml`, content-sniffed) + `format=png` opt-in
+  for the host's PNG-upload stdout line. Skill 3.5.0-EXT: five new
+  rules (find-before-guess, edit-in-place for change asks, sequential/
+  batch destructive ops, no package probing, never route around
+  safety filters), move/mkdir/batch docs.
 - Version 3.4.0 notes: pilot-feedback release (13 items from a 4-week,
   7-user corporate trial): '+'-as-space query decoding + explanatory
   bad-path errors, every failure carries a JSON body, `/list` depth/
