@@ -162,6 +162,25 @@ First cell = this whole block. It defines ALL helpers and prints the
 extension version + the shared folders (ids, names, permission). It
 does NOT list files — do that afterwards with a `path`.
 
+### Fast path — one-line bootstrap (extension ≥ 3.5.0 with injection)
+
+When the user's extension has client injection active (the 🔒 Security
+card said "client injection active" when they set the site), every
+sandbox frame already carries the client. The first cell is then just:
+
+```python
+import js; exec(js.OFB_CLIENT_PY); await ofb_init()
+```
+
+- All helpers are identical to the pasted block below; everything in
+  this skill after the bootstrap applies unchanged.
+- If `js.OFB_CLIENT_PY` is missing (`AttributeError`), the host runs
+  cells in a **worker** or the permission was declined — use the full
+  block below instead. Never treat the missing constant as an error to
+  report; silently fall back.
+- A `NameError` on any helper later means the sandbox was RESET — run
+  the one-liner again, then continue (same rule as the full block).
+
 ```python
 import json, base64, asyncio, random, urllib.parse, io, zipfile, sysconfig
 import js

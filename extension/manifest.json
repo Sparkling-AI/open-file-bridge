@@ -5,7 +5,13 @@
   "description": "Give Open WebUI controlled access to a user-selected local folder, with local-only storage and an allowed-site lock.",
   "minimum_chrome_version": "109",
   "permissions": [
-    "offscreen"
+    "offscreen",
+    "scripting"
+  ],
+  "optional_host_permissions": [
+    "https://*/*",
+    "http://127.0.0.1/*",
+    "http://localhost/*"
   ],
   "content_security_policy": {
     "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'"

@@ -113,7 +113,8 @@ describing the wrong file.
   - `token_required` — the token embedded in the bootstrap is wrong or
     was rotated in the extension's settings. Ask the user ONCE for the
     current bridge token (toolbar icon → 🔒 Security → Bridge token →
-    Show/copy), then run `ofb_set_token("<pasted>")` and retry. NEVER echo the token back in your answer. If a correct
+    Show/copy), then run `ofb_set_token("<pasted>")`
+    and retry. NEVER echo the token back in your answer. If a correct
     token still fails, the page may hold a STALE relay from before an
     extension update — tell the user to REFRESH the page once and retry.
 - **Permission errors (403 `permission_needed`)** — after a browser
@@ -164,6 +165,27 @@ First cell = this whole block. It defines ALL helpers and prints the
 extension version + the shared folders (ids, names, permission). It
 does NOT list files — do that afterwards with a `path`.
 
+### Fast path — one-line bootstrap (extension ≥ 3.5.0 with injection)
+
+When the user's extension has client injection active (the 🔒 Security
+card said "client injection active" when they set the site), every
+sandbox frame already carries the client. The first cell is then just
+(token variant — the injected client does NOT embed the org token, set
+it on the next line):
+
+```python
+import js; exec(js.OFB_CLIENT_PY); ofb_set_token(__ORG_BRIDGE_TOKEN__); await ofb_init()
+```
+
+- All helpers are identical to the pasted block below; everything in
+  this skill after the bootstrap applies unchanged.
+- If `js.OFB_CLIENT_PY` is missing (`AttributeError`), the host runs
+  cells in a **worker** or the permission was declined — use the full
+  block below instead. Never treat the missing constant as an error to
+  report; silently fall back.
+- A `NameError` on any helper later means the sandbox was RESET — run
+  the one-liner again, then continue (same rule as the full block).
+
 ```python
 import json, base64, asyncio, random, urllib.parse, io, zipfile, sysconfig
 import js
@@ -172,7 +194,7 @@ try:
     from js import parent            # iframe sandbox; absent in a worker
 except ImportError:
     parent = None
-_TOKEN = ["__BRIDGE_TOKEN__"]        # org token EMBEDDED (filled when prepared); NEVER echo it
+_TOKEN = ["__ORG_BRIDGE_TOKEN__"]    # pre-filled; set via ofb_set_token on 403 token_required
 _S = {"pending": {}, "n": 0, "bc": None, "relay": None, "roots": [],
       "wid": "w%08x" % random.getrandbits(32)}
 
@@ -368,8 +390,8 @@ run the whole block again (rule 2).
   every visit"**. Wait for them.
 - 403 `security_locked`/`origin_blocked` → the user sets the allowed
   site (see above), ONCE.
-- 403 `token_required` → the embedded token is stale: ask for the
-  current one ONCE, `ofb_set_token(<pasted>)`, retry. Never echo it.
+- 403 `token_required` → ask for the token ONCE, `ofb_set_token(<pasted>)`,
+  retry. Never echo it.
 - No folders (`roots: []`) → the user must click the toolbar icon and
   choose one.
 - Version older than 3.4.0 → say once that the extension should be

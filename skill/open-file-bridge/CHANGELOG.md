@@ -2,6 +2,20 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## feat/runtime-injection — 2026-10-23 (with extension 3.5.0 + injection)
+
+- **One-line bootstrap fast path.** When the extension's 🔒 Security
+  card reports "client injection active", the first cell of a chat is
+  `import js; exec(js.OFB_CLIENT_PY); await ofb_init()` (token variant
+  adds `ofb_set_token(…)` before `ofb_init`). The extension registers
+  a MAIN-world content script at runtime for exactly the allowed
+  OWUI origin; the injected client is identical to the pasted
+  bootstrap helpers. Kills the 107-of-149 bootstrap-trimming failure
+  mode AND the stdout wipe (pre-await prints survive bridge calls).
+- **Fallback unchanged:** worker-executor hosts (Pyodide persistence
+  on) and declined permissions keep the full pasted block — a missing
+  `OFB_CLIENT_PY` is a silent fallback, never an error to report.
+
 ## 3.5.0-EXT — 2026-10-23 (with extension 3.5.0)
 
 Pilot round 2 (a scripted 38-test run against ext 3.3.1, 2026-10-22,

@@ -199,8 +199,18 @@ async function renderSec() {
     del.textContent = "Remove";
     del.onclick = async () => {
       siteEditing = false;
-      await OFBIDB.del("kv", "allowed_site");
-      try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
+      // also tear down the sandbox injection for the old site (3.5.0):
+      // unregister + drop the optional host permission if we hold it
+      try {
+        const old = await OFBIDB.get("kv", "allowed_site");
+        await OFBIDB.del("kv", "allowed_site");
+        try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
+        if (old) {
+          const pat = String(old).replace(/\/+$/, "") + "/*";
+          try { await chrome.runtime.sendMessage({ ofbInjectSync: true, register: false }); } catch (e) {}
+          try { await chrome.permissions.remove({ origins: [pat] }); } catch (e) {}
+        }
+      } catch (e) { /* non-fatal: SW cleanup below is best-effort */ }
       document.getElementById("siteadd").value = "";
       renderSec(); beat();
     };
@@ -514,6 +524,26 @@ window.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("siteadd").value = "";
     stat.textContent = "";
     siteEditing = false;
+    // sandbox injection (3.5.0): ask for the ONE-origin host permission
+    // (user gesture = this click) and register the client injector for
+    // exactly this site. Failure is non-fatal: the relay pipe still
+    // works; cells just keep pasting the full bootstrap.
+    try {
+      const pat = n.origin.replace(/\/+$/, "") + "/*";
+      const granted = await chrome.permissions.request({ origins: [pat] });
+      const sync = await chrome.runtime.sendMessage({ ofbInjectSync: true, register: granted });
+      if (granted && sync && sync.registered) {
+        stat.textContent = "✓ client injection active for this site " +
+          "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))";
+      } else if (granted) {
+        stat.textContent = "✓ site set (injection registration failed: " +
+          (sync && sync.error ? sync.error : "unknown") + ")";
+      } else {
+        stat.textContent = "✓ site set (permission declined — the pasted bootstrap still works)";
+      }
+    } catch (e) {
+      stat.textContent = "✓ site set (injection unavailable: " + e + ")";
+    }
     renderSec(); beat();
   };
   document.getElementById("siteadd").addEventListener("keydown", (ev) => {

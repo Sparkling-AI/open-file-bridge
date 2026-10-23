@@ -144,3 +144,67 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     return true; // async sendResponse (confirmVerdict touches IndexedDB)
   }
 });
+
+/* ------- runtime sandbox-injection registration (3.5.0 spike) -------
+ * The client injector is registered DYNAMICALLY for the ONE origin the
+ * user set as their allowed site — the manifest declares no static
+ * https match (CWS: no broad install warning from this feature).
+ * registerContentScripts persists across browser restarts but is WIPED
+ * on extension update → re-register in onInstalled from IDB state.
+ * The permission grant (optional_host_permissions) is requested in the
+ * options page on the "Set site" click (user gesture requirement). */
+const INJECT_SCRIPT_ID = "ofb-inject";
+
+function originToMatchPattern(origin) {
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    return u.protocol + "//" + u.host + "/*";
+  } catch (e) { return null; }
+}
+
+async function injectSync(register) {
+  // register=true: make the registered script match the CURRENT
+  // allowed_site (+ its granted permission). register=false: remove.
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts();
+    const have = existing.some((s) => s.id === INJECT_SCRIPT_ID);
+    if (register) {
+      const site = await secAllowedSite();
+      const pattern = site ? originToMatchPattern(site) : null;
+      if (!pattern) {
+        if (have) await chrome.scripting.unregisterContentScripts({ ids: [INJECT_SCRIPT_ID] });
+        return { ok: true, registered: false, reason: "no allowed site" };
+      }
+      const reg = {
+        id: INJECT_SCRIPT_ID,
+        js: ["inject-main.js"],
+        matches: [pattern],
+        allFrames: true,
+        matchOriginAsFallback: true,
+        world: "MAIN",
+        runAt: "document_start",
+        persistAcrossSessions: true,
+      };
+      if (have) await chrome.scripting.updateContentScripts([reg]);
+      else await chrome.scripting.registerContentScripts([reg]);
+      return { ok: true, registered: true, pattern: pattern };
+    }
+    if (have) await chrome.scripting.unregisterContentScripts({ ids: [INJECT_SCRIPT_ID] });
+    return { ok: true, registered: false };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.ofbInjectSync === true) {
+    injectSync(msg.register !== false).then(sendResponse);
+    return true; // async
+  }
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  // dynamic registrations are wiped on update — restore from IDB
+  injectSync(true).catch(() => {});
+});
