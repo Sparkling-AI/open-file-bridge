@@ -18,3 +18,4 @@ __pycache__/
 FileBridge-macos.zip
 OpenFileBridge-*.msix
 dist-stage3/
+dist-extension/*.zip
