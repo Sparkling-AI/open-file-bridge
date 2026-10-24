@@ -1,4 +1,4 @@
-"""Open File Bridge — Pyodide client (ofb_client) 3.6.0-inj.
+"""Open File Bridge — Pyodide client (ofb_client) 3.7.0-inj.
 
 Same helpers as the SKILL-EXT bootstrap, refactored for injection:
 exec()'d from js.OFB_CLIENT_PY inside Open WebUI's sandbox iframe.
@@ -20,7 +20,7 @@ try:
 except ImportError:
     parent = None
 
-OFB_CLIENT_VERSION = "3.6.0-inj"
+OFB_CLIENT_VERSION = "3.7.0-inj"
 _TOKEN = [""]
 _S = {"pending": {}, "n": 0, "bc": None, "relay": None, "roots": [],
       "wid": "w%08x" % random.getrandbits(32), "transport": None}
@@ -136,14 +136,27 @@ def _url(path, params=None):
     return path + "?" + "&".join(f"{k}={urllib.parse.quote(str(v), safe='/')}" for k, v in params.items())
 
 
+class BridgeError_with_info(BridgeError):
+    """BridgeError whose .info carries the full parsed error body and
+    .status the HTTP number (pilot 3.7.0 blocker 5)."""
+    def __init__(self, msg, info, status=None):
+        super().__init__(msg)
+        self.info = info
+        self.status = status
+
+
 def _check(path, d, key="body"):
+    """Raise BridgeError on any non-200. The message carries a BOUNDED
+    excerpt; the full parsed error body rides on .info so batch results
+    and long hints are never lost."""
     if d.get("status") == 200 and key in d:
         return
     info = d.get("error") or ""
     if d.get("body"):
         try: info = json.loads(d["body"])
         except Exception: info = d["body"][:400]
-    raise BridgeError(f"{path} -> HTTP {d.get('status')}: {json.dumps(info, ensure_ascii=False)[:700]}")
+    msg = f"{path} -> HTTP {d.get('status')}: {json.dumps(info, ensure_ascii=False)[:700]}"
+    raise BridgeError_with_info(msg, info, d.get("status"))
 
 
 async def bridge_get(path, params=None, timeout=45.0):
@@ -165,7 +178,23 @@ async def ofb_fetch_b64(path, timeout=45.0):
 
 
 async def read_binary(path):
-    return base64.b64decode((await bridge_get("/read_b64", {"path": path}))["b64"])
+    """Whole-file read. 413 (over the b64 cap) falls back to a range
+    loop (pilot 3.7.0 blocker 4) so a 9 MB log no longer needs manual
+    read_binary_range plumbing."""
+    try:
+        return base64.b64decode((await bridge_get("/read_b64", {"path": path}))["b64"])
+    except BridgeError_with_info as e:
+        if getattr(e, "status", None) != 413:
+            raise
+        st = e.info.get("size_bytes") if isinstance(e.info, dict) else None
+        if not st:
+            raise
+        chunks = []
+        off = 0
+        while off < st:
+            chunks.append(await read_binary_range(path, off, min(4_000_000, st - off)))
+            off += min(4_000_000, st - off)
+        return b"".join(chunks)
 
 
 async def read_binary_range(path, offset, length):

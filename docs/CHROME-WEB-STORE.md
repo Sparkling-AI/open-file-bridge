@@ -6,7 +6,16 @@ the Microsoft Store, not the CWS).
 
 ## 1. Package to upload
 
-`dist-extension/open-file-bridge-extension-3.6.0.zip`
+`dist-extension/open-file-bridge-extension-3.7.0.zip`
+
+- Version 3.7.0 (2026-10-23, tester round): fixes the external test's
+  six blockers — TOKEN one-liner quoting, "Use this site" injection
+  sync + onRemoved/onStartup, credential filter v3 (serves Office,
+  refuses real secret files), /list depth=1 default + raw=1 offset
+  paging + read_binary auto-range, batch >50 hard-refused (no silent
+  50-of-55), no-token artifact warning on the Security card; plus
+  approval-card titles/name lists, move cards after pre-checks,
+  unanchored /find wildcards, /stat decoded echo, /mkdir 409.
 
 - Version 3.4.0 (2026-10-20, pilot-feedback release) is zipped from the
   git-tracked `extension/` directory (CI packages `v3.*` tags the same way).

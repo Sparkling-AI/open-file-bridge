@@ -41,7 +41,7 @@ async function epWrite(body, isB64) {
     bytes = new TextEncoder().encode(text);
   }
   const rr = await rateCheck(bytes.length);
-  if (!rr.ok) return fsFail(429, { error: rr.err, rate_limited: true, hint: "relay this to the user and wait for their confirmation" });
+  if (!rr.ok) return fsFail(429, { error: rr.err, rate_limited: true, retry_after_s: 60, hint: "relay this to the user and wait for their confirmation; for content questions prefer /search over listing many files" });
   const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts);
   await refreshRootsCount();
   const wf = writtenFields(rg);
@@ -200,7 +200,7 @@ async function epWriteB64Chunk(body) {
       }));
     }
     const rc = await rateCheck(rec.received);
-    if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+    if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true, retry_after_s: 60 });
     const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts);
     await finalizeTransfer(rg.rootRec, rg.parts, rec, tid);
     await auditRow({ endpoint: "/write_b64_chunk", method: "POST", path: rg.relInRoot, size: rec.received, status: 200 });
@@ -267,7 +267,7 @@ async function epEdit(body) {
     return fsOk({ ok: false, results: results });
   }
   const rc = await rateCheck(newText.length);
-  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true, retry_after_s: 60 });
   const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts);
   await writeFileBytes(rg.rootRec, rg.parts, new TextEncoder().encode(newText));
   await auditRow({ endpoint: "/edit", method: "JS-POST".slice(3), path: rg.relInRoot, size: newText.length, status: 200 });
@@ -284,6 +284,16 @@ async function epDelete(body, opts) {
   // already confirmed this whole mass edit — the per-op rate breaker
   // would otherwise abort a 30-file batch at item 21
   if (Array.isArray(body.paths) && body.paths.length) {
+    // 3.7.0 (tester blocker 5): refuse oversized batches UP FRONT —
+    // the old silent slice(0, 50) did 50 of 55 and answered
+    // ok:true deleted:50 failed:0, leaving 5 files behind.
+    if (body.paths.length > 50) {
+      return fsFail(400, {
+        error: "batch too large: " + body.paths.length + " paths (max 50)",
+        hint: "split into chunks of ≤ 50 and run them as separate calls, " +
+          "or list a folder instead of deleting files one by one",
+      });
+    }
     const results = [];
     let fails = 0;
     for (const p of body.paths.slice(0, 50)) {
@@ -305,7 +315,7 @@ async function epDelete(body, opts) {
   if (!w) return fsFail(404, { error: "no such file: " + body.path });
   if (!internal) {
     const rc = await rateCheck(0);
-    if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+    if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true, retry_after_s: 60 });
   }
   let file = null;
   try {
@@ -364,8 +374,43 @@ async function epMove(body, opts) {
   const internal = opts && opts.internal; // batch inner op (see epDelete)
   // 3.5.0 (pilot item 15): batch move — one body, one approval card.
   if (Array.isArray(body.moves) && body.moves.length) {
+    // 3.7.0 (tester blocker 5): same up-front cap as batch delete
+    if (body.moves.length > 50) {
+      return fsFail(400, {
+        error: "batch too large: " + body.moves.length + " moves (max 50)",
+        hint: "split into chunks of ≤ 50 and run them as separate calls",
+      });
+    }
     const results = [];
     let fails = 0;
+    // 3.7.0 (tester should-fix): validate every source exists + every
+    // destination free BEFORE the card — a batch the user approves must
+    // be a batch that can actually run (partial 207s stay possible only
+    // for races, e.g. a file appearing mid-batch)
+    for (const m of body.moves) {
+      if (!m || typeof m.from !== "string" || typeof m.to !== "string") continue;
+      try {
+        const rgF = await resolveGuarded(unquoteComp(m.from), { forWrite: true });
+        const wF = await walkToParent(rgF.rootRec, rgF.parts, false);
+        let ok = false;
+        try { await wF.dir.getFileHandle(wF.fileName); ok = true; } catch (e) {}
+        try { await wF.dir.getDirectoryHandle(wF.fileName); ok = true; } catch (e) {}
+        if (!ok) return fsFail(404, { error: "batch move: no such file: " + m.from,
+          hint: "nothing was moved — fix the list and re-send" });
+        const rgT = await resolveGuarded(unquoteComp(m.to), { forWrite: true });
+        const wT = await walkToParent(rgT.rootRec, rgT.parts, true);
+        let occupied = false;
+        try { await wT.dir.getFileHandle(wT.fileName); occupied = true; } catch (e) {}
+        try { await wT.dir.getDirectoryHandle(wT.fileName); occupied = true; } catch (e) {}
+        if (occupied) return fsFail(409, { error: "batch move: destination exists: " + m.to,
+          hint: "nothing was moved — move never overwrites; fix the list and re-send" });
+      } catch (e) {
+        return fsFail(400, { error: "batch move: " + String(e && e.message || e) });
+      }
+    }
+    // ONE card for the whole (now pre-validated) batch
+    const gate = await confirmGateLate("POST", "/move", body);
+    if (gate) return fsFail(403, gate);
     for (const m of body.moves.slice(0, 50)) {
       if (!m || typeof m.from !== "string" || typeof m.to !== "string") {
         results.push({ from: m && m.from, ok: false, error: "each move needs {from, to}" });
@@ -407,7 +452,7 @@ async function epMove(body, opts) {
   }
   if (!internal) {
     const rc = await rateCheck(0);
-    if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+    if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true, retry_after_s: 60 });
   }
   // resolve source parent + entry kind
   const wF = await walkToParent(rgF.rootRec, rgF.parts, false);
@@ -424,6 +469,12 @@ async function epMove(body, opts) {
     return fsFail(409, { error: "destination exists: " + to,
       hint: "move never overwrites — delete or rename the destination first, or copy with /write_b64" });
   } catch (e) { /* good */ }
+  // 3.7.0 (tester should-fix): the approval card comes AFTER the
+  // pre-checks — never approve a move that then 404/409s
+  if (!internal) {
+    const gate = await confirmGateLate("POST", "/move", body);
+    if (gate) return fsFail(403, gate);
+  }
   try {
     await wT.dir.getDirectoryHandle(wT.fileName);
     return fsFail(409, { error: "destination exists: " + to,
@@ -451,15 +502,23 @@ async function epMkdir(body) {
   if (!p) return fsFail(400, { error: "mkdir needs {\"path\": \"folder/sub\"}" });
   const rg = await resolveGuarded(unquoteComp(p), { forWrite: true });
   const rc = await rateCheck(0);
-  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true, retry_after_s: 60 });
   const w = await walkToParent(rg.rootRec, rg.parts, true);
   let existed = false;
   try { await w.dir.getDirectoryHandle(w.fileName); existed = true; }
   catch (e) {
     try { await w.dir.getFileHandle(w.fileName); }
     catch (e2) {
-      await w.dir.getDirectoryHandle(w.fileName, { create: true });
+      await w.dir.getDirectoryHandle(w.fileName, { create: true }); existed = false;
     }
+  }
+  // 3.7.0 (tester should-fix): a FILE already squatting on the name is
+  // a conflict, not a silent "existed: false"
+  let nameIsFile = false;
+  try { await w.dir.getFileHandle(w.fileName); nameIsFile = true; } catch (e) {}
+  if (nameIsFile) {
+    return fsFail(409, { error: "a FILE already exists at " + rg.relInRoot,
+      hint: "delete or move the file first, or mkdir under a different name" });
   }
   await auditRow({ endpoint: "/mkdir", method: "POST", path: rg.relInRoot, status: 200 });
   await refreshRootsCount();
@@ -581,7 +640,7 @@ async function epRestore(kind, body) {
     return fsFail(404, { error: "no " + kind + " entry: " + ts + " for " + rel });
   }
   const rc = await rateCheck(0);
-  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true, retry_after_s: 60 });
   const snap = await snapshotBeforeWrite(rg.rootRec, rg.parts); // snapshot-on-restore
   const file = await srcFileHandle.getFile();
   await writeFileBytes(rg.rootRec, rg.parts, new Uint8Array(await file.arrayBuffer()));
@@ -729,7 +788,7 @@ async function epZip(body) {
   }
   if (total > ZIP_CAP_BYTES) return fsFail(413, { error: "zip payload too large: " + total });
   const rc = await rateCheck(total);
-  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true, retry_after_s: 60 });
   // build the zip via the engine page (it has fflate) or inline fallback
   const zipped = await fsZipBytes(files.map((x) => ({ name: x.name, bytes: new Uint8Array(0), file: x.file })));
   const rgOut = await resolveGuarded(unquoteComp(outName), { forWrite: true });
@@ -757,7 +816,7 @@ async function epUnzip(body) {
     }
   }
   const rc = await rateCheck(file.size);
-  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true });
+  if (!rc.ok) return fsFail(429, { error: rc.err, rate_limited: true, retry_after_s: 60 });
   const destParts = dest ? dest.split("/").filter(Boolean) : [];
   let count = 0, total = 0;
   for (const e of entries) {

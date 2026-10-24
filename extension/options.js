@@ -222,7 +222,10 @@ async function renderSec() {
   const mode = site ? (token ? "site lock + token" : "site lock") : (token ? "token only" : "nothing");
   modeEl.innerHTML = "Current protection: <b>" + esc(mode) + "</b>" +
     (site || token ? "" :
-      " — <span class='warn'>no site can use the bridge yet; set your Open WebUI address above.</span>");
+      " — <span class='warn'>no site can use the bridge yet; set your Open WebUI address above.</span>") +
+    (site && !token ?
+      " — <span class='warn'>without a bridge token, ANY html the model renders on that site (artifact/preview panels) can read the shared folder through the injected client. Set a token unless the site is localhost.</span>" :
+      "");
   modeEl.className = "hint";
 
   // recently-blocked suggestions — one click REPLACES the current site
@@ -248,8 +251,24 @@ async function renderSec() {
       add.textContent = "Use this site";
       add.onclick = async () => {
         siteEditing = false;
+        const stat = document.getElementById("sitestat");
+        // 3.7.0 (tester blocker 2): route through the SAME path as
+        // "Set site" — permission request (user gesture = this click)
+        // + registration sync for the NEW site, and the sync also
+        // unregisters the OLD one. Failure is non-fatal (relay works).
         await OFBIDB.put("kv", d.o, "allowed_site");
         try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
+        try {
+          const pat = String(d.o).replace(/\/+$/, "") + "/*";
+          const granted = await chrome.permissions.request({ origins: [pat] });
+          const sync = await chrome.runtime.sendMessage({ ofbInjectSync: true, register: granted !== false });
+          if (granted && sync && sync.registered) {
+            stat.textContent = "✓ client injection active for this site " +
+              "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))";
+          } else if (granted === false) {
+            stat.textContent = "✓ site set (permission declined — the pasted bootstrap still works)";
+          }
+        } catch (e) { /* non-fatal */ }
         renderSec(); beat();
       };
       row.append(name, add);

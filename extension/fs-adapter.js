@@ -201,13 +201,11 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       }
       // pilot 3.4.0: a BARE root listing is depth-1 + hints (a recursive
       // root /list on a network share flooded model contexts / timed out,
-      // 25× in the pilot); an explicit path keeps the recursive default
-      // (existing callers rely on it), and depth/max_entries/fields work
-      // everywhere. depth=0 means "as deep as before" (unbounded).
-      const atRoot = !startParts.length;
-      const depthReq = q.depth !== undefined
-        ? parseInt(q.depth, 10)
-        : (atRoot ? 1 : 0);
+      // 25× in the pilot). 3.7.0 (tester blocker 4): depth defaults to
+      // 1 EVERYWHERE — an explicit path recursed unbounded on a
+      // 650-file folder (500-entry cap + truncation) while the skill
+      // said "non-recursive". depth=0 opts back into unbounded.
+      const depthReq = q.depth !== undefined ? parseInt(q.depth, 10) : 1;
       const maxEntries = q.max_entries !== undefined
         ? Math.max(1, Math.min(parseInt(q.max_entries, 10) || MAX_LIST, 2000))
         : MAX_LIST;
@@ -471,16 +469,23 @@ async function epRead(q) {
   // (JSONDecodeError on JSON, broken CSV). raw=1 returns the plain text;
   // the numbered view stays the default for looking, not parsing.
   if (String(q.raw || "") === "1" || String(q.raw || "").toLowerCase() === "true") {
-    let raw = text;
+    // 3.7.0 (tester blocker 4): offset/length page the raw view (the
+    // old fixed first-2-MB page + nonexistent start= hint misled
+    // models on long logs). Offsets are CHARACTER offsets into the
+    // text; the response echoes them for the next page.
+    const off = q.offset !== undefined ? Math.max(parseInt(q.offset, 10) || 0, 0) : 0;
+    const len = q.length !== undefined
+      ? Math.max(parseInt(q.length, 10) || MAX_READ_RAW, 1)
+      : MAX_READ_RAW;
+    let raw = off > 0 ? text.slice(off) : text;
     let truncated = false;
-    // 3.5.0 (pilot item 18): raw pages are 2 MB, not 200 k — a 9 MB log
-    // needed ~50 small pages and tripped the rate breaker twice (C06)
-    if (raw.length > MAX_READ_RAW) { raw = raw.slice(0, MAX_READ_RAW); truncated = true; }
-    const out = { path: echo, raw: true, content: raw,
-      total_lines: raw === text ? text.split("\n").length : undefined };
+    if (raw.length > len) { raw = raw.slice(0, len); truncated = true; }
+    const out = { path: echo, raw: true, content: raw, offset: off,
+      total_lines: raw === (off > 0 ? text.slice(off) : text) ? (off > 0 ? text.slice(off) : text).split("\n").length : undefined };
     if (truncated) {
       out.truncated = true;
-      out.hint = "raw page cut at " + MAX_READ_RAW + " chars — continue with /read?start=<line> or /read_b64 ranges";
+      out.hint = "raw page cut at " + raw.length + " chars — continue with /read?raw=1&offset=" +
+        (off + raw.length) + " (character offset) or use read_binary_range";
     }
     return fsOk(out);
   }
@@ -573,6 +578,7 @@ async function epReadB64(q) {
   if (file.size > MAX_BINARY) {
     throw new OpFail(413, {
       error: "file too large: " + file.size + " > " + MAX_BINARY + " bytes",
+      size_bytes: file.size,
       hint: "read it in ranges: /read_b64?path=…&offset=0&length=8000000, then offset=8000000, … (a Python helper can loop)",
     });
   }
@@ -598,7 +604,7 @@ async function epStat(q) {
       : [".doc", ".xls", ".ppt"].includes(ext) ? "legacy"
       : [".txt", ".md", ".csv", ".json", ".xml", ".yml", ".yaml", ".log", ".py", ".js", ".html", ".css"].includes(ext) ? "text"
       : "other";
-    return fsOk({ path: q.path, size: file.size, mtime: Math.floor(file.lastModified / 1000), kind: kind, ext: ext || null });
+    return fsOk({ path: rg.relInRoot, size: file.size, mtime: Math.floor(file.lastModified / 1000), kind: kind, ext: ext || null });
   }
   // directory?
   try {
@@ -786,7 +792,8 @@ async function epFind(q) {
           try { const f = await h.getFile(); size = f.size; mtime = f.lastModified; }
           catch (e) {}
         }
-        matches.push({ path: rel, type: isDir ? "dir" : "file", size: size, mtime: mtime });
+        matches.push({ path: rel, type: isDir ? "dir" : "file", size: size,
+          mtime: mtime === null ? null : Math.floor(mtime / 1000) });  // SECONDS everywhere (3.7.0 tester note)
       }
       if (isDir) await rec(h, relParts);
     }

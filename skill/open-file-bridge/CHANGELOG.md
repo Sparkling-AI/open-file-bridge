@@ -2,6 +2,43 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.7.0 — 2026-10-23 (extension 3.7.0: tester round — 6 blockers fixed)
+
+External agent review + overnight browser test of 3.6.0 (OWUI 0.10.x
+fork + stock 0.12.2, 40-case suite) — "release after fixes". All six
+blockers fixed, plus should-fixes:
+
+1. TOKEN-skill one-liner quoted the placeholder wrong (NameError that
+   PRINTED the token) — now `ofb_set_token("__ORG_BRIDGE_TOKEN__")`.
+   Fast-path section moved FIRST ("First, try the fast path") so
+   models stop pasting the full 7.7 K block unasked.
+2. "Use this site" (recently-blocked row) now goes through the same
+   permission-request + registration sync as "Set site";
+   permissions.onRemoved + runtime.onStartup re-sync; injectSync
+   never registers beyond granted permissions.
+3. Credential filter v3: credential word in ANY stem segment of a
+   config/text/binary file refuses (client_secret_*.json,
+   msal_token_cache.json, api_token_list.txt); Office/media served
+   unless an exact known secret name (Q3_token_usage.xlsx served,
+   Mobile-Wallet.xlsx served); added client_secret/token_cache
+   patterns; dropped "wallet".
+4. /list defaults to depth=1 EVERYWHERE (skill always said
+   non-recursive); read_binary auto-loops ranges on 413; /read raw=1
+   gained offset/length paging with a correct continuation hint.
+5. Batches >50 now 400 up front (was: silent slice → ok:true with 5
+   left behind); BridgeError gains .info/.status so 207 bodies are
+   never truncated away.
+6. Options Security card warns in plain words that without a token,
+   any model-rendered HTML on the allowed site (artifact panels) can
+   read the shared folder.
+
+Should-fixes: approval cards have per-op titles (Move/Bulk
+delete/Mkdir…) and batch cards list up to 15 names + "and N more";
+/move cards come AFTER 404/409 pre-checks (batches pre-validate all
+sources+destinations before asking); /find wildcards are substring
+(not anchored), mtime in seconds; /stat echoes the decoded path;
+/mkdir 409s when a file squats the name.
+
 ## 3.6.0 — 2026-10-23 (extension 3.6.0: pilot round 2 + injection)
 
 Release line merging `fix/pilot-feedback-3.4` (3.4.0 → 3.5.0) and

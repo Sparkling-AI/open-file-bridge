@@ -175,8 +175,20 @@ async function confirmTargetExists(relPath) {
   }                // produce its own honest error)
 }
 
+/** Late gate for /move (3.7.0): epMove calls this AFTER its 404/409
+ * pre-checks so the user never approves a move that then fails.
+ * sw.js skips its own gate for POST /move; epMove routes both single
+ * and batch through here (batches pre-check nothing per-item — the
+ * card is still ONE for the whole batch, per pilot item 15).
+ * Returns null (proceed) or a 403-shaped body for the adapter to
+ * return via fsFail(403, gate). */
+let LAST_MOVE_SENDER_TAB = null;   // set by sw.js per request
+async function confirmGateLate(method, path, body) {
+  return confirmGate(method, path, body, LAST_MOVE_SENDER_TAB);
+}
+
 /** Gate entry: returns null (proceed — including after an in-window
- *  approval) or the 403 response body. BLOCKS up to CONFIRM_WAIT_MS. */
+ * approval) or the 403 response body. BLOCKS up to CONFIRM_WAIT_MS. */
 async function confirmGate(method, path, body, senderTabId) {
   const op = await confirmRequiredFor(method, path, body);
   if (op === null) return null;
@@ -278,10 +290,20 @@ function describeOp(op, path, body) {
     const b = typeof body === "string" ? JSON.parse(body || "{}") : (body || {});
     if (op === "delete") return "delete " + (b.path || "?");
     if (op === "move") return "move " + (b.from || b.path || "?") + " → " + (b.to || "?");
-    if (op === "bulk_delete") return "delete " +
-      ((Array.isArray(b.paths) ? b.paths.length : 0) || "?") + " files";
-    if (op === "bulk_move") return "move " +
-      ((Array.isArray(b.moves) ? b.moves.length : 0) || "?") + " files";
+    if (op === "bulk_delete") {
+      // 3.7.0 (tester should-fix): names, not just a count — the user
+      // approves WHAT, not HOW MANY
+      const ps = Array.isArray(b.paths) ? b.paths : [];
+      const names = ps.slice(0, 15).map(String);
+      const more = ps.length > 15 ? " …and " + (ps.length - 15) + " more" : "";
+      return "delete " + ps.length + " files: " + names.join(", ") + more;
+    }
+    if (op === "bulk_move") {
+      const ms = Array.isArray(b.moves) ? b.moves : [];
+      const names = ms.slice(0, 15).map((m) => String((m && m.from) || "?"));
+      const more = ms.length > 15 ? " …and " + (ms.length - 15) + " more" : "";
+      return "move " + ms.length + " files: " + names.join(", ") + more;
+    }
     if (op === "restore") {
       // say RESTORE, not overwrite (Dandan 2026-09-09) — the live file is
       // replaced by the old version, but that's the POINT of the request

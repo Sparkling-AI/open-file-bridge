@@ -79,10 +79,21 @@ async function handleOfbRequest(msg, sender) {
     // internally, so this is free after the first call per SW lifetime
     maybeSweepMaintenance().catch(() => {}); // trash TTL + audit cap
     // out-of-band confirmation gate (destructive ops) — BEFORE the
-    // adapter; passes the requesting tab so the popup lands there
-    const gate = await confirmGate(method, path, bodyText, senderTabId);
-    if (gate) {
-      return { ofb: true, id, ok: false, status: 403, body: JSON.stringify(gate) };
+    // adapter; passes the requesting tab so the popup lands there.
+    // EXCEPT /move (3.7.0 tester should-fix): the card must come AFTER
+    // epMove's source-exists/destination-free checks, else the user
+    // approves a move that then 404/409s. epMove gates itself via
+    // confirmGateLate() for single moves; batches stay SW-gated (the
+    // per-item checks run inside the approved loop).
+    const isMove = method === "POST" && path === "/move";
+    if (!isMove) {
+      const gate = await confirmGate(method, path, bodyText, senderTabId);
+      if (gate) {
+        return { ofb: true, id, ok: false, status: 403, body: JSON.stringify(gate) };
+      }
+    } else {
+      // the late gate (fs-confirm.js) picks the tab up from here
+      LAST_MOVE_SENDER_TAB = senderTabId;
     }
     const resp = await fsRoute(method, path, bodyText);
     if (wantB64 && resp.bodyB64 !== undefined) {
@@ -176,6 +187,17 @@ async function injectSync(register) {
         if (have) await chrome.scripting.unregisterContentScripts({ ids: [INJECT_SCRIPT_ID] });
         return { ok: true, registered: false, reason: "no allowed site" };
       }
+      // 3.7.0: never register beyond what the user actually granted —
+      // a revoked-but-still-allowed-in-IDB site must degrade to the
+      // pasted bootstrap, not throw on every SW start
+      let granted = true;
+      try {
+        granted = await chrome.permissions.contains({ origins: [pattern] });
+      } catch (e) { /* permissions API unavailable (older Chrome) — try */ }
+      if (!granted) {
+        if (have) await chrome.scripting.unregisterContentScripts({ ids: [INJECT_SCRIPT_ID] });
+        return { ok: true, registered: false, reason: "host permission not granted" };
+      }
       const reg = {
         id: INJECT_SCRIPT_ID,
         js: ["inject-main.js"],
@@ -202,6 +224,18 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     injectSync(msg.register !== false).then(sendResponse);
     return true; // async
   }
+});
+
+// 3.7.0 (tester blocker 2): keep the registered injector in lockstep
+// with reality at every edge — permission revoked from the site
+// controls, and every browser start (dynamic registrations persist
+// across sessions but NOT across extension updates; onInstalled below
+// covers those).
+chrome.permissions.onRemoved.addListener((p) => {
+  injectSync(true).catch(() => {}); // re-sync vs the now-smaller grant set
+});
+chrome.runtime.onStartup.addListener(() => {
+  injectSync(true).catch(() => {});
 });
 
 chrome.runtime.onInstalled.addListener(() => {

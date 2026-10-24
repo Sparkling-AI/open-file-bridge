@@ -7,7 +7,7 @@
 
 "use strict";
 
-const FS_VERSION = "3.6.0-EXT";
+const FS_VERSION = "3.7.0-EXT";
 const FS_SKILL_MIN = "2.11";
 const MAX_LIST = 500;
 const MAX_BINARY = 8000000;          // b64 endpoints
@@ -34,9 +34,14 @@ function nameMatches(foldedName, foldedPattern) {
   const q = foldedPattern.trim();
   if (!q) return true;
   if (/[*?]/.test(q)) {
-    const rx = new RegExp("^" + q.split(/(\*|\?)/).map((p) =>
+    // 3.7.0 (tester should-fix): wildcards are SUBSTRING matches, not
+    // anchored — "nordvik*template" must find "Nordvik_Q3_Template.pptx".
+    // An explicit anchor is still available: name=*nordvik (leading *)
+    // or name=template* — a leading ^ / trailing $ in the pattern.
+    const body = q.replace(/^\^/, "").replace(/\$$/, "");
+    const rx = new RegExp(body.split(/(\*|\?)/).map((p) =>
       p === "*" ? ".*" : p === "?" ? "." : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-    ).join("") + "$");
+    ).join(""), "i");
     return rx.test(foldedName);
   }
   const words = q.split(/\s+/);
@@ -76,18 +81,35 @@ const SENSITIVE_NAMES = new Set([
   "serviceaccount.json", "firebase-adminsdk",
 ]);
 const SENSITIVE_EXTS = new Set([".pem", ".key", ".p12", ".pfx", ".keystore", ".kdbx", ".env"]);
-// Credential-name floor, narrowed 2026-10-20 after a 4-week pilot: the old
-// substring regex (^|[-_])(…|token|secret|credentials) refused BUSINESS
-// files like "Q3_token_usage.xlsx". Rule now: exact known names (set
-// below), known key extensions, or the basename STEM (extension stripped)
-// whose last '-'/'_'/'.'-separated segment is a bare credential word —
-// "api_token.json" and "backup-secrets.yml" are refused, "token_usage.xlsx"
-// and "Q3-token-report.xlsx" are served.
+// Credential-name floor, v3 2026-10-23 (tester blocker 3): the 10-20
+// narrowing swung too far — client_secret_*.json, msal_token_cache.bin
+// and api_token_list.txt were SERVED while Mobile-Wallet.xlsx was
+// refused. New rule, per the tester's spec:
+//   1. exact known secret basenames (set below) — always refused;
+//   2. known key extensions (.pem .key .p12 …) — always refused;
+//   3. a credential word in ANY stem segment of a CONFIG/TEXT/BINARY
+//      file (.json .yml .yaml .toml .ini .cfg .txt .env .xml .bin or
+//      no extension) — refused ("api_token_list.txt" has "token");
+//   4. Office/media extensions are served unless the exact basename
+//      is a known secret ("Q3_token_usage.xlsx" served — their ask).
 const SENSITIVE_STEM_WORDS = new Set([
   "token", "tokens", "secret", "secrets", "credential", "credentials",
   "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ecdsa_sk",
   "id_ed25519_sk", "authorized_keys", "htpasswd", "netrc", "pypirc",
-  "npmrc", "keyring", "keystore", "wallet", "serviceaccount",
+  "npmrc", "keyring", "keystore", "serviceaccount",
+  "client_secret", "token_cache", "passwd", "password",
+]);
+// extensions whose files are config/text-like: rule 3 applies
+const SECRET_PRONE_EXTS = new Set([
+  ".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".txt", ".env",
+  ".xml", ".bin", ".conf", ".config", ".keyfile", "",
+]);
+// extensions that are documents/media: only rule 1/2 apply
+const DOC_MEDIA_EXTS = new Set([
+  ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".doc", ".xls",
+  ".ppt", ".pdf", ".epub", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+  ".bmp", ".svg", ".mp3", ".mp4", ".wav", ".csv", ".md", ".html",
+  ".htm", ".txtx", ".heic", ".tiff",
 ]);
 
 const OFFICE_ZIP_EXTS = new Set([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub"]);
@@ -330,17 +352,33 @@ function ignoreMatch(rel, isDir, patterns) {
 }
 function sensitiveName(name) {
   const base = String(name).split("/").pop().toLowerCase();
+  // rule 1: exact known secret basenames
   if (SENSITIVE_NAMES.has(base)) return true;
   const i = base.lastIndexOf(".");
   const stem = i > 0 ? base.slice(0, i) : base;
   const ext = i > 0 ? base.slice(i) : "";
+  // rule 2: known key extensions, any name
   if (ext && SENSITIVE_EXTS.has(ext)) return true;
-  // bare-credential-STEM rule: split the stem on -, _ and . and look at
-  // its segments — refuse when a segment is a credential WORD, but serve
-  // compound business names (token_usage, token-report) whose stem does
-  // not reduce to the bare word.
-  const lastSeg = stem.split(/[-_.]/).pop() || stem;
-  if (SENSITIVE_STEM_WORDS.has(stem) || SENSITIVE_STEM_WORDS.has(lastSeg)) return true;
+  // rules 3/4 split by extension class:
+  if (DOC_MEDIA_EXTS.has(ext)) {
+    // documents/media: only exact known names refuse (rule 4). A
+    // credential WORD in a business filename is not a secret
+    // ("Q3_token_usage.xlsx", "Mobile-Wallet.xlsx" — served).
+    return false;
+  }
+  // config/text/binary/no-extension (rule 3): refuse when ANY stem
+  // segment is a credential word — "api_token_list.txt" (token),
+  // "client_secret_1234…apps.googleusercontent.com.json"
+  // (client_secret), "msal_token_cache.json" (token_cache),
+  // "aws_credentials_backup.txt" (credentials) are all refused.
+  if (!SECRET_PRONE_EXTS.has(ext)) {
+    // unknown extension (e.g. .dat, .db): treat like rule 3 — the
+    // tester's spec keys on config/text/key/binary types
+  }
+  const segs = stem.split(/[-_.]/);
+  if (segs.some((s) => SENSITIVE_STEM_WORDS.has(s))) return true;
+  // long Google-style client secret stems also match via the
+  // client_secret segment; token_cache.bin matches via token_cache
   return false;
 }
 // Async since the settings-page ignore editor landed: the global list

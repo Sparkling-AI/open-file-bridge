@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text', and when the user attached a file in the chat and wants a changed or new file back. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.5.0-EXT (extension backend, no token)
+# Local File Bridge — skill v3.7.0-EXT (extension backend, no token)
 
 > **Variant picker (for whoever publishes this skill):** this is the
 > NO-TOKEN variant — publish it when the extension's 🔒 Security card
@@ -158,28 +158,24 @@ auto-installed (`import matplotlib` in the same cell loads it).
 
 ## Bootstrap (run once per chat, and again after any reset)
 
-First cell = this whole block. It defines ALL helpers and prints the
-extension version + the shared folders (ids, names, permission). It
-does NOT list files — do that afterwards with a `path`.
+**First, try the fast path** (one line, works when the Security card
+says "client injection active"):
 
-### Fast path — one-line bootstrap (extension ≥ 3.5.0 with injection)
-
-When the user's extension has client injection active (the 🔒 Security
-card said "client injection active" when they set the site), every
-sandbox frame already carries the client. The first cell is then just:
+### Fast path — one-line bootstrap (extension ≥ 3.6.0 with injection)
 
 ```python
 import js; exec(js.OFB_CLIENT_PY); await ofb_init()
 ```
 
-- All helpers are identical to the pasted block below; everything in
-  this skill after the bootstrap applies unchanged.
-- If `js.OFB_CLIENT_PY` is missing (`AttributeError`), the host runs
-  cells in a **worker** or the permission was declined — use the full
-  block below instead. Never treat the missing constant as an error to
-  report; silently fall back.
-- A `NameError` on any helper later means the sandbox was RESET — run
-  the one-liner again, then continue (same rule as the full block).
+If `js.OFB_CLIENT_PY` raises AttributeError, do NOT report an error —
+the host runs cells in a worker or the permission was declined;
+silently use the full block below instead.
+
+### Fallback — full bootstrap block (workers, older extensions)
+
+It defines ALL helpers and prints the extension version + the shared
+folders (ids, names, permission). It does NOT list files — do that
+afterwards with a `path`.
 
 ```python
 import json, base64, asyncio, random, urllib.parse, io, zipfile, sysconfig

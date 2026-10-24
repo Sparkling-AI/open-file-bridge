@@ -85,6 +85,10 @@
       'Open File Bridge</div>' +
       '<div class="op">' + (ask.op === "delete" ? "Delete file" :
         ask.op === "restore" ? "Restore previous version" :
+        ask.op === "move" ? "Move file/folder" :
+        ask.op === "bulk_delete" ? "Delete multiple files" :
+        ask.op === "bulk_move" ? "Move multiple files" :
+        ask.op === "mkdir" ? "Create folder" :
         ask.op === "bulk" ? "Bulk operation" : "Overwrite file") +
       ' — approval needed</div>' +
       '<div class="what"><code>' + whatHtml.replace(/^(delete|overwrite|create archive|extract|write \d+ files) /, "$1</code> <code>") + "</code></div>" +
