@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text', and when the user attached a file in the chat and wants a changed or new file back. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.7.1-EXT (extension backend, no token)
+# Local File Bridge — skill v3.7.2-EXT (extension backend, no token)
 
 > **Variant picker (for whoever publishes this skill):** this is the
 > NO-TOKEN variant — publish it when the extension's 🔒 Security card
@@ -363,7 +363,9 @@ def bridge_path(p):
     Windows paths — use this instead of exploring the tree."""
     parts = [x for x in str(p).replace("\\", "/").split("/") if x and x != "."]
     roots = _S["roots"]
-    for i in range(len(parts)):
+    # rightmost match: an ANCESTOR folder may share the root's name
+    # (N:\Shared\…\shared\…) — the mounted folder is the LAST hit
+    for i in range(len(parts) - 1, -1, -1):
         hit = [r for r in roots if parts[i].lower() in {
             str(r.get("alias") or "").lower(), str(r.get("path") or "").lower(),
             str(r.get("id")).lower()}]

@@ -216,7 +216,7 @@ hints = b.get("hints")
 _r = "p7 hints=" + json.dumps(hints)[:120] if isinstance(hints, list) else "p7 NO HINTS"
 assert d["status"] == 200 and isinstance(hints, list) and len(hints) >= 2 \\
     and any("depth" in str(x) or "list" in str(x) for x in hints), _r
-assert b.get("version") == "3.7.1-EXT", "version: " + str(b.get("version"))
+assert b.get("version") == "3.7.2-EXT", "version: " + str(b.get("version"))
 print(_r); RESULT = _r
 ''',
         "p8_list_params": f'''d = (await ofb_fetch("GET", "/list?path={F}&depth=1&fields=path,type")).to_py()

@@ -32,7 +32,7 @@ the Microsoft Store, not the CWS).
   for exactly the allowed OWUI origin (`scripting` +
   `optional_host_permissions`, NO static broad match), one-line
   bootstrap in sandbox cells, stdout-wipe fix for injected cells,
-  Remove-site tears registration down. Chrome 111+ for MAIN-world
+  Remove-site tears registration down. Chrome 119+ (matchOriginAsFallback on REGISTERED scripts is 119+; on 118 the card says active but nothing injects — floor raised to match).
   dynamic registration.
 
 - Version 3.5.0 (2026-10-23, pilot round 2): `/find` filename search

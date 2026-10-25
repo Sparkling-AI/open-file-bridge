@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
   "name": "Open File Bridge",
-  "version": "3.7.1",
+  "version": "3.7.2",
   "description": "Give Open WebUI controlled access to a user-selected local folder, with local-only storage and an allowed-site lock.",
-  "minimum_chrome_version": "111",
+  "minimum_chrome_version": "119",
   "permissions": [
     "offscreen",
     "scripting"

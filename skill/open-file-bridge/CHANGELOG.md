@@ -2,6 +2,26 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.7.2 — 2026-10-25 (extension 3.7.2: upload-candidate build)
+
+Tester retest of 3.7.1: all six claims pass, regression clean, best
+suite run so far. Two fixes they asked for in the same build:
+
+- **minimum_chrome_version 111 → 119.** matchOriginAsFallback on
+  REGISTERED content scripts is Chrome 119+ per the API docs; on 118
+  the Security card said "injection active" while nothing injected.
+  119 is the honest floor.
+- **bridge_path() rightmost-root match.** It cut at the FIRST segment
+  naming a root, so a pasted absolute path whose ANCESTOR shares the
+  root's name (N:\Shared\…\shared\…) truncated at the ancestor and
+  404'd everything under it. Now matches the RIGHTMOST root-naming
+  segment. Fixed in the injected client AND the pasted fallback block
+  (unit-checked: 6/6 cases incl. their exact repro, multi-root
+  prefixes intact).
+
+Versions: manifest 3.7.2 / FS_VERSION 3.7.2-EXT / client 3.7.2-inj /
+skill v3.7.2-EXT (both variants).
+
 ## 3.7.1 — 2026-10-24 (extension 3.7.1: tester retest round)
 
 Tester retest of 3.7.0 (in-place update over 3.6.0 AND 3.3.1, Chrome

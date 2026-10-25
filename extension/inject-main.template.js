@@ -22,7 +22,7 @@
   }
   if (typeof globalThis.ofb !== "undefined") return; // already injected
 
-  var VER = "3.7.1-inj";
+  var VER = "3.7.2-inj";
   var PREFIX = "ofbj-" + Math.random().toString(16).slice(2, 14);
 
   var pending = new Map();   // id -> resolve

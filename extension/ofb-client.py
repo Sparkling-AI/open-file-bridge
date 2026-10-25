@@ -1,4 +1,4 @@
-"""Open File Bridge — Pyodide client (ofb_client) 3.7.1-inj.
+"""Open File Bridge — Pyodide client (ofb_client) 3.7.2-inj.
 
 Same helpers as the SKILL-EXT bootstrap, refactored for injection:
 exec()'d from js.OFB_CLIENT_PY inside Open WebUI's sandbox iframe.
@@ -20,7 +20,7 @@ try:
 except ImportError:
     parent = None
 
-OFB_CLIENT_VERSION = "3.7.1-inj"
+OFB_CLIENT_VERSION = "3.7.2-inj"
 _TOKEN = [""]
 _S = {"pending": {}, "n": 0, "bc": None, "relay": None, "roots": [],
       "wid": "w%08x" % random.getrandbits(32), "transport": None}
@@ -226,7 +226,12 @@ async def install_bridge_wheels(*prefixes):
 def bridge_path(p):
     parts = [x for x in str(p).replace("\\", "/").split("/") if x and x != "."]
     roots = _S["roots"]
-    for i in range(len(parts)):
+    # 3.7.2 (tester): match the RIGHTMOST segment naming a root — a
+    # pasted absolute path may contain an ANCESTOR folder sharing the
+    # root's name (N:\Shared\…\shared\…), and the leftmost match cut
+    # at the ancestor, 404ing every path under it. The mounted folder
+    # is the last place the root's own name can appear in the prefix.
+    for i in range(len(parts) - 1, -1, -1):
         hit = [r for r in roots if parts[i].lower() in {
             str(r.get("alias") or "").lower(), str(r.get("path") or "").lower(),
             str(r.get("id")).lower()}]
