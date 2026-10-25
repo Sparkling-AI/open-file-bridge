@@ -1,9 +1,9 @@
 ---
 name: open-file-bridge
-description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text'. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
+description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text', and when the user attached a file in the chat and wants a changed or new file back. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.3.3-EXT (extension backend, TOKEN variant)
+# Local File Bridge — skill v3.7.3-EXT (extension backend, TOKEN variant)
 
 > **TOKEN variant — publish this only when the extension's 🔒 Security
 > card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`
@@ -26,485 +26,790 @@ on **any OWUI origin** — public HTTPS included.
 If `ofb_fetch` raises "no relay answered", the extension is NOT
 installed/enabled on this page — tell the user the extension is
 required and stop; do not fall back to `pyfetch 127.0.0.1` (there is no
-app to talk to). A slow TIMEOUT (no reply in ~30 s) usually means the
+app to talk to). A slow TIMEOUT (no reply in ~45 s) usually means the
 elected relay's tab was closed mid-session — retry once (the bootstrap
 re-elects automatically).
 
-> Requires the Open File Bridge extension ≥ **3.3.0** (checked on the
+> Requires the Open File Bridge extension ≥ **3.4.0** (checked on the
 > first /health below; newer extensions are always fine — the pipe is
 > backward-compatible).
 
-The endpoint surface mirrors the desktop bridge app — every recipe
-below is complete on its own.
+## Rules — read these first (each exists because it failed in a real session)
 
-## The sandbox is NOT the user's computer
+1. **The sandbox is NOT the user's computer.** `/mnt/uploads`,
+   `os.getcwd()`, `open()`, `Path(…)` are a throwaway VM. A file the
+   user should end up with is written ONLY with the bridge helpers, and
+   only a `written` value in a bridge response proves it exists. Never
+   say "saved"/"created" without one.
+2. **Run the bootstrap EXACTLY as written — never retype it partially.**
+   Copies that dropped helpers caused most trial failures
+   (`NameError: read_binary`). If any helper raises `NameError`, the
+   sandbox was RESET (the host kills cells at 60 s and recreates it):
+   run the whole block again, unchanged, then continue.
+3. **Every cell must finish within ~45 s.** Split big jobs across cells
+   (`max_pages` on OCR/PDF, windows on /read); never loop a cell over a
+   whole worksheet.
+4. **Print little.** Everything printed is re-sent to the model on every
+   later step. Use `out(obj)` (caps at 4000 chars); never print file
+   bytes or base64 (except the one image line of §Showing an image).
+5. **Never hand-build binary formats** — no raw PDF syntax, no
+   hand-written OOXML XML, no PNG pixel "OCR". Use the helpers and
+   endpoints below; if a library is missing, use the named fallback.
+6. **Look in the shared folder before answering from general knowledge**
+   when the user refers to "my material / the offer / the results".
+7. **Errors are explicit — read them, don't guess.** Helpers raise
+   `BridgeError` carrying the extension's own message; `e.info` holds
+   the FULL parsed error body (`e.info["results"]` for batch 207s,
+   `e.info["retry_after_s"]` for rate limits) and `e.status` the HTTP
+   number. Never repeat a failed request unchanged.
+8. **Find a file before you use it — never guess a path** (E03/D03
+   failures). When the folder is unknown, call
+   `/find?name=<part of the name>` FIRST. A listing that says
+   `truncated: true` never means "not there" — narrow the `path` or
+   `/find` again. If `/find` (with `truncated: false`) finds nothing,
+   say what you searched and offer close names.
+9. **"Change / fix / update this file" means write the SAME path**
+   (E01: edits saved as `…_v2_updated.docx` — users lost track of
+   which file is current). The snapshot system makes overwrites
+   undoable; a NEW name only for a genuinely new, derived output
+   (summary, chart, export) or an asked-for copy.
+10. **Destructive steps run ONE at a time, sequentially** — never
+   `asyncio.gather` on deletes/moves/overwrites (E03: 12 parallel
+   deletes, 12 approval cards, 9 duplicates left behind). For batches,
+   use the batch endpoints (`/move {"moves": [...]}`,
+   `/delete {"paths": [...]}`) — ONE approval card covers the whole
+   batch. For more than ~5 items, show the plan and wait for a yes.
+11. **Never probe for packages** (`__import__`/`importlib`/try-import
+   loops): hosts install a package only when a cell has a literal
+   `import name` line, so probes report available packages as missing.
+   Write the import directly, as in the recipes.
+12. **Safety filters are not obstacles.** If a file is refused as a
+   credential or ignored by policy, tell the user why. NEVER suggest
+   renaming, copying or moving a file to get around a filter (F01).
 
-Your code sandbox has its own filesystem (`/mnt/uploads`,
-`os.getcwd()`, `Path("…")`) — a THROWAWAY VM. Writing a file there
-(`open()`, `write_text`, `os.makedirs` …) creates NOTHING on the
-user's machine, however cleanly the cell runs. This includes trivial
-asks — "create a small test file", "save any 2 lines" — the user
-still means a file they can open, i.e. in their shared folder. Every
-file the user should end up with is created/edited ONLY through the
-bridge helpers below; the write response's `written` is your proof it
-exists for the user. If a file matters enough to mention in your
-answer, it matters enough to bridge-write. Folders too:
-`make_folder(path)` creates a real folder (nested paths create
-parents, `mkdir -p` style; re-creating an existing folder is a no-op);
-the response's `created` is your proof, and empty folders ARE visible
-to `/list` and `/directory_tree`. (`/mkdir` needs extension 3.3.2+ —
-a 404 "unknown endpoint" means the extension is older; tell the user
-to update it, then retry.)
+## The sandbox is NOT the user's computer (details)
+
+Your code sandbox has its own filesystem — a THROWAWAY VM. Writing a
+file there creates NOTHING on the user's machine, however cleanly the
+cell runs. This includes trivial asks — "create a small test file",
+"save any 2 lines" — the user still means a file they can open, i.e. in
+their shared folder. Every file the user should end up with is
+created/edited ONLY through the bridge helpers; the write response's
+`written` is your proof it exists. After ANY successful write, and
+whenever the user asks where a file is, name it as
+`folder-name/relative/path` (the `root_name` + `written` fields of the
+response, no leading `/`) in a code span. NEVER report `/mnt/uploads/…`
+or any sandbox path — if you catch yourself quoting one, you are
+describing the wrong file.
+
+Folders also use the bridge: `make_folder(path)` creates a real folder
+(nested parents are created, and repeating an existing folder is a no-op).
+The response's `created`/`written` fields are the proof; empty folders are
+visible to `/list` and `/directory_tree`.
 
 ## What is different from the app-backed skill
 
-- `bridge_get` / `bridge_post` / `ofb_fetch` / `ofb_fetch_b64` — IDENTICAL
-  signatures and behavior (bootstrap below).
 - **Sender security gate** — the extension serves ONLY the one Open
   WebUI site the user allowed (set in the extension's settings). Two
   403 shapes can come back, each self-explaining:
-  - `{"security_locked": true}` or `{"origin_blocked": true}` — this
-    site is not the allowed one. Tell the user ONCE: click the Open
-    File Bridge **toolbar icon → 🔒 Security → Allowed site → set it to
-    <the origin named in the error>** (one click if it already shows
-    under "Recently blocked"), then retry. Do NOT retry before they
-    confirm; every retry while blocked fails identically.
-  - `{"token_required": true}` — the token embedded below is wrong or
+  - `security_locked` / `origin_blocked` — this site is not the allowed
+    one. Tell the user ONCE: click the Open File Bridge **toolbar icon →
+    🔒 Security → Allowed site → set it to <the origin named in the
+    error>** (one click if it already shows under "Recently blocked"),
+    then retry. Do NOT retry before they confirm.
+  - `token_required` — the token embedded in the bootstrap is wrong or
     was rotated in the extension's settings. Ask the user ONCE for the
     current bridge token (toolbar icon → 🔒 Security → Bridge token →
-    Show/copy), then run `ofb_set_token("<the pasted token>")` and
-    retry. NEVER echo the token back in your answer; it rides in the
-    `token` field of every request from then on (the bootstrap handles
-    that automatically).
-- **Permission errors (HTTP 403 `permission_needed: true`)** — after a
-  browser restart or extension update the user must re-confirm folder
-  access once. Tell the user: click the Open File Bridge toolbar
-  icon → **Reconnect**. On the browser's bubble, **"Allow on every
-  visit" is the persistent choice** (asks never again); "Allow this
-  time" works but repeats after every restart. The folder is NOT
-  re-picked.
-- **Engines start themselves — never ask the user to open anything.**
-  PDF text/PDF ops/OCR run in a hidden engine document that the extension
-  starts automatically the FIRST time you call `/pdf_text`, `/pdf_op`,
-  `/ocr`, or `/ocr_pdf` (the first call takes a few extra seconds).
-  `"engine_alive": false` on `/health` is the NORMAL resting state, NOT
-  a blocker and NOT a reason to ask the user — just call the endpoint.
-  You should never see 409 `engine_needed`; if one appears anyway,
-  retry ONCE, and only if it persists tell the user: toolbar icon →
-  settings → OCR card → check "Auto-start the engines" and press
-  "Open engine tab" (manual fallback).
-- `/pdf_text`, `/pdf_op`, `/ocr`, `/ocr_pdf`, `/image_info`, `/image_b64`
-  — same request/response shapes as the app.
-- **Moved endpoints** (501 with a recipe): `/docx_read /docx_write
-  /docx_merge /docx_mailmerge /pptx_read /pptx_from_template /xlsx_read
-  /xlsx_append /eml_read /html_text /pdf_from_text /csv_head /csv_stats`
-  — the office stack runs HERE in Pyodide: fetch bytes with `/read_b64`,
-  write with `/write_b64` (recipes below). CSV needs no wheels and no
-  recipe — it is plain text: `/read` it and slice/aggregate in Python
-  (stdlib `csv` module if quoting matters).
-- `/convert` is GONE (501) — except as recipes: **xlsx→csv** and
-  **docx→html** run in Pyodide (§Office files below); everything else:
-  ask the user to open the file in their office app (Word / Excel /
-  LibreOffice) and save as `.docx` / `.xlsx`, then we can read and edit
-  it.
-- **Naming files for the user: `folder/relative/path` — NEVER a
-  sandbox path.** Bridge files live in the user's shared folder, whose
-  display name `/health` reports as `root` (e.g. `test-folder`). After
-  ANY successful write/create/edit/restore, and whenever the user asks
-  where a file is, name it as the folder name + the bridge-relative
-  path in a code span, e.g. `test-folder/notes/report.md` — built ONLY
-  from bridge responses: `written`/`path` minus the leading `/`, plus
-  the `root` name. NEVER report `/mnt/uploads/…`, `os.getcwd()`, or
-  any Pyodide-filesystem path — those are throwaway sandbox locations
-  the user cannot see; if you catch yourself quoting one, you are
-  describing the wrong file, go back to the bridge response. A write
-  answer without the file's folder-relative path is INCOMPLETE. (No
-  clickable links: `/link` 501s — an extension cannot open files or
-  the OS file manager.)
+    Show/copy), then run `ofb_set_token("<pasted>")`
+    and retry. NEVER echo the token back in your answer. If a correct
+    token still fails, the page may hold a STALE relay from before an
+    extension update — tell the user to REFRESH the page once and retry.
+- **Permission errors (403 `permission_needed`)** — after a browser
+  restart or extension update the user must re-confirm folder access
+  once. Tell the user: click the Open File Bridge toolbar icon →
+  **Reconnect**. On the browser's bubble, **"Allow on every visit" is
+  the persistent choice**; "Allow this time" repeats after every
+  restart. The folder is NOT re-picked.
+- **Engines start themselves** — PDF text/PDF ops/OCR run in a hidden
+  engine document the extension starts automatically the FIRST time you
+  call `/pdf_text`, `/pdf_op`, `/ocr`, or `/ocr_pdf` (the first call
+  takes a few extra seconds). `"engine_alive": false` on `/health` is
+  the NORMAL resting state — just call the endpoint. If a 409
+  `engine_needed` appears anyway, retry ONCE, and only if it persists
+  tell the user: toolbar icon → OCR card → check "Auto-start the
+  engines" / "Open engine tab".
+- **Moved endpoints** (501 + recipe): `/docx_read /docx_write
+  /docx_merge /docx_mailmerge /pptx_read /pptx_from_template
+  /xlsx_read /xlsx_append /eml_read /html_text /pdf_from_text
+  /csv_head /csv_stats` — the office stack runs HERE in Pyodide with
+  the bundled wheels (§Office files). `/convert` is GONE (501) except
+  as recipes: **xlsx→csv** and **docx→html**.
+- No clickable outcome links in extension mode — every write answer
+  names the file's `written` path instead.
 
-## OCR notes (tesseract.js, bundled fast models)
+## Which Open WebUI host
 
-Languages bundled (21, alphabetical — same set as the desktop app):
-`ara chi_sim chi_tra dan deu eng est fin fra hun ita jpn kor lav lit
-nor pol por rus spa swe` (the live list is `/health`'s
-`ocr_langs_available`; set with `POST /ocr/lang {"lang": "swe+eng"}`
-or per-request `lang=`; combo langs matter — `swe+eng` fixes å/ä/ö
-AND digits, each alone can break one).
-One known caveat: an isolated ALL-CAPS diacritic token (e.g. a lone
-"ÅÄÖ") may decode as AAO. Words with diacritics in normal case are
-accurate; if a critical all-caps token looks wrong, ask the user to
-confirm it rather than trusting the OCR blindly.
+Newer hosts bundle more of the office stack (installed on `import`,
+preferred over bridge wheels):
 
-Small photos are auto-upscaled before recognition (sign snapshots,
-crops — a big accuracy win). If lines STILL look garbled, do not burn
-cells re-trying languages: give the best reading you got, say the
-photo is hard, and show it to the user —
-`GET /image_b64?path=…` then echo
-`![name](its data_url)` in your reply (the sanctioned display
-convention; big images auto-downscale, `shrunk` says so). The user can
-read a sign themselves faster than three more OCR passes.
+- **0.12.0+**: lxml, python-docx and python-pptx bundled — Word and
+  PowerPoint work out of the box. Code that merely *mentions*
+  matplotlib no longer crashes.
+- **0.11.4+**: openpyxl and seaborn bundled.
+- **0.11.0–0.11.3**: matplotlib works; no bundled Office libraries —
+  use the bridge wheels; Word/PowerPoint need lxml (often unavailable).
+- **0.10.x**: matplotlib is broken in the iframe sandbox; no bundled
+  office libraries. Word/PowerPoint are usually NOT available — say so
+  and offer `.md`/`.html` instead. Do not hand-write the XML.
 
-**Vision input — the honest rule:** code output reaches you
-as TEXT only. You CANNOT see local images through the bridge, no
-matter what you print in a cell (OWUI never attaches cell output to
-your vision input). If the task truly needs YOU to look at a local
-image (layout, charts, handwriting, "what is this a picture of"), tell
-the user: **"please attach/upload the image directly in this chat"** —
-an attached upload is the one input path vision models actually
-consume. Meanwhile use OCR for text and the display convention above
-to SHOW the user the image. For ORIGINAL bytes (e.g. to embed into a
-document), use `/read_b64`, not `/image_b64`.
+On any version: a stdout line starting with `data:image/png;base64,`
+becomes an uploaded image link (§Showing an image); `PIL` is not
+auto-installed (`import matplotlib` in the same cell loads it).
 
-## Bootstrap (run once per session)
+## Bootstrap (run once per chat, and again after any reset)
 
-**Run the block EXACTLY as written.** The transport (and, in the token
-variant, the bridge token) lives inside it — hand-written or trimmed
-copies fail the sender gate with 403 `token_required` and waste turns.
-After an extension update, a page that was already open holds a STALE
-relay that drops the token silently: if a correct token still gets
-`token_required`, tell the user to REFRESH the page once and retry.
+**First, try the fast path** (one line, works when the Security card
+says "client injection active"):
+
+### Fast path — one-line bootstrap (extension ≥ 3.6.0 with injection)
 
 ```python
-import sys, json, base64, asyncio, random
+import js; exec(js.OFB_CLIENT_PY); ofb_set_token("__ORG_BRIDGE_TOKEN__"); await ofb_init()
+```
+
+If `js.OFB_CLIENT_PY` raises AttributeError, do NOT report an error —
+the host runs cells in a worker or the permission was declined;
+silently use the full block below instead.
+
+### Fallback — full bootstrap block (workers, older extensions)
+
+It defines ALL helpers and prints the extension version + the shared
+folders (ids, names, permission). It does NOT list files — do that
+afterwards with a `path`.
+
+```python
+import json, base64, asyncio, random, urllib.parse, io, zipfile, sysconfig
 import js
 from pyodide.ffi import create_proxy, to_js
-
-# OWUI may run cells in a pyodide WORKER: no parent window exists
-# there, and `from js import parent` ImportError-kills the whole cell. In
-# an iframe sandbox parent EXISTS. Guard it and pick the transport at runtime.
 try:
-    from js import parent
+    from js import parent            # iframe sandbox; absent in a worker
 except ImportError:
     parent = None
+_TOKEN = ["__ORG_BRIDGE_TOKEN__"]    # pre-filled; set via ofb_set_token on 403 token_required
+_S = {"pending": {}, "n": 0, "bc": None, "relay": None, "roots": [],
+      "wid": "w%08x" % random.getrandbits(32)}
 
-_pending = {}
-_next = [0]
-_installed = [False]
-_bc = None            # worker transport (BroadcastChannel "ofb-pipe")
-_relay_tag = [None]   # elected relay — the ONE tab that forwards for us
-_wid = "w%08x" % random.getrandbits(32)
-_TOKEN = ["__BRIDGE_TOKEN__"]   # org bridge token EMBEDDED (filled in when
-                     # this skill was prepared). NEVER redefine it, and
-                     # NEVER echo the value back in your answer
+class BridgeError(RuntimeError):
+    pass
+
+class BridgeError_with_info(BridgeError):
+    """Full parsed error body on .info, HTTP number on .status."""
+    def __init__(self, msg, info, status=None):
+        super().__init__(msg)
+        self.info = info
+        self.status = status
 
 def ofb_set_token(t):
     _TOKEN[0] = str(t or "")
 
-def _install():
-    if _installed[0]:
-        return
-    global _bc
-    def _on_msg(ev):
-        try:
-            d = getattr(ev, "data", None)
-            if d is None:
-                return
-            dd = d.to_py()          # JsProxy -> dict (REQUIRED before .get)
-            # only RESPONSES resolve futures: responses carry ok, requests
-            # carry method. "ofb-pipe" is a broadcast channel — with two OWUI
-            # tabs open, the OTHER tab's worker posts requests with ids that
-            # collide with ours, and without this guard its REQUEST would
-            # steal our pending future (observed live: ofb_fetch "returned"
-            # the request itself and bridge_get died with KeyError 'status').
-            if dd.get("ofb") is not True or dd.get("method") is not None \
-                    or "ok" not in dd:
-                return
-            fut = _pending.pop(dd.get("id"), None)
-            if fut is not None and not fut.done():
-                fut.set_result(d)
-        except Exception:
-            pass
-    js.addEventListener("message", create_proxy(_on_msg))  # iframe replies
+def _js(d):                          # plain JS object, never a Map
     try:
-        _bc = js.BroadcastChannel.new("ofb-pipe")           # worker replies
-        _bc.addEventListener("message", create_proxy(_on_msg))
+        return to_js(d, dict_converter=js.Object.fromEntries)
     except Exception:
-        _bc = None
-    _installed[0] = True
+        return js.JSON.parse(json.dumps(d))
 
-async def _elect_relay(timeout=0.25):
-    # every relay tab on this origin answers; the smallest tag is the single
-    # forwarder (2 OWUI tabs must not run a write twice). No answer = no
-    # extension on this page.
-    found = []
-    def _on_hello(ev):
+def _on_msg(ev):
+    try:
+        d = ev.data.to_py()
+        # only RESPONSES resolve futures: responses carry ok, requests
+        # carry method — with two OWUI tabs open, the OTHER tab's worker
+        # posts requests with colliding ids (observed live).
+        if d.get("ofb") is not True or d.get("method") is not None or "ok" not in d:
+            return
+        f = _S["pending"].pop(d.get("id"), None)
+        if f is not None and not f.done():
+            f.set_result(d)
+    except Exception:
+        pass
+
+def _install():
+    if _S.get("on"):
+        return
+    js.addEventListener("message", create_proxy(_on_msg))
+    try:
+        _S["bc"] = js.BroadcastChannel.new("ofb-pipe")
+        _S["bc"].addEventListener("message", create_proxy(_on_msg))
+    except Exception:
+        _S["bc"] = None
+    _S["on"] = True
+
+async def _elect(wait=0.25):
+    tags = []
+    def hello(ev):
         try:
-            dd = getattr(ev, "data", None).to_py()
-            if dd.get("ofbRelay") is True and dd.get("workerId") == _wid:
-                found.append(dd.get("tag"))
+            d = ev.data.to_py()
+            if d.get("ofbRelay") is True and d.get("workerId") == _S["wid"]:
+                tags.append(d.get("tag"))
         except Exception:
             pass
-    proxy = create_proxy(_on_hello)
-    _bc.addEventListener("message", proxy)
-    _bc.postMessage(to_js({"ofbHello": True, "workerId": _wid}))
-    await asyncio.sleep(timeout)
-    try: _bc.removeEventListener("message", proxy)
-    except Exception: pass
-    _relay_tag[0] = min(found) if found else None
+    p = create_proxy(hello)
+    _S["bc"].addEventListener("message", p)
+    _S["bc"].postMessage(_js({"ofbHello": True, "workerId": _S["wid"]}))
+    await asyncio.sleep(wait)
+    _S["bc"].removeEventListener("message", p)
+    _S["relay"] = min(tags) if tags else None
 
-async def ofb_fetch(method, path, body=None, b64=False, timeout=60.0):
+async def ofb_fetch(method, path, body=None, b64=False, timeout=45.0):
+    """One bridge request. 45 s default: hosts kill code cells at 60 s —
+    a longer timeout outlives its own cell."""
     _install()
-    loop = asyncio.get_event_loop()
-    fut = loop.create_future()
-    # session-unique ids: two OWUI tabs = two workers with counters that
-    # both start at 0 — bare ints collide on the shared channel (see the
-    # _on_msg guard); the _wid prefix makes every id globally unambiguous
-    rid = _wid + "-" + str(_next[0]); _next[0] += 1
-    _pending[rid] = fut
+    rid = _S["wid"] + "-" + str(_S["n"]); _S["n"] += 1
+    fut = asyncio.get_event_loop().create_future()
+    _S["pending"][rid] = fut
     msg = {"ofb": True, "id": rid, "method": method, "path": path}
-    if body is not None:
-        msg["body"] = body
-    if _TOKEN[0]:
-        msg["token"] = _TOKEN[0]
-    if b64:
-        msg["b64"] = True
+    if body is not None: msg["body"] = body
+    if _TOKEN[0]: msg["token"] = _TOKEN[0]
+    if b64: msg["b64"] = True
     if parent is not None:
-        parent.postMessage(to_js(msg), "*")     # iframe-sandbox executor
+        parent.postMessage(_js(msg), "*")            # iframe executor
     else:
-        if _bc is None:
-            _pending.pop(rid, None)
-            raise RuntimeError("no transport available (worker without "
-                               "BroadcastChannel) — extension mode needs "
-                               "a Chromium-based browser")
-        if _relay_tag[0] is None:
-            await _elect_relay()
-        if _relay_tag[0] is None:
-            _pending.pop(rid, None)
-            raise RuntimeError("Open File Bridge extension not present on "
-                               "this page (no relay answered)")
-        msg["to"] = _relay_tag[0]
-        _bc.postMessage(to_js(msg))             # worker executor
+        if _S["bc"] is None:
+            _S["pending"].pop(rid, None)
+            raise BridgeError("no transport (worker without BroadcastChannel) — extension mode needs a Chromium-based browser")
+        if _S["relay"] is None:
+            await _elect()
+        if _S["relay"] is None:
+            _S["pending"].pop(rid, None)
+            raise BridgeError("Open File Bridge extension not present on this page (no relay answered)")
+        msg["to"] = _S["relay"]
+        _S["bc"].postMessage(_js(msg))               # worker executor
     try:
-        ev = await asyncio.wait_for(fut, timeout)
+        return await asyncio.wait_for(fut, timeout)
     except asyncio.TimeoutError:
-        _relay_tag[0] = None    # elected tab may have closed — re-elect next call
-        raise
-    return ev.to_py()   # fut holds the event's data (set in _on_msg) — do NOT unwrap .data again
+        _S["pending"].pop(rid, None)
+        _S["relay"] = None   # elected tab may have closed — re-elect next call
+        raise BridgeError(f"{path.split('?')[0]}: no reply in {timeout:.0f} s — retry once, then narrow the request (a path=, fewer files, max_pages)")
 
-async def ofb_fetch_b64(path, timeout=120.0):
+def _url(path, params=None):
+    if not params:
+        return path
+    return path + "?" + "&".join(f"{k}={urllib.parse.quote(str(v), safe='/')}" for k, v in params.items())
+
+def _check(path, d, key="body"):
+    """Both failure shapes -> one BridgeError with the real reason.
+    Message is bounded; the FULL body rides on .info so batch results
+    and long hints are never lost."""
+    if d.get("status") == 200 and key in d:
+        return
+    info = d.get("error") or ""
+    if d.get("body"):
+        try: info = json.loads(d["body"])
+        except Exception: info = d["body"][:400]
+    msg = f"{path} -> HTTP {d.get('status')}: {json.dumps(info, ensure_ascii=False)[:700]}"
+    raise BridgeError_with_info(msg, info, d.get("status"))
+
+async def bridge_get(path, params=None, timeout=45.0):
+    d = await ofb_fetch("GET", _url(path, params), timeout=timeout)
+    _check(path, d)
+    return json.loads(d["body"])
+
+async def bridge_post(path, payload, timeout=45.0):
+    d = await ofb_fetch("POST", path, json.dumps(payload), timeout=timeout)
+    _check(path, d)
+    return json.loads(d["body"])
+
+async def ofb_fetch_b64(path, timeout=45.0):
     d = await ofb_fetch("GET", path, b64=True, timeout=timeout)
-    if not d.get("ok"):
-        raise RuntimeError(f"bridge {path} -> HTTP {d.get('status')}: {d.get('error')}")
+    _check(path, d, "bodyB64")
     return base64.b64decode(d["bodyB64"])
 
-async def bridge_get(path, params=None):
-    url = path
-    if params:
-        url += "?" + "&".join(f"{k}={v}" for k, v in params.items())
-    d = await ofb_fetch("GET", url)
-    if d["status"] != 200:
-        raise RuntimeError(f"bridge {path} -> HTTP {d['status']}: {d['body'][:400]}")
-    return json.loads(d["body"])
-
-async def bridge_post(path, payload):
-    d = await ofb_fetch("POST", path, json.dumps(payload))
-    if d["status"] != 200:
-        raise RuntimeError(f"bridge {path} -> HTTP {d['status']}: {d['body'][:400]}")
-    return json.loads(d["body"])
-
 async def read_binary(path):
-    d = await bridge_get("/read_b64", {"path": path})
+    """File bytes; a 413 (over the 8 MB cap) auto-loops ranges."""
+    try:
+        d = await bridge_get("/read_b64", {"path": path})
+        return base64.b64decode(d["b64"])
+    except BridgeError_with_info as e:
+        if getattr(e, "status", None) != 413:
+            raise
+        st = e.info.get("size_bytes") if isinstance(e.info, dict) else None
+        if not st:
+            raise
+        chunks, off = [], 0
+        while off < st:
+            n = min(4_000_000, st - off)
+            chunks.append(await read_binary_range(path, off, n))
+            off += n
+        return b"".join(chunks)
+
+async def read_binary_range(path, offset, length):
+    d = await bridge_get("/read_b64", {"path": path, "offset": offset, "length": length})
     return base64.b64decode(d["b64"])
 
-async def write_text(path, text: str):
+async def read_text(path, encoding="utf-8-sig"):
+    return (await read_binary(path)).decode(encoding, "replace")
+
+async def write_text(path, text):
     return await bridge_post("/write", {"path": path, "content": text})
 
-async def write_binary(path, data: bytes):
-    return await bridge_post("/write_b64",
-        {"path": path, "b64": base64.b64encode(data).decode()})
+async def write_binary(path, data):
+    return await bridge_post("/write_b64", {"path": path, "b64": base64.b64encode(data).decode()})
 
 async def make_folder(path):
     return await bridge_post("/mkdir", {"path": path})
-```
 
-**First call:** `h = await bridge_get("/health")` — one call answers
-everything: extension alive, `version`, `addons`
-(`{pdf: true, ocr: true}` — bundled capability), `engine_alive`
-(false is NORMAL — engines are lazy; they auto-start the moment you
-call an engine endpoint, so do NOT treat it as unavailable), `roots`
-(granted folders; empty = the user
-has not picked one yet → tell them to click the toolbar icon and choose
-a folder). "no relay answered" or "extension not present" means no
-extension on this page; a 503 "no shared folder" means no folder picked
-yet. A raw TIMEOUT is rare — retry once (the relay election
-self-heals), then treat it as a dead extension. The first call may
-instead return 403 `security_locked`/`origin_blocked`
-or 403 `token_required` — see the sender-gate bullet above for the
-exact one-shot recovery (user allows the site / pastes the token).
-Version rule (one-way floor, no lockstep): if `/health`'s `version` is
-OLDER than **3.3.0** (this skill's minimum), say once: "your Open File
-Bridge extension is older than this skill — update it (Chrome →
-chrome://extensions → reload the unpacked extension, or update from the
-Chrome Web Store)" — then continue with what works. Newer extensions
-are always fine; never warn about them. If the extension is MUCH newer
-than this skill (a whole minor version), optionally suggest re-copying
-the skill file from the GitHub repo — a hint, not a warning.
-
-**Permission preflight (same /health call):** every root carries a
-`perm` field. If ANY root shows `"perm": "prompt"` instead of
-`"granted"`, STOP — do not call any other endpoint. Tell the user
-plainly: *"your browser needs to re-confirm folder access once — click
-the Open File Bridge toolbar icon (it opens this extension's settings page), press
-**Reconnect** on the folder, and in Chrome's bubble choose **'Allow on
-every visit'** (the persistent choice; 'Allow this time' repeats after
-every restart). The folder is not re-picked."* Then WAIT for the user
-to confirm before retrying. A browser restart or extension reload
-resets `perm` to `prompt`; every read/write would fail with 403
-`permission_needed` until they Reconnect.
-
-**Errors are JSON** — read them, don't blind-retry. The shapes:
-403 `permission_needed` (Reconnect → Allow on every visit), 403
-`security_locked`/`origin_blocked` (site not allowed — user sets it in
-the extension settings; retry ONCE after they confirm), 403
-`token_required` (ask for the paste ONCE, `ofb_set_token`, retry —
-never echo the token), 409
-`engine_needed` (auto-start usually handles it — retry once; only if
-it persists, the user opens the engine tab from settings), 503
-no-folder (pick a folder), 405 wrong method (the error NAMES the right
-method — re-issue with it, don't guess endpoints). Never repeat a
-failed request unchanged.
-
-**Method cheat** (405 enforces it): reads are **GET** with query
-params — `/list /read /peek /stat /search /directory_tree /image_info
-/image_b64 /pdf_text /ocr`; writes & actions are **POST** with a JSON
-body — `/write /write_b64 /write_many /edit /delete /mkdir /zip /unzip
-/versions/* /trash/* /ocr_pdf /pdf_op`. `/list` is THE listing
-endpoint — `/files`, `/ls`, `/dir`, `/entries` do not exist; don't
-discovery-scan, the endpoint table above is complete.
-
-**`/search` = cross-file grep with context lines** —
-`GET /search?q=term&glob=docs/*.md&exclude=.tmp,.log&context=2&case=1&max=50`.
-`glob` matches the whole relative path (`*` crosses `/`, so
-`docs/*.md` works); `exclude` is a comma-separated list; `case=1`
-makes the term case-sensitive; each match returns
-`{path, line, context: ["N: …"]}` with `context` surrounding lines
-(default 1 each side, max 5); the response also carries `scanned_files`
-and `truncated`. Text files only, same ignore/sensitive rules as
-`/list`.
-
-**Diagnostics: ONE `print(json.dumps(...))` per cell — and NEVER
-print inside a loop.** OWUI chats show only the LAST stdout line of a
-cell; sessions have lost a 403 this way and then guessed nonexistent
-endpoints, and lost every loop-iteration result but the last.
-Accumulate into a dict/list across iterations, then print it ONCE at
-the end.
-
-Writes are IMMEDIATE and snapshot-first: every overwrite keeps a copy
-under `.ofb-snapshots/`, deletes under `.ofb-trash/` — recovery via
-`/versions/list` + `/versions/restore`, `/trash/list` + `/trash/restore`.
-To READ an old version WITHOUT changing the live file, use
-`POST /versions/read {"path": …, "ts": …}` (text by default,
-`"b64": true` for binary) — do NOT restore just to read. Restoring IS
-a write (it replaces the live file) and asks for approval worded as a
-restore. Writes >1 MB chunk automatically inside the pipe (model code
-never chunks manually). **Every write answer names the file's path**
-(folder + relative — the path rule above).
-
-**Out-of-chat confirmations (default on).** Deletes and overwrites of
-EXISTING files push an Approve/Deny popup into the chat page (the
-extension renders it) and the request WAITS ~20 s for the click:
-- user clicks **Approve in time → your SAME call returns the real
-  result** (200 + the write outcome — no retry needed).
-- `403 {confirmation_required, timed_out: true}` → they hadn't clicked
-  yet. Tell them once, plainly ("an approval popup appeared — please
-  click Approve"), WAIT for them to confirm, then retry the exact same
-  request ONCE. A LATE click still counts (single-use, 5 min).
-- `denied: true` → the user refused: do not retry; ask in chat what
-  they want instead.
-Creating a NEW file never asks. (Admins can change the scope in the
-extension settings; `confirmation_required` only appears when a
-confirmation is actually required.)
-
-## Office files in extension mode (the moved endpoints)
-
-`/xlsx_read /docx_read /pptx_read /eml_read /html_text` answer
-`501 {moved: true, hint: …}` — parse in Pyodide instead. First install
-the bundled wheels (served by the extension through the same pipe; all
-pure-Python, no micropip):
-
-```python
-import zipfile, io, sysconfig
-SP = sysconfig.get_paths()["purelib"]          # never hardcode this
 
 async def install_bridge_wheels(*prefixes):
-    wl = (await bridge_get("/wheels"))["wheels"]
-    for name in wl:
-        if not prefixes or any(name.startswith(p) for p in prefixes):
-            data = await ofb_fetch_b64("/wheels/" + name)
-            zipfile.ZipFile(io.BytesIO(data)).extractall(SP)
-    # e.g. install_bridge_wheels("openpyxl", "et_xmlfile")
+    """Extract bundled pure-Python wheels into the sandbox. Try a plain
+    import FIRST — hosts 0.11.4+/0.12+ install openpyxl/docx/pptx on
+    import, and extracting over them mixes versions."""
+    sp = sysconfig.get_paths()["purelib"]; got = []
+    for name in (await bridge_get("/wheels"))["wheels"]:
+        if not prefixes or any(name.lower().startswith(p.lower()) for p in prefixes):
+            zipfile.ZipFile(io.BytesIO(await ofb_fetch_b64("/wheels/" + name))).extractall(sp)
+            got.append(name)
+    return got
+
+def bridge_path(p):
+    """Translate a path the USER typed into a bridge path.
+
+    Explicitly root-qualified input wins, always:
+      'r3/reports/x.xlsx'      -> 'r3/reports/x.xlsx'  (root id = r3)
+      'Shared/reports/x.xlsx'  -> 'rA/reports/x.xlsx'  (root alias, multi-root)
+    A RELATIVE path is never re-anchored on a folder name inside it, so
+    'reports/Archive/x.xlsx' stays relative even when another shared
+    folder is called 'Archive'.
+    Only a pasted ABSOLUTE path ('N:\\...\\<shared folder>\\a', '/Users/…')
+    is searched for a shared-folder name; the LAST (deepest) match wins
+    because an ANCESTOR of the mounted folder may carry the same name
+    (N:\\Shared\\…\\shared\\…). If an absolute path could belong to more
+    than one shared folder this raises instead of guessing."""
+    parts = [x for x in str(p).replace("\\", "/").split("/") if x and x != "."]
+    roots = _S["roots"]
+    if not parts:
+        return ""
+
+    def _names(r):
+        return {str(r.get(k) or "").lower()
+                for k in ("alias", "path", "id")} - {""}
+
+    def _hit(seg):
+        return [r for r in roots if seg.lower() in _names(r)]
+
+    def _join(r, rest):
+        rel = "/".join(rest)
+        if len(roots) > 1:
+            return (str(r["id"]) + "/" + rel).rstrip("/")
+        return rel
+
+    # 1) explicit root qualifier — a root id always, an alias/path only
+    # when several folders are shared (the same rule resolveGuarded uses).
+    first = _hit(parts[0])
+    ids = [r for r in first if str(r["id"]).lower() == parts[0].lower()]
+    if ids:
+        return _join(ids[0], parts[1:])
+    if first and len(roots) > 1:
+        return _join(first[0], parts[1:])
+
+    # 2) relative path — returned as typed, never re-anchored on a
+    # folder name inside it (a subfolder called like another shared
+    # folder must not silently move the target to that other folder)
+    raw = str(p)
+    drive = len(parts[0]) == 2 and parts[0][1] == ":"
+    if not (drive or raw.startswith("/")):
+        return "/".join(parts)
+
+    # 3) absolute path: anchor on the deepest shared-folder name
+    hits = [(i, r) for i, seg in enumerate(parts) for r in _hit(seg)]
+    if not hits:
+        raise BridgeError(f"no shared folder contains {p!r} — shared roots: "
+                          f"{[r.get('alias') or r.get('id') for r in roots]}")
+    ids_found = {str(r["id"]) for _, r in hits}
+    if len(ids_found) > 1:
+        cands = sorted({f"{r['id']} ({r.get('alias') or r['id']}) -> "
+                        f"{_join(r, parts[i + 1:])}" for i, r in hits})
+        raise BridgeError(
+            f"{p!r} matches more than one shared folder — " + "; ".join(cands) +
+            ". Re-send the path with the folder id in front (e.g. "
+            f"{hits[0][1]['id']}/<relative path>).")
+    i, root = hits[-1]
+    return _join(root, parts[i + 1:])
+
+def out(obj, limit=4000):
+    """Print cap — everything printed is re-sent to the model later."""
+    s = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False, default=str)
+    print(s if len(s) <= limit else s[:limit] + f" …[+{len(s) - limit} chars cut — print a smaller slice]")
+
+async def ofb_init(token=None, transport="auto", quiet=False):
+    """(Re)run the first-cell handshake — also callable after the
+    fallback block, mirroring the one-liner's ofb_init."""
+    if token:
+        ofb_set_token(token)
+    if transport in ("js", "pm"):
+        _S["transport"] = transport
+    h = await bridge_get("/health")
+    _S["roots"] = h.get("roots") or []
+    if not quiet:
+        out({"version": h.get("version"),
+             "roots": [{"id": r.get("id"), "name": r.get("alias") or r.get("path"),
+                        "perm": r.get("perm")} for r in _S["roots"]],
+             "helpers": "ready"})
+    return h
+
+h = await ofb_init()
 ```
 
-Then (examples):
+Helpers: `bridge_get(path, params)` (params URL-encoded for you — å/ä/ö,
+spaces, apostrophes fine), `bridge_post(path, payload)`, `ofb_fetch`,
+`ofb_fetch_b64(path)`, `read_binary(p)` / `read_binary_range(p, off, len)`
+/ `read_text(p)`, `write_text(p, s)` / `write_binary(p, b)` (>1 MB chunks
+automatically), `install_bridge_wheels(*prefixes)`, `bridge_path(win_path)`,
+`out(obj)`. If ANY of them raises `NameError`, the sandbox was reset —
+run the whole block again (rule 2).
+
+**What the first cell can tell you**
+- `BridgeError … no relay answered` → the extension is not installed or
+  enabled on this page. Tell the user it is required, and stop.
+- a root shows `perm: "prompt"` → STOP. Tell the user: toolbar icon →
+  **Reconnect** on that folder → in Chrome's bubble choose **"Allow on
+  every visit"**. Wait for them.
+- 403 `security_locked`/`origin_blocked` → the user sets the allowed
+  site (see above), ONCE.
+- 403 `token_required` → ask for the token ONCE, `ofb_set_token(<pasted>)`,
+  retry. Never echo it.
+- No folders (`roots: []`) → the user must click the toolbar icon and
+  choose one.
+- Version older than 3.4.0 → say once that the extension should be
+  updated, then continue with what works.
+- The user mentions a desktop "app": that is the old Open File Bridge
+  app, a different backend. This skill needs the browser extension in
+  Chrome/Edge.
+
+## Paths
+
+- **Several shared folders:** the folder **id** (from the first cell,
+  e.g. `r3`) is the first path segment: `r3/BBAF/Output/x.xlsx`. A path
+  without an id goes to the FIRST folder — output once landed in the
+  wrong place that way. With one shared folder, no id is needed.
+- **Windows paths from the user** (`N:\Open Lan Shared\Cost Assurance\
+  TELIA ÖPPEN FIBER\202608`) → `bridge_path(that)` returns the bridge
+  path. If it raises, either the folder is not shared or the absolute
+  path fits more than one shared folder — tell the user which folders
+  are and ask which one they meant. Never re-anchor on your own guess.
+- A path you already have is used as-is: `rA/reports/Archive/x.xlsx`
+  stays in `rA` even when another shared folder is called `Archive`.
+  `bridge_path` only searches folder names inside an ABSOLUTE paste.
+- Paths never need a leading `/` (a single leading `/` is tolerated and
+  stripped). `written` values are ready to reuse as paths as-is.
+- File names that are bare credential words (`token.txt`,
+  `backup_secrets.yml`, `id_rsa`, `server.pem`, `.env` …) are refused
+  with 403 — tell the user. Business names like `Q3_token_usage.xlsx`
+  are fine.
+- Check a known file cheaply with `/stat` before listing.
+
+## Finding files — cheap first
+
+| Need | Call |
+|---|---|
+| **where is file X (folder unknown)** | `bridge_get("/find", {"name": "part of the name"})` — case-/accent-insensitive, `*`/`?` wildcards, `path=`/`type=`/`max=` optional. Every match's `path` is ready to reuse and names its folder (`root_id`); a match under `truncated: true` is NOT the whole answer |
+| does X exist / size / mtime (path known) | `bridge_get("/stat", {"path": p})` |
+| what is in ONE folder (top level) | `bridge_get("/list", {"path": folder})` — non-recursive |
+| N levels under a folder | `bridge_get("/list", {"path": p, "depth": 3, "max_entries": 200, "fields": "path,type"})` |
+| entries whose NAME matches, in one folder tree | `bridge_get("/list", {"path": p, "name": "ärenden"})` (same folding as /find) |
+| full recursive listing | `bridge_get("/list", {"path": p, "depth": 0})` — 500 entries / 10 s cap; `truncated: true` = narrow the path |
+| folder structure (tree) | `bridge_get("/directory_tree", {"path": p, "max_depth": 2, "max_entries": 200})` |
+| find text in files | `bridge_get("/search", {"q": term, "glob": "docs/*.md", "context": 1, "max": 50})` |
+| what kind of file | `bridge_get("/peek", {"path": p})` |
+
+**Never `/list` a share root recursively** (depth=0 at the root of a
+network share / OneDrive: 25 timeouts in the trial) — a BARE `/list`
+(no path) already answers just the top level plus a hint. Print only
+names you need: `out([e["path"] for e in r["entries"] if …])`.
+`fields=path,type` skips `size`/`mtime` (each `getFile()` is slow on
+network shares).
+
+Limits: reads ≤ 8 MB per whole file (`413` — but `read_binary` switches
+to ranges automatically for bigger files); `/read?raw=1` pages are
+2 MB each (a full pass over a big log = a handful of calls, not ~50);
+≤ 120 bridge requests per minute and ≤ 30 in flight; `BridgeError`
+messages name the real reason.
+
+## Reading & writing
+
+- Text you will PARSE (CSV, JSON, code): `read_text(p)` — clean bytes,
+  no line numbers. (`/read`'s REST answer adds a `"     N\t"` prefix to
+  every line; `raw=1` returns plain text if you ever call it directly.)
+- Binary (xlsx, docx, pptx, pdf, images): `read_binary(p)`.
+- Write: `write_text(p, s)` / `write_binary(p, b)`. When asked to
+  CHANGE an existing file, write the SAME path (rule 9 — snapshots
+  make it undoable); a NEW name only for derived outputs. Writing to
+  a new folder path creates the folders; `/mkdir {"path": p}` exists
+  for empty-folder creation.
+- The write answer carries `written` (reuse it as a path — no leading
+  `/`, root-prefixed when several folders are shared), `root_id`,
+  `root_name` — name files for the user as `root_name/written`.
+- Overwrites and deletes of EXISTING files pop an Approve/Deny box in
+  the user's page and wait ~20 s: approved → your call returns
+  normally; `denied` → do not retry, ask what they want;
+  `confirmation_required` + `timed_out` → the box has DISAPPEARED.
+  Tell the user: "I need your approval to change `<file>`. When you
+  say go, an Approve box appears on this page for 20 seconds." Wait
+  for their reply, then retry the SAME request ONCE — the retry shows
+  a NEW box. (A late click on the old box is impossible; it closed.)
+
+**Moving / renaming / sorting files** — `POST /move {"from": p, "to": p}`
+moves or renames a file or folder inside the shared root (one approval
+card, worded as a move; destination must not exist — 409). Batch:
+`POST /move {"moves": [{"from", "to"}, …]}` and
+`POST /delete {"paths": [p, …]}` — ONE card for the whole batch
+("move 12 files"), every item's result reported in `results[]`; a
+partial failure returns 207 with `failed` and per-item reasons — say
+which originals are still in place, never leave silent duplicates.
+- Every overwrite keeps a snapshot (`/versions/list`, `/versions/read`,
+  `/versions/restore`); deletes go to `.ofb-trash/` (`/trash/list`,
+  `/trash/restore`). `/edit {"path", "edits": [{"from", "to"}],
+  "dry_run"}` for text replacements; `/write_many {"writes": [...]}` ≤
+  100; `/zip {"members", "out"}`, `/unzip {"path", "dest"}`.
+- `/xlsx_read`, `/docx_read`, `/pptx_read`, `/csv_head`, `/convert` …
+  answer 501 "moved": those jobs run in Python here (§Office files).
+
+**Files the user attached in the chat** live in `/mnt/uploads`
+(sandbox). A changed or new version the user should get must be written
+with `write_binary` into their shared folder — say where. If no folder
+is shared, tell them to open the chat controls panel (sliders icon, top
+right) → **Files**, select the file and press **Download**.
+
+## Office files
+
+Libraries do the work — never edit the XML inside xlsx/docx/pptx by
+hand. Import first, wheels only as fallback:
 
 ```python
-# xlsx:
-await install_bridge_wheels("openpyxl", "et_xmlfile")
-import openpyxl
-wb = openpyxl.load_workbook(io.BytesIO(await read_binary(path)))
-rows = [[c.value for c in r] for r in wb.active.rows]
-wb.create_sheet("new")  # … edit …
-buf = io.BytesIO(); wb.save(buf)
-await write_binary(out_path, buf.getvalue())
-
-# docx:
-await install_bridge_wheels("python_docx", "typing_extensions", "lxml")  # if lxml wheel present
-import docx
-d = docx.Document(io.BytesIO(await read_binary(path)))
-paras = [p.text for p in d.paragraphs]
-
-# pdf from text (fpdf2):
-await install_bridge_wheels("fpdf2", "fonttools")
-from fpdf import FPdf  # build the document with its usual API (add_page, cell, multi_cell)
-
-# xlsx → csv (the one /convert pair that survives as a recipe):
-await install_bridge_wheels("openpyxl", "et_xmlfile")
-import openpyxl, csv
-wb = openpyxl.load_workbook(io.BytesIO(await read_binary(path)), data_only=True)
-buf = io.StringIO(); w = csv.writer(buf)
-for r in wb.active.rows:
-    w.writerow(["" if c.value is None else c.value for c in r])
-await write_binary(out_path, buf.getvalue().encode("utf-8"))
-
-# docx → html (semantic extract — headings/paragraphs/lists/tables;
-# NOT a faithful styled render; images are not exported):
-await install_bridge_wheels("python_docx", "typing_extensions")
-import docx, html
-d = docx.Document(io.BytesIO(await read_binary(path)))
-out = ['<html><head><meta charset="utf-8"><title>'
-       + html.escape(d.core_properties.title or "document")
-       + '</title></head><body>']
-H = {"Title": "h1", "Heading 1": "h1", "Heading 2": "h2", "Heading 3": "h3"}
-in_list = False
-for p in d.paragraphs:
-    t = html.escape(p.text); style = p.style.name
-    if style in ("List Bullet", "List Number"):
-        if not in_list: out.append("<ul>"); in_list = True
-        out.append("<li>" + t + "</li>"); continue
-    if in_list: out.append("</ul>"); in_list = False
-    if t.strip():
-        tag = H.get(style, "p"); out.append(f"<{tag}>{t}</{tag}>")
-if in_list: out.append("</ul>")
-for tbl in d.tables:
-    out.append('<table border="1">')
-    for row in tbl.rows:
-        out.append("<tr>" + "".join("<td>" + html.escape(c.text) + "</td>"
-                                    for c in row.cells) + "</tr>")
-    out.append("</table>")
-out.append("</body></html>")
-await write_binary(out_path, "\n".join(out).encode("utf-8"))
+try:
+    import openpyxl                      # hosts 0.11.4+ install it on import
+except ImportError:
+    await install_bridge_wheels("openpyxl", "et_xmlfile"); import openpyxl
+try:
+    import docx, pptx                    # hosts 0.12+ bundle these (need lxml)
+except ImportError:
+    try:
+        import micropip                # 3.7.1: not auto-imported on 0.10.x
+        await micropip.install("lxml")
+        await install_bridge_wheels("python_docx", "python_pptx", "typing_extensions")
+        import docx, pptx
+    except Exception as e:
+        out(f"docx/pptx unavailable on this host: {e}")
 ```
 
-(eml/html stay stdlib: `email.message_from_bytes(await read_binary(p))` /
-regex-strip after `read_binary(...).decode("utf-8", "replace")`. CSV is
-plain text — do not call `/csv_head` / `/csv_stats`: `/read` the file
-and parse it with the stdlib `csv` module.)
+- **If lxml/docx/pptx are unavailable**: for READING, unzip and take
+  text from `word/document.xml` / `ppt/slides/*.xml`; for PRODUCING a
+  document or deck, write clean `.md`/`.html` and say Word/PowerPoint
+  are not available on this host. Never hand-write the XML.
+- **Big workbooks**: `openpyxl.load_workbook(buf, read_only=True,
+  data_only=True)` + `ws.iter_rows(values_only=True, max_row=…)`.
+  Check `ws.max_row` FIRST — formatted templates often report ~1M rows
+  and a `ws.cell` loop runs past the 60 s limit. Writing into a
+  template: load normally, write only the cells you need, skip
+  `MergedCell`s.
+- **CSV for Swedish Excel**: prefer a real `.xlsx`; if CSV is asked
+  for, use `;` as separator and encode `utf-8-sig`.
+- **Pillow**: `import matplotlib` in the same cell loads it, then
+  `from PIL import Image`.
+- **Outlook `.msg`**: `await install_bridge_wheels("olefile")` then
+  `import olefile` (metadata + `olefile.OleFileIO` streams — body text
+  often needs the RTF stream; ask for `.eml` if you need the full
+  body, stdlib `email` parses it).
+- pandas/matplotlib (compiled) come from the host's Pyodide via
+  `micropip.install("pandas")` — never from bridge wheels.
 
-Compiled data-science wheels (`pandas`/`matplotlib` …) still come from
-Pyodide's own lock via `micropip.install("pandas")` — fetched from the
-OWUI origin, not through the pipe.
+```python
+# xlsx read → edit → write:
+import io
+wb = openpyxl.load_workbook(io.BytesIO(await read_binary(path)))
+buf = io.BytesIO(); wb.save(buf)
+w = await write_binary(out_path, buf.getvalue()); out(w)
 
-Reading rules and caching match the desktop-app skill; there are no
-clickable outcome links in extension mode — every write answer names
-the file's path instead (the rule above). When unsure what a file is,
-call `/peek` first (a few tokens).
+# xlsx → csv (the /convert pair that survives as a recipe):
+import csv
+wb = openpyxl.load_workbook(io.BytesIO(await read_binary(path)), data_only=True)
+b = io.StringIO(); wr = csv.writer(b, delimiter=";")
+for r in wb.active.iter_rows(values_only=True):
+    wr.writerow(["" if v is None else v for v in r])
+await write_binary(out_path, b.getvalue().encode("utf-8-sig"))
+
+# docx → html (semantic — headings/paragraphs/lists/tables, not a styled render):
+import docx, html
+d = docx.Document(io.BytesIO(await read_binary(path)))
+# … walk d.paragraphs / d.tables, html.escape text, build tags …
+```
+
+## PDF
+
+- Text: `bridge_get("/pdf_text", {"path": p, "pages": "1-3"})`.
+- **See a page** (check your own output, show the user):
+  `bridge_get("/pdf_text", {"path": p, "pages": "2", "mode": "images"})`
+  → `pages[i]["png_b64"]` → print the data-URL line (§Showing an image).
+- Scanned PDF / image text: `bridge_get("/ocr", {"path": p,
+  "lang": "swe+eng", "max_pages": 5})` — split long documents across
+  cells with `max_pages` (rule 3); searchable copy:
+  `bridge_post("/ocr_pdf", {"path": p, "out": "x_ocr.pdf"})`. Engines
+  start themselves (first call a few seconds slower); retry once on 409.
+- **`/pdf_op` works on WHOLE pages only** — the full body shapes:
+  `{"op": "merge", "paths": [a, b, …], "out": "c.pdf"}` ·
+  `{"op": "split", "paths": [a], "pages": "1-3,5", "out": "a.pdf"}`
+  (writes `a.p1.pdf …`) · `{"op": "rotate", "paths": [a], "pages": "2",
+  "angle": 90, "out": "a_rot.pdf"}`.
+- **"Creating a PDF" and "adding to a PDF" = build pages + merge.**
+  Nothing edits what is ON an existing page. To add content, build a
+  new page (same page size — read it from the source's MediaBox or
+  `/pdf_text` images mode) and `/pdf_op merge`. If the user wanted it
+  "inside" a page, say once that it goes on its own page.
+- **fpdf2 recipe (creating PDFs from text):** needs ssl + the wheel:
+
+```python
+import io, os, re, base64, micropip, importlib, http.client, urllib.request
+await micropip.install("ssl")            # fpdf2 imports HTTPSHandler
+if not hasattr(urllib.request, "HTTPSHandler"):   # urllib imported pre-ssl
+    importlib.reload(http.client); importlib.reload(urllib.request)
+await install_bridge_wheels("fpdf2", "defusedxml", "fonttools")
+from fpdf import FPDF                    # FPDF, not FPdf
+import matplotlib                         # loads Pillow + the DejaVu fonts
+FONTS = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
+
+class Doc(FPDF):
+    def footer(self):
+        self.set_y(-36); self.set_font("DejaVu", "", 8); self.set_text_color(110, 110, 110)
+        self.cell(0, 10, f"{self.footer_text}   ·   {self.page_no()}/{{nb}}", align="C")
+
+def new_doc(footer_text, fmt="A4"):      # fmt may be (w, h) in pt
+    pdf = Doc(unit="pt", format=fmt); pdf.footer_text = footer_text
+    for st, f in {"": "DejaVuSans", "B": "DejaVuSans-Bold",
+                  "I": "DejaVuSans-Oblique", "BI": "DejaVuSans-BoldOblique"}.items():
+        pdf.add_font("DejaVu", st, os.path.join(FONTS, f + ".ttf"))
+    pdf.set_margins(56, 56, 56); pdf.set_auto_page_break(True, 56); pdf.add_page()
+    return pdf
+
+NL = dict(new_x="LMARGIN", new_y="NEXT")   # every block ends at the LEFT margin
+def h(pdf, text, level=1):
+    size = {0: 20, 1: 13, 2: 11}[level]; pdf.ln({0: 0, 1: 8, 2: 4}[level])
+    pdf.set_font("DejaVu", "B", size); pdf.set_text_color(32, 56, 100)
+    pdf.multi_cell(0, size * 1.3, text, **NL); pdf.ln(2); pdf.set_text_color(0, 0, 0)
+def p(pdf, text, size=10, style=""):
+    pdf.set_font("DejaVu", style, size); pdf.multi_cell(0, size * 1.45, text, align="L", **NL); pdf.ln(4)
+def bullets(pdf, items, size=10):
+    pdf.set_font("DejaVu", "", size)
+    for t in items:
+        pdf.set_x(pdf.l_margin + 8); pdf.cell(12, size * 1.45, "•")
+        pdf.multi_cell(0, size * 1.45, t, align="L", **NL)
+    pdf.ln(4)
+
+pdf = new_doc("Document title — summary")
+h(pdf, "Document title", 0); p(pdf, "Subtitle · version · date", 9, "I")
+h(pdf, "1. Section"); p(pdf, "Paragraph text …"); bullets(pdf, ["First", "Second"])
+w = await write_binary("Summary.pdf", bytes(pdf.output()))
+shot = await bridge_get("/pdf_text", {"path": "Summary.pdf", "pages": "1", "mode": "images"})
+out({"written": w["written"], "pages": pdf.page_no()})
+print("data:image/png;base64," + shot["pages"][0]["png_b64"])
+```
+
+Always use the DejaVu font from matplotlib — fpdf2's built-in fonts
+are Latin-1 only and crash on `—`, `’`, `“`. Never place text with your
+own `set_xy`/`cell` layout code: after a `multi_cell` fpdf2 leaves the
+cursor at the RIGHT margin, and paragraphs squeeze into the page edge —
+that is how a real 2-page summary came out unreadable. `pdf.page_no()`
+higher than asked = shorten the text, don't shrink the font. Write in
+the language of the user's request, not Swedish by default.
+
+## Showing an image or chart in your answer
+
+A stdout line that STARTS with `data:image/png;base64,` is uploaded by
+the host and replaced by `![Output Image](/api/v1/files/<id>/content)`
+before you see it. Put THAT link in your answer, copied exactly. PNG
+only. Never type/copy base64 yourself, never print a data URL to look
+at it, and never echo it as `![name](data_url)` (15–20 K wasted output
+tokens and corrupted images in the trial).
+
+**A local image file** (screenshot, photo, slide export): fetch it as
+PNG with `/image_b64?path=…&format=png` (3.5.0) and print the data
+line — no base64 copying, no matplotlib round trip. SVG files come
+back as `image/svg+xml` (rasterising on the host is not supported) —
+check `img["data_url"].startswith("data:image/png")` before printing;
+for an SVG, print the file PATH for the user instead of a data URL:
+
+```python
+img = await bridge_get("/image_b64", {"path": p, "format": "png"})
+if img["data_url"].startswith("data:image/png"):
+    print(img["data_url"])          # raster image — print the line
+else:
+    out({"path": p, "note": "vector (svg) — not printable as a data URL"})
+```
+
+```python
+import io, base64
+import matplotlib.pyplot as plt
+fig, ax = plt.subplots(figsize=(10, 6))
+# … draw …
+buf = io.BytesIO(); fig.savefig(buf, format="png", dpi=110, bbox_inches="tight"); plt.close(fig)
+png = buf.getvalue()
+w = await write_binary("usage-chart.png", png)      # the user's copy, if wanted
+out({"written": w["written"]})
+print("data:image/png;base64," + base64.b64encode(png).decode())   # own line, last
+```
+
+An existing picture: `from PIL import Image` (after `import
+matplotlib`), `im.thumbnail((1600, 1600))`, save as PNG, print the same
+line. A PDF page: `/pdf_text?mode=images` → `png_b64` → the same line.
+
+## Pictures you need to READ (slides, scans, screenshots)
+
+Your code output is TEXT only — you cannot see images through the
+bridge. For text inside a picture (including images inside a
+PPTX/DOCX: take them out of the zip's `media/` folder), write it into
+the shared folder (e.g. `.ofb-tmp/slide4.png`) and call `/ocr` on it.
+For a chart or layout you need to UNDERSTAND, ask the user to attach
+the image directly in the chat — an attached upload is the one input
+path vision models consume. One trial turn burned ~50 cells decoding
+PNG pixels into ASCII art; never do that.
+
+## Answers and follow-ups
+
+- Reply — status lines included — in the language of the user's LATEST
+  message. Swedish file names are not a reason to switch languages.
+- Python state carries over between cells (until a reset): reuse
+  workbooks, chart bytes and results instead of recomputing or
+  reprinting them.
+- A status question ("how is it going?", "did you generate the file?")
+  is NOT a request to redo the work: answer from what you did, with the
+  `written` path. If the user cannot find a file, check it with
+  `/stat` and give the exact `root_name/…` path; re-show a chart from
+  the saved PNG.
+- When a long job runs, say what each step does in one short line; the
+  user sees nothing else until you finish.
+
+## OCR notes
+
+Languages bundled (21, alphabetical — the live list is `/health`'s
+`ocr_langs_available`; set with `POST /ocr/lang {"lang": "swe+eng"}` or
+per-request `lang=`; combo langs matter — `swe+eng` fixes å/ä/ö AND
+digits, each alone can break one): `ara chi_sim chi_tra dan deu eng est
+fin fra hun ita jpn kor lav lit nor pol por rus spa swe`. A lone
+all-caps diacritic token ("ÅÄÖ") may decode as AAO — ask the user if it
+matters. Small photos are auto-upscaled; if lines still look garbled
+after one try, give the best reading, say the photo is hard, and show
+it to the user (§Showing an image) — they can read a sign faster than
+three more OCR passes.
+
+## Diagnostics: ONE `print` per cell — never inside a loop
+
+Prints survive bridge calls on current hosts (3.6+), but everything
+printed is re-sent to the model on every later step — keep it small.
+Accumulate results into a dict/list across iterations, print it ONCE
+at the end (`out()`); never print inside a loop.
+
+## Method cheat (405 enforces it)
+
+Reads are **GET** with query params — `/list /find /read /peek /stat
+/search /directory_tree /image_info /image_b64 /pdf_text /ocr`; writes &
+actions are **POST** with a JSON body — `/write /write_b64
+/write_b64_chunk /write_many /edit /delete /move /mkdir /zip /unzip
+/versions/* /trash/* /ocr_pdf /pdf_op`. `/list` is THE listing endpoint —
+`/files`, `/ls`, `/dir` do not exist; the endpoint table above is complete.

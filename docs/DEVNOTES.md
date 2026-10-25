@@ -3124,3 +3124,141 @@ recipe), then ask for a folder by name.
 Deferred finding (recorded in TODO §6b): folder RENAME/MOVE also has
 no endpoint — the model would have to recursively copy + /delete.
 Separate round if wanted; not silently emulated.
+
+## Pilot-feedback release 3.4.0 (2026-10-20)
+
+Input: a 4-week corporate pilot report (13 items, 7 users, ~100 chats,
+extension 3.3.1 + skill 3.3.3/3.3.4-EXT) + the trial company's derived
+skill 3.3.7-EXT (bootstrap fixes tested against a mock relay). All 13
+items shipped in ext 3.4.0 + skill 3.4.0-EXT — details in
+docs/ROADMAP.md § "pilot-feedback release 3.4.0". Gotchas learned:
+
+- Stock OWUI executes TYPE-LESS postMessages as code
+  (pyodideSandboxHost.ts `if (!data.type || data.type === 'execute')`,
+  still true in 0.12.2 + main 2026-10-16): each bridge reply reset the
+  running cell's stdout + added a bogus stderr line. Fix: relay replies
+  now carry `type:"ofb"`. One-way compatible both directions (the
+  skill's _on_msg never read `type`). The upstream guard (require a
+  `code` field) is worth proposing separately.
+- `+`-as-space: models overwhelmingly use Python urlencode (spaces ->
+  `+`); decodeURIComponent alone left "My+Folder" literal. Query values
+  now get `+`→%20 BEFORE %-decoding (URLSearchParams semantics); a
+  literal `+` in a filename must be sent %2B (documented in skill +
+  bad-path error). Desktop app was already correct (parse_qs).
+- Error-shape unification: SW/relay failures used to answer
+  {ok:false,status:0,error} with NO body while the adapter answered
+  {status,body} — the skill died KeyError:'body' (86x in the pilot).
+  Now EVERY envelope failure carries body=JSON.stringify({error,…}).
+- /list depth contract chosen to break nobody: bare /list (no path) =
+  top level + hint (kills the pilot's context-flood/timeout mode);
+  /list?path=X stays recursive; depth=0 forces recursion at the root;
+  depth=N/max_entries/fields=path,type work everywhere. spike1 s2
+  updated to pin BOTH behaviors.
+- written round-trip: write answers return `written` WITHOUT a leading
+  `/` (multi-root: `r3/rel/path`) plus `root_id`/`root_name`;
+  resolveGuarded now ACCEPTS a single leading `/` (models fed "/x"
+  back and got 400; `//` stays rejected — n1 negative unchanged).
+- Credential filter: bare-credential-STEM rule (split stem on -_. ;
+  refuse when the stem or its LAST segment is a credential word) —
+  Q3_token_usage.xlsx serves, api_token.json refuses. 18-case node
+  unit check + n5/n5b harness cells.
+- Pre-existing master bug: tests/stage3/negatives_test.py's spike1
+  extraction needle never matched after the 09-11 spike1 change —
+  the suite was broken on master since 2026-09-11. Needle = closing
+  `'''` + `py = py.replace` now.
+- CI build.yml wheel-count smoke 8 -> 9 (olefile for Outlook .msg).
+- relay.js byte-identical constraint (Stage-3 session #8) LIFTED for
+  this release: pilot item 9 required a relay.js change (type:"ofb").
+- Env fragility (test runs): a stray Nautilus on :99 shifts GTK
+  bookmark coordinates (Granted at y≈469 vs the assumed 373) — pkill
+  nautilus before suite runs; worker_transport_test needs
+  DISPLAY=:99 exported (it does not set it itself); playwright
+  browsers drift (wt needed chromium-1248).
+
+## Stage-3 session #47: branch-review fixes (2026-10-25, ext 3.7.3)
+
+An independent review of `feat/runtime-injection` (`cb1cd9d`) held merge
+and store submission on five findings; all five fixed here, each with a
+regression test that FAILS on 3.7.2 and passes on 3.7.3.
+
+- **F1 bridge_path.** The 3.7.2 "rightmost root" fix scanned every
+  segment, so an explicit `rA/...` was silently re-anchored on any
+  descendant folder whose name matched ANOTHER root (wrong file, wrong
+  folder) and lost intermediate dirs. Rewritten: explicit root id /
+  (multi-root) alias wins; relative paths are returned as typed; only an
+  ABSOLUTE paste is searched, deepest match wins (keeps the 3.7.2
+  `N:\Shared\…\shared\…` case); >1 candidate root raises with the
+  candidates instead of guessing. Three copies (client + both skills),
+  injector regenerated. `tests/unit/bridge_path_test.py` = 21 cases x 3
+  copies.
+- **F2 /find + /list paths.** Multi-root searches returned bare relative
+  paths that re-resolve against roots[0]. Now root-qualified `path` +
+  `rel`/`root_id`/`root_name`; same for `/stat`, `/peek`, `/edit`,
+  `/image_info`, `/image_b64` echoes (all previously `rg.relInRoot` or
+  `q.path`). Single-root output shape unchanged (no churn for existing
+  recipes/tests).
+- **F3 move-card tab race.** Module-level `LAST_MOVE_SENDER_TAB` (set by
+  sw.js, read by the late gate) was overwritten by a concurrent move
+  during the async pre-checks → card in the wrong tab. Replaced with
+  request-local `ctx={tabId}` threaded sw.js → fsRoute → epMove →
+  confirmGateLate (also batches + chunk-finalize gate). No global left.
+- **F4 batch pre-validation mutated.** `walkToParent(..., true)` created
+  destination parents BEFORE the card, so deny/timeout left empty
+  folders (the single-move path had already been fixed in 3.7.1). Now
+  read-only; parents created after approval. Also moved the cross-root
+  check into pre-validation so a bad batch refuses before the card.
+- **F5 /find cap.** `matches.length >= max` returned without setting
+  `truncated`. Now capped → `truncated:true` + narrowing hint; an
+  exact-cap COMPLETE search → `truncated:false` + "this IS the complete
+  list". The completeness probe is bounded (PROBE_VISIT=2000 entries
+  past the cap) so a huge share never turns one search into two full
+  walks; if it cannot prove completeness it says truncated.
+- **Docs.** PRIVACY.md: recovery data lives in `.ofb-snapshots`/`.ofb-trash`
+  INSIDE the shared folder (not IndexedDB), NOT removed by uninstall,
+  trash swept at 30 days, snapshots kept until deleted; multi-folder
+  wording; date bumped. CHROME-WEB-STORE.md: 3.7.3 package name + notes,
+  `scripting` justification, precise static-vs-runtime host-match
+  wording, multi-folder listing/single-purpose copy.
+- **CI.** `.github/workflows/extension.yml` now regenerates the injector
+  and `cmp`s it, checks client↔both skills via AST, and runs the three
+  new suites. `tests/unit/README.md` documents them.
+- **Verification run here (macOS):** node --check all extension JS;
+  python AST on client/builder/tests; injector byte-identical after
+  rebuild; version/floor consistency; `git archive` ZIP = 81 entries,
+  manifest at root, no `extension/` prefix, 48,348,792 B; **real
+  Chromium SW** smoke with real OPFS directory handles
+  (`tests/unit/browser_smoke.mjs`): find→stat→read round-trip, same-named
+  files in two roots read their own contents, cap cases, denied batch
+  creates nothing, exact-cap not truncated; second pass: approved batch
+  and single moves create parents only after approval, `/edit`+`/stat`
+  echo round-trips, options page renders with zero page errors. Both
+  smokes were also run against a 3.7.2 copy and FAIL there (regression
+  detection proven). NOT run: the Linux/Xvfb Stage-3 suites
+  (spike1/confirm/injection/negatives/engines/sec/worker) and a live
+  CWS dashboard check.
+- **Pre-existing, unrelated:** `tests/skill_write_contract_test.py`
+  fails on 3.7.2 too (SKILL.md description vs setup_owui.UNIFIED_DESC
+  drift) — not touched by this branch's findings.
+
+## Runtime-injection merge verification (2026-10-26, extension 3.7.3)
+
+Re-reviewed `dc79322` against the local review handoff: F1–F5 are
+resolved. The behavioral, path and client/skill consistency suites pass;
+both real-Chromium/OPFS browser smokes pass.
+
+Merging with local master's unpushed `7501b4f` required reconciling
+two independent `/mkdir` implementations. Keep ONE implementation:
+master's nested-create/idempotence and leaf/intermediate file-collision
+409 handling, plus 3.7.3's canonical `created`/`written` and root metadata.
+The local `make_folder` skill helper is preserved in BOTH skill variants
+and the injected client; the injector is regenerated and helper consistency
+now checks it. Tests cover both kinds of collision without replacing the
+blocking file, and read-only/traversal guards. The in-memory handles now
+match the browser by throwing TypeMismatchError instead of replacing a
+file with a directory when create:true is requested.
+
+Historical mkdir notes and changelog entries from both parents are retained.
+The old TODO about a missing move endpoint is marked superseded. Privacy
+copy distinguishes recovery files in selected folders from browser storage
+and states snapshot limits. No live Open WebUI/native-picker acceptance or
+Chrome Web Store dashboard submission was performed in this merge review.

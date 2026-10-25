@@ -66,7 +66,7 @@ import json
 # call; do not remove the X-Bridge-Token line, do not redefine the
 # variable, never echo the token back.
 BRIDGE_HEADERS = {"Content-Type": "application/json",
-                  "X-Bridge-Token": "__ORG_TOKEN__"}
+                  "X-Bridge-Token": "__ORG_BRIDGE_TOKEN__"}
 
 async def bridge_get(path, params=None):
     url = f"http://127.0.0.1:8765{path}"

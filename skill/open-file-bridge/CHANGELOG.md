@@ -2,6 +2,242 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.7.3 — 2026-10-25 (extension 3.7.3: branch-review fixes)
+
+An independent review of `feat/runtime-injection` (commit `cb1cd9d`)
+held merge and store submission on five findings. All five are fixed;
+each has a regression test that fails on 3.7.2 and passes here.
+
+- **F1 (P1) `bridge_path` re-anchored explicit paths.** The 3.7.2
+  rightmost-root scan looked at EVERY segment, so
+  `rA/reports/Archive/budget.xlsx` came back as `rB/budget.xlsx` — a
+  different shared folder, and `rA/Shared/x` lost a directory level.
+  Now: a root-qualified path is returned as typed; an ordinary relative
+  path is never re-anchored; only a pasted ABSOLUTE path is searched for
+  a folder name (deepest match, so the 3.7.2 Windows-ancestor case still
+  works). If an absolute path could belong to more than one shared
+  folder it raises and names the candidates instead of guessing. Fixed
+  in `extension/ofb-client.py` and BOTH skill bootstraps, with the
+  injector regenerated; `tests/unit/bridge_path_test.py` runs all three
+  copies over 21 cases.
+- **F2 (P1) `/find` and `/list` returned paths that did not name their
+  folder.** With several folders shared, a bare relative path resolved
+  against the FIRST folder, so following a search result hit a different
+  file (or 404). Every match/entry now carries a root-qualified `path`
+  plus `rel`/`root_id`/`root_name`, and `/stat`, `/peek`, `/edit`,
+  `/image_info`, `/image_b64` echo a round-tripping path. Single-folder
+  installs keep the historical bare shape.
+- **F3 (P1) concurrent moves could show the approval card in the wrong
+  chat tab.** The requesting tab lived in a module-level
+  `LAST_MOVE_SENDER_TAB` that a second interleaved move overwrote during
+  the async pre-checks. The tab now travels as request-local context
+  (sw.js → `fsRoute` → `epMove` → late gate), including batch moves and
+  the chunked-write finalize gate.
+- **F4 (P2) a denied batch move left destination folders behind.** The
+  batch pre-validation created missing parents before the card. It is
+  read-only now; parents are created only after approval, inside each
+  item's `epMove`.
+- **F5 (P2) `/find` silently truncated at its result cap.** Reaching
+  `max` now sets `truncated:true` with a narrowing hint; an exact-cap
+  search that genuinely finished reports `truncated:false` plus
+  "this IS the complete list" (a bounded probe decides, so a huge share
+  cannot turn one search into two full walks).
+- **Docs (store blockers).** `docs/PRIVACY.md` now states that retained
+  versions (`.ofb-snapshots`) and trash (`.ofb-trash`) are ordinary
+  files INSIDE the user-selected folder — not browser storage, and NOT
+  removed by uninstalling — and describes multi-folder support.
+  `docs/CHROME-WEB-STORE.md` names the 3.7.3 package, adds a `scripting`
+  permission justification, and separates the STATICALLY declared
+  `relay.js`/`confirm.js` matches from the runtime-registered injector.
+
+CI now regenerates the injector and compares it byte-for-byte, checks
+the client against both skill copies, and runs the F1–F5 suites
+(`tests/unit/`), so a one-copy fix cannot pass again.
+
+Versions: manifest 3.7.3 / FS_VERSION 3.7.3-EXT / client 3.7.3-inj /
+skill v3.7.3-EXT (both variants).
+
+## 3.7.2 — 2026-10-25 (extension 3.7.2: upload-candidate build)
+
+Tester retest of 3.7.1: all six claims pass, regression clean, best
+suite run so far. Two fixes they asked for in the same build:
+
+- **minimum_chrome_version 111 → 119.** matchOriginAsFallback on
+  REGISTERED content scripts is Chrome 119+ per the API docs; on 118
+  the Security card said "injection active" while nothing injected.
+  119 is the honest floor.
+- **bridge_path() rightmost-root match.** It cut at the FIRST segment
+  naming a root, so a pasted absolute path whose ANCESTOR shares the
+  root's name (N:\Shared\…\shared\…) truncated at the ancestor and
+  404'd everything under it. Now matches the RIGHTMOST root-naming
+  segment. Fixed in the injected client AND the pasted fallback block
+  (unit-checked: 6/6 cases incl. their exact repro, multi-root
+  prefixes intact).
+
+Versions: manifest 3.7.2 / FS_VERSION 3.7.2-EXT / client 3.7.2-inj /
+skill v3.7.2-EXT (both variants).
+
+## 3.7.1 — 2026-10-24 (extension 3.7.1: tester retest round)
+
+Tester retest of 3.7.0 (in-place update over 3.6.0 AND 3.3.1, Chrome
+118 load check, dual-origin site switching) — "go for the Web Store
+once the batch-card fix is in". All six requests:
+
+1. Oversized batches (>50) raise NO approval card — the 400 lands
+   before the user is asked (confirmRequiredFor returns null; unit-
+   checked: 55-path delete and 51-move batch produce no card, normal
+   batches still do).
+2. The pasted fallback block is now in sync with ofb-client.py:
+   read_binary auto-ranges on 413, BridgeError_with_info (.info /
+   .status) with e.info["results"] documented in the errors rule,
+   and an ofb_init() helper — a model that falls back from the
+   one-liner can call it instead of hitting NameError.
+3. /move creates destination parent folders only AFTER approval (the
+   timed-out card no longer leaves K_moved/ behind; read-walk first,
+   create-walk after the gate, dest-free re-checked post-create).
+4. The relay-level rate limit answers 429 with retry_after_s (true
+   seconds-to-window-end), rate_limited and a /search hint — no more
+   HTTP 0 "rate limit". Same for the in-flight cap (retry_after_s 5).
+5. The Security card ALWAYS shows injection status now — active, or
+   "one-line bootstrap: OFF — click Edit → Save once to enable it"
+   (previously silent after updates).
+6. Skill cleanups: version header 3.7.1, `import micropip` before
+   use in the Office recipe, the outdated "hosts show only the LAST
+   stdout line" section rewritten, the image_b64 recipe guards
+   against SVG data-URLs, and ONE placeholder name everywhere
+   (__ORG_BRIDGE_TOKEN__; setup_owui.py + all four legacy variants
+   updated).
+
+Extension versions: manifest/FS_VERSION 3.7.1, client 3.7.1-inj.
+Release-notes items (from their compatibility checks): after ANY
+update, click "Set site" (or Edit → Save) once to re-grant the
+optional host permission; trash older than 30 days from before the
+update is swept on the first request afterwards.
+
+## 3.7.0 — 2026-10-23 (extension 3.7.0: tester round — 6 blockers fixed)
+
+External agent review + overnight browser test of 3.6.0 (OWUI 0.10.x
+fork + stock 0.12.2, 40-case suite) — "release after fixes". All six
+blockers fixed, plus should-fixes:
+
+1. TOKEN-skill one-liner quoted the placeholder wrong (NameError that
+   PRINTED the token) — now `ofb_set_token("__ORG_BRIDGE_TOKEN__")`.
+   Fast-path section moved FIRST ("First, try the fast path") so
+   models stop pasting the full 7.7 K block unasked.
+2. "Use this site" (recently-blocked row) now goes through the same
+   permission-request + registration sync as "Set site";
+   permissions.onRemoved + runtime.onStartup re-sync; injectSync
+   never registers beyond granted permissions.
+3. Credential filter v3: credential word in ANY stem segment of a
+   config/text/binary file refuses (client_secret_*.json,
+   msal_token_cache.json, api_token_list.txt); Office/media served
+   unless an exact known secret name (Q3_token_usage.xlsx served,
+   Mobile-Wallet.xlsx served); added client_secret/token_cache
+   patterns; dropped "wallet".
+4. /list defaults to depth=1 EVERYWHERE (skill always said
+   non-recursive); read_binary auto-loops ranges on 413; /read raw=1
+   gained offset/length paging with a correct continuation hint.
+5. Batches >50 now 400 up front (was: silent slice → ok:true with 5
+   left behind); BridgeError gains .info/.status so 207 bodies are
+   never truncated away.
+6. Options Security card warns in plain words that without a token,
+   any model-rendered HTML on the allowed site (artifact panels) can
+   read the shared folder.
+
+Should-fixes: approval cards have per-op titles (Move/Bulk
+delete/Mkdir…) and batch cards list up to 15 names + "and N more";
+/move cards come AFTER 404/409 pre-checks (batches pre-validate all
+sources+destinations before asking); /find wildcards are substring
+(not anchored), mtime in seconds; /stat echoes the decoded path;
+/mkdir 409s when a file squats the name.
+
+## 3.6.0 — 2026-10-23 (extension 3.6.0: pilot round 2 + injection)
+
+Release line merging `fix/pilot-feedback-3.4` (3.4.0 → 3.5.0) and
+`feat/runtime-injection` into one build for external testing.
+Versions bumped: manifest 3.6.0, FS_VERSION 3.6.0-EXT, injected
+client 3.6.0-inj. Skill fast-path text unchanged from the
+feat/runtime-injection entry below.
+
+## feat/runtime-injection — 2026-10-23 (with extension 3.5.0 + injection)
+
+- **One-line bootstrap fast path.** When the extension's 🔒 Security
+  card reports "client injection active", the first cell of a chat is
+  `import js; exec(js.OFB_CLIENT_PY); await ofb_init()` (token variant
+  adds `ofb_set_token(…)` before `ofb_init`). The extension registers
+  a MAIN-world content script at runtime for exactly the allowed
+  OWUI origin; the injected client is identical to the pasted
+  bootstrap helpers. Kills the 107-of-149 bootstrap-trimming failure
+  mode AND the stdout wipe (pre-await prints survive bridge calls).
+- **Fallback unchanged:** worker-executor hosts (Pyodide persistence
+  on) and declined permissions keep the full pasted block — a missing
+  `OFB_CLIENT_PY` is a silent fallback, never an error to report.
+
+## 3.5.0-EXT — 2026-10-23 (with extension 3.5.0)
+
+Pilot round 2 (a scripted 38-test run against ext 3.3.1, 2026-10-22,
+plus the 4-week trial write-ups): reading and Q&A were correct in every
+test; the remaining failures were file mechanics. New rules: find a
+file before using it (`/find`, never guess a path, `truncated` never
+means "not there"); "change this file" writes the SAME path (edits
+saved as `_v2` copies confused users); destructive steps run one at a
+time with batch endpoints for multi-file work; never probe packages
+with `__import__`; never suggest routing around safety filters.
+Documented `/move` + `/mkdir` + batch bodies, the corrected
+timed-out-approval wording (the card self-closes; retry raises a new
+one), `/list name=` filter, 2 MB raw read pages, `/image_b64
+format=png`, and image display via the host's `data:image/png` line.
+
+## 3.4.0-EXT — 2026-10-20 (with extension 3.4.0)
+
+Pilot-feedback release: everything below fixes something that failed in
+a 4-week, 7-user, ~100-chat corporate trial on extension 3.3.1 with
+skill 3.3.3/3.3.4-EXT (Windows network shares, OneDrive, Swedish folder
+names). The trial company maintained a derived skill (3.3.7-EXT) with
+bootstrap-level fixes, tested in Pyodide 0.28 against a mock relay;
+their findings and tested patterns are folded back in here.
+
+Bootstrap (the biggest win — models dropped parts of the 150-line
+block in 107/149 copies, and both error shapes caused 86×
+`KeyError: 'body'` + 31× `KeyError: 'bodyB64'`):
+- EVERY helper in the one block: `read_binary`, `read_binary_range`,
+  `read_text`, `write_text`, `write_binary`, `install_bridge_wheels`,
+  `ofb_fetch_b64`, `bridge_path`, `out`.
+- Parameters are URL-encoded for the caller (`quote(v, safe='/')`) —
+  raw å/ä/ö, spaces and apostrophes stopped working mid-2026.
+- One `_check()` handles BOTH failure shapes (relay/SW failures carry
+  `error` + a JSON body; adapter failures carry `status` + `body`) and
+  raises `BridgeError` with the extension's own message.
+- Request timeout 45 s (hosts kill cells at 60 s and reset the sandbox —
+  the old 60/120 s timeouts outlived their own cell; 27 cells died).
+- `bridge_path(user_path)` maps pasted Windows paths (`N:\…\<shared>\…`)
+  to bridge paths, adding the root id when several folders are shared.
+- `out(obj, limit=4000)` print cap; first cell prints ROOTS ONLY
+  (a recursive root /list returned ~50 000 chars or timed out, 25×).
+- Rules block up front (7 rules, each tied to an observed failure),
+  including "NameError on a helper = sandbox was reset, run the block
+  again".
+
+Docs/recipes:
+- Image display via the host's `data:image/png;base64,` upload line
+  (never echo base64 data-URLs — cost 15–20 K output tokens per chart
+  and corrupted images).
+- Office: try `import docx/pptx/openpyxl` FIRST (hosts 0.11.4+/0.12.0+
+  install them on import); host-version table; big-workbook read_only
+  pattern; csv `;`+`utf-8-sig` for Swedish Excel; olefile for
+  Outlook `.msg`.
+- PDF: full `/pdf_op` body shapes; `/pdf_text?mode=images`; the fixed
+  fpdf2 recipe (ssl first, FPDF not FPdf, DejaVu fonts, `new_x=LMARGIN`
+  layout helpers, page-1 preview); "adding to a PDF" = build pages +
+  merge.
+- Reads you parse go through `read_text` (clean bytes) — `/read`'s
+  numbered lines broke CSV/JSON parsing; `raw=1` documented.
+- Reply in the language of the user's latest message (Swedish example
+  phrases previously dragged sessions into Swedish).
+- Skill shrunk and re-ordered: rules first, prose cut (~24 K chars).
+
+Requires extension ≥ 3.4.0.
+
 ## 3.3.3-EXT — 2026-09-19 (with extension 3.3.2)
 
 New `/mkdir` endpoint (extension 3.3.2): the model can now CREATE

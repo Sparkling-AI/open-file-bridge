@@ -173,7 +173,9 @@ Bridge must be running during chats. Non-technical users will forget.
       (verbatim extract, fnmatchStar path-glob cases ALL PASS); the
       e2e run needs a granted folder → folded into the Linux re-run
       item at the top of this section.
-- [ ] Folder RENAME/MOVE has no endpoint (2026-09-19 finding, ext
+- [x] Superseded by extension 3.5.0: `/move` now handles file/folder
+      moves and renames, including batches. Original finding retained below.
+      Folder RENAME/MOVE had no endpoint (2026-09-19 finding, ext
       3.3.2): /delete + /mkdir exist, but renaming or moving a folder
       means the model recursively copies every file (read+write each)
       and /deletes the source — slow, and snapshot/trash noise for a

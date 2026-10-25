@@ -38,6 +38,19 @@ CHROME = os.environ.get(
 OWUI = os.environ.get("OFB_EXT_OWUI", "http://127.0.0.1:8788")
 XDISPLAY = os.environ.get("OFB_S3_XDISPLAY", ":99")
 
+
+def xvfb_env():
+    """Launch env for Chromium under Xvfb: os.environ MINUS every
+    DBUS_*/XDG_* key (keep DISPLAY, set :99). Without the strip,
+    showDirectoryPicker detours to xdg-desktop-portal and the GTK
+    dialog paints on the HOST display, never on :99 — the button click
+    resolves, no console error, the picker promise just hangs
+    (gotcha 13; cost a silent roots:0 on 2026-10-23)."""
+    env = {k: v for k, v in os.environ.items()
+           if not (k.startswith("DBUS_") or k.startswith("XDG_"))}
+    env["DISPLAY"] = XDISPLAY
+    return env
+
 # ---------------------------------------------------------------- fixtures
 GRANT_DIR.mkdir(parents=True, exist_ok=True)
 (GRANT_DIR / "notes").mkdir(exist_ok=True)
@@ -169,25 +182,20 @@ def picker_flow(driver, page, pick_win_id):
     Returns the number of roots in IndexedDB after the flow (0 = fail).
     """
     driver.screenshot("spike-b0-open")
-    driver.click(85, 373)        # bookmark 'Granted' → GRANT_DIR
-    time.sleep(1.2)
-    driver.screenshot("spike-b1-bookmark")
-    driver.click(1077, 798)      # Open
-    time.sleep(1.6)
-    driver.screenshot("spike-b2-after-open")
-    # Allow-bubble probe fan: (790,254) is the PROVEN hit (session #2,
-    # pick_drive.py); browser window spawns at (140,60). Order matters —
-    # a missed click can DISMISS the bubble (click-outside), so start
-    # at the proven coordinate.
-    for attempt, (ax, ay) in enumerate(
-            [(790, 254), (740, 254), (700, 254)]):
-        driver.click(ax, ay)
-        time.sleep(1.0)
-        driver.screenshot(f"spike-b3-allow-{attempt}")
+    # bookmark row: GTK row geometry drifts with session theme state
+    # (2026-10-20: Granted measured at y≈411, the old proven 373 now hits
+    # the Demo bookmark). Try Granted-first candidates; after each
+    # candidate + Open, answer Chrome's permission bubble IMMEDIATELY
+    # (a successful Open CLOSES the dialog and pops the bubble — clicking
+    # more dialog coords after that is what broke the first fan).
+    def _roots_count():
+        # versionless open: a pinned LOWER version throws VersionError
+        # once fs-idb moves on (v2 since 2026-09-09) — readers must
+        # never request an upgrade (options.js had the same bug)
         try:
-            n = page.evaluate(
+            return page.evaluate(
                 "new Promise((res) => {"
-                "  const rq = indexedDB.open('ofb-ext', 1);"
+                "  const rq = indexedDB.open('ofb-ext');"
                 "  rq.onsuccess = () => {"
                 "    try {"
                 "      const tx = rq.result.transaction('roots', 'readonly');"
@@ -198,8 +206,38 @@ def picker_flow(driver, page, pick_win_id):
                 "  };"
                 "  rq.onerror = () => res(-3);"
                 "})")
+        except Exception:
+            return -4
+
+    for by in (411, 395, 430, 447, 373):
+        driver.click(85, by)
+        time.sleep(1.0)
+        driver.screenshot(f"spike-b1-bookmark-{by}")
+        driver.click(1077, 798)      # Open (dialog) — closes it on success
+        time.sleep(2.0)              # big dirs + dialog teardown settle
+        # Chrome "Allow this site to edit files?" bubble — probe the fan.
+        # Check IDB between clicks: a slow bubble may appear late, and a
+        # click fired BEFORE it maps can dismiss it the instant it shows.
+        for ax, ay in ((790, 254), (740, 254), (700, 254)):
+            time.sleep(0.8)
+            n = _roots_count()
             if isinstance(n, int) and n >= 1:
+                driver.screenshot(f"spike-b3-allow-hit-{by}")
                 return n
+            driver.click(ax, ay)
+            time.sleep(1.0)
+            n = _roots_count()
+            if isinstance(n, int) and n >= 1:
+                driver.screenshot(f"spike-b3-allow-hit-{by}")
+                return n
+        n = _roots_count()
+        if isinstance(n, int) and n >= 1:
+            return n
+        # not granted — the dialog was closed by Open (or never opened);
+        # re-open it for the next candidate
+        try:
+            page.click("#pick", timeout=3000)
+            time.sleep(1.0)
         except Exception:
             pass
     return 0
@@ -312,8 +350,13 @@ except Exception:
 if "entries" not in data:
     raise AssertionError("S2 no entries, status=" + str(d["status"]) + " body=" + str(d["body"])[:400])
 files = sorted(e["path"] for e in data["entries"] if e["type"] == "file")
-_r = "S2 /list files=" + str(files)
-assert "notes/readme.txt" in files, _r
+_r = "S2 /list top-level files=" + str(files)
+assert "notes/readme.txt" not in files, "bare /list must be depth-1 (pilot): " + _r
+d0 = (await ofb_fetch("GET", "/list?depth=0")).to_py()
+data0 = json.loads(d0["body"])
+files0 = sorted(e["path"] for e in data0["entries"] if e["type"] == "file")
+_r += " | depth=0 files=" + str(files0)
+assert "notes/readme.txt" in files0, _r
 print(_r); RESULT = _r
 ''',
         "s3_read": '''d = (await ofb_fetch("GET", "/read?path=notes/readme.txt")).to_py()
@@ -609,9 +652,7 @@ def main():
                 # silently killed extension loading in session #2); the
                 # DISPLAY env var below is the correct channel.
             ],
-            env={**os.environ, "DISPLAY": XDISPLAY},
-            no_viewport=True,
-        )
+            env=xvfb_env(), no_viewport=True)
         print("browser up; pages:", [pg.url for pg in ctx.pages])
 
         # wait for the SW (ctx.service_workers is event-driven and can lag
@@ -779,7 +820,7 @@ def main():
                 "--no-first-run", "--no-default-browser-check",
                 "--window-size=1000,700", "--window-position=140,60",
             ],
-            env={**os.environ, "DISPLAY": XDISPLAY},
+            env=xvfb_env(),
             no_viewport=True,
         )
         # find SW origin again (fresh contexts drop old bindings)

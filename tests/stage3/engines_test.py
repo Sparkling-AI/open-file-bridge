@@ -264,8 +264,12 @@ def spike1_cells_python():
     rebuilding its py string the same way (read from its source)."""
     src = (Path(__file__).parent / "spike1.py").read_text()
     start = src.index("    py = '''") + len("    py = '''")
-    end = src.index("'''\n    cells = {", start)
-    return src[start:end]
+    # needle kept in lockstep with spike1's layout (see negatives_test):
+    # the py block is closed by the token-replace line, not "cells = {"
+    end = src.index("'''\n    py = py.replace", start)
+    # sec tier-2: swap the harness _TOKEN default for the test token
+    # exactly as spike1's own flow does (negatives_test had the same gap)
+    return src[start:end].replace("__OFB_TEST_TOKEN__", spike1.TEST_TOKEN)
 
 
 def assemble_harness_page(owui, py, cells):
@@ -385,7 +389,7 @@ def main():
                 "--window-size=1000,700",
                 "--window-position=140,60",
             ],
-            env={**os.environ, "DISPLAY": spike1.XDISPLAY},
+            env=spike1.xvfb_env(),
             no_viewport=True,
         )
 

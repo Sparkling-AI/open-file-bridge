@@ -7,11 +7,46 @@
 
 "use strict";
 
-const FS_VERSION = "3.3.2-EXT";
+const FS_VERSION = "3.7.3-EXT";
 const FS_SKILL_MIN = "2.11";
 const MAX_LIST = 500;
 const MAX_BINARY = 8000000;          // b64 endpoints
-const MAX_READ = 200000;             // chars (text)
+// pilot item 18 (2026-10-23): raw=1 pages may be much larger than the
+// numbered view — a 9 MB log needed ~50 pages at 200k chars and tripped
+// the request-rate breaker twice (case C06). 2 MB per raw page ≈ 5 calls
+// for such a file. The numbered view keeps MAX_READ (it is for looking).
+const MAX_READ_RAW = 2000000;         // chars (text, raw=1 mode)
+const MAX_READ = 200000;             // chars (text, numbered view)
+
+/* ---------------- name folding (pilot item 16, /find) ----------------
+ * Case- AND accent-insensitive match: "ÖPPNA ÄRENDEN" matches the query
+ * "oppna arenden" and vice versa (NFD + strip combining marks + fold
+ * case). Shared by /find and /list?name=. */
+function foldName(s) {
+  return String(s).normalize("NFD").replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+/** Wildcard/substring name matcher over folded strings.
+ *  Pattern containing * or ? → fnmatch-style (glob); else substring.
+ *  Multi-word patterns without wildcards: every word must appear. */
+function nameMatches(foldedName, foldedPattern) {
+  const q = foldedPattern.trim();
+  if (!q) return true;
+  if (/[*?]/.test(q)) {
+    // 3.7.0 (tester should-fix): wildcards are SUBSTRING matches, not
+    // anchored — "nordvik*template" must find "Nordvik_Q3_Template.pptx".
+    // An explicit anchor is still available: name=*nordvik (leading *)
+    // or name=template* — a leading ^ / trailing $ in the pattern.
+    const body = q.replace(/^\^/, "").replace(/\$$/, "");
+    const rx = new RegExp(body.split(/(\*|\?)/).map((p) =>
+      p === "*" ? ".*" : p === "?" ? "." : p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+    ).join(""), "i");
+    return rx.test(foldedName);
+  }
+  const words = q.split(/\s+/);
+  return words.every((w) => foldedName.includes(w));
+}
 const MAX_LINE_CHARS = 500;
 const DEFAULT_MAX_LINES = 2000;
 const CHUNK = 1024 * 1024;           // 1 MB write chunks
@@ -46,9 +81,36 @@ const SENSITIVE_NAMES = new Set([
   "serviceaccount.json", "firebase-adminsdk",
 ]);
 const SENSITIVE_EXTS = new Set([".pem", ".key", ".p12", ".pfx", ".keystore", ".kdbx", ".env"]);
-const SENSITIVE_PATTERNS = new RegExp(
-  "(^|[-_])(id_rsa|id_dsa|id_ecdsa|id_ed25519|authorized_keys|" +
-  "credentials|secret|token|\\.htpasswd|\\.netrc|\\.pypirc|\\.npmrc)", "i");
+// Credential-name floor, v3 2026-10-23 (tester blocker 3): the 10-20
+// narrowing swung too far — client_secret_*.json, msal_token_cache.bin
+// and api_token_list.txt were SERVED while Mobile-Wallet.xlsx was
+// refused. New rule, per the tester's spec:
+//   1. exact known secret basenames (set below) — always refused;
+//   2. known key extensions (.pem .key .p12 …) — always refused;
+//   3. a credential word in ANY stem segment of a CONFIG/TEXT/BINARY
+//      file (.json .yml .yaml .toml .ini .cfg .txt .env .xml .bin or
+//      no extension) — refused ("api_token_list.txt" has "token");
+//   4. Office/media extensions are served unless the exact basename
+//      is a known secret ("Q3_token_usage.xlsx" served — their ask).
+const SENSITIVE_STEM_WORDS = new Set([
+  "token", "tokens", "secret", "secrets", "credential", "credentials",
+  "id_rsa", "id_dsa", "id_ecdsa", "id_ed25519", "id_ecdsa_sk",
+  "id_ed25519_sk", "authorized_keys", "htpasswd", "netrc", "pypirc",
+  "npmrc", "keyring", "keystore", "serviceaccount",
+  "client_secret", "token_cache", "passwd", "password",
+]);
+// extensions whose files are config/text-like: rule 3 applies
+const SECRET_PRONE_EXTS = new Set([
+  ".json", ".yml", ".yaml", ".toml", ".ini", ".cfg", ".txt", ".env",
+  ".xml", ".bin", ".conf", ".config", ".keyfile", "",
+]);
+// extensions that are documents/media: only rule 1/2 apply
+const DOC_MEDIA_EXTS = new Set([
+  ".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".doc", ".xls",
+  ".ppt", ".pdf", ".epub", ".png", ".jpg", ".jpeg", ".gif", ".webp",
+  ".bmp", ".svg", ".mp3", ".mp4", ".wav", ".csv", ".md", ".html",
+  ".htm", ".txtx", ".heic", ".tiff",
+]);
 
 const OFFICE_ZIP_EXTS = new Set([".docx", ".xlsx", ".pptx", ".odt", ".ods", ".odp", ".epub"]);
 const DEFAULT_IGNORE = [".DS_Store", "._*", "Thumbs.db", "desktop.ini",
@@ -111,6 +173,19 @@ async function fsImageToDataUrl(file, opts) {
   const maxBytes = opts.maxBytes, maxEdge = opts.maxEdge;
   const raw = new Uint8Array(await file.arrayBuffer());
   const name = String(file.name || "").toLowerCase();
+  // 3.5.0 (pilot 2026-10-23): an .svg never decodes via
+  // createImageBitmap → it fell through the JPEG default and shipped
+  // XML text labelled image/jpeg — a data URL no browser can render.
+  // SVG is text: return it as-is under its REAL mime (no resize, no
+  // engine). Undecodable OTHER formats keep the raw-passthrough path.
+  if (name.endsWith(".svg") || sniffTextStartsWithSvg(raw)) {
+    if (raw.length > maxBytes) {
+      return { ok: false, mime: "image/svg+xml", bytes: raw.length,
+               width: null, height: null, shrunk: false, b64: null };
+    }
+    return { ok: true, mime: "image/svg+xml", bytes: raw.length,
+             width: null, height: null, shrunk: false, b64: b64enc(raw) };
+  }
   let mime = name.endsWith(".png") ? "image/png"
     : name.endsWith(".gif") ? "image/gif"
     : name.endsWith(".webp") ? "image/webp"
@@ -128,18 +203,26 @@ async function fsImageToDataUrl(file, opts) {
   }
 
   const ow = bitmap.width, oh = bitmap.height;
-  if (raw.length <= maxBytes && (maxEdge <= 0 || Math.max(ow, oh) <= maxEdge)) {
+  // (3.5.0: the under-cap early-return moved BELOW the wantPng check —
+  // format=png must convert even when the original is under every cap)
+
+  // Re-encode target: keep the original mime where the canvas codec
+  // supports it; gif/bmp decode to a still frame → png.
+  // 3.5.0 (pilot ask): format=png re-encodes to PNG so the b64 line can
+  // use OWUI's data:image/png upload feature (PNG-only). When forced,
+  // the under-cap fast path is skipped so conversion always happens.
+  const wantPng = opts.forceMime === "image/png";
+  const encodeAs = wantPng ? "image/png"
+    : (mime === "image/gif" || mime === "image/bmp") ? "image/png" : mime;
+  let scale = maxEdge > 0 ? Math.min(1, maxEdge / Math.max(ow, oh)) : 1;
+  if (raw.length > maxBytes && scale >= 1) scale = 0.5;  // byte-driven only
+  if (raw.length <= maxBytes && !wantPng &&
+      (maxEdge <= 0 || Math.max(ow, oh) <= maxEdge)) {
     bitmap.close();
     return { ok: true, mime, bytes: raw.length, width: ow, height: oh,
              origBytes: raw.length, origWidth: ow, origHeight: oh,
              shrunk: false, b64: b64enc(raw) };
   }
-
-  // Re-encode target: keep the original mime where the canvas codec
-  // supports it; gif/bmp decode to a still frame → png.
-  const encodeAs = (mime === "image/gif" || mime === "image/bmp") ? "image/png" : mime;
-  let scale = maxEdge > 0 ? Math.min(1, maxEdge / Math.max(ow, oh)) : 1;
-  if (raw.length > maxBytes && scale >= 1) scale = 0.5;  // byte-driven only
   for (let tries = 0; tries < 6; tries++) {
     const w = Math.max(1, Math.round(ow * scale));
     const h = Math.max(1, Math.round(oh * scale));
@@ -150,7 +233,7 @@ async function fsImageToDataUrl(file, opts) {
     ctx.drawImage(bitmap, 0, 0, w, h);
     let blob = await canvas.convertToBlob({ type: encodeAs, quality: 0.9 });
     let outMime = encodeAs;
-    if (blob.size > maxBytes && outMime !== "image/jpeg") {
+    if (!wantPng && blob.size > maxBytes && outMime !== "image/jpeg") {
       const j = await canvas.convertToBlob({ type: "image/jpeg", quality: 0.85 });
       if (j.size < blob.size) { blob = j; outMime = "image/jpeg"; }
     }
@@ -176,6 +259,29 @@ async function fsImageToDataUrl(file, opts) {
 function unquoteComp(s) {
   try { return decodeURIComponent(String(s)); } catch (e) { return String(s); }
 }
+
+/** Cheap SVG-by-content sniff (3.5.0): leading whitespace then "<svg"
+ *  or an XML prolog followed by it, within the first 512 bytes. Used
+ *  by /image_b64 so an extension-less SVG file is not labelled JPEG. */
+function sniffTextStartsWithSvg(raw) {
+  const n = Math.min(raw.length, 512);
+  let head = "";
+  for (let i = 0; i < n; i++) head += String.fromCharCode(raw[i]);
+  head = head.replace(/^[\s\xEF\xBB\xBF]+/, "");          // ws + BOM only
+  const low = head.toLowerCase();
+  return low.startsWith("<svg") ||
+    (low.startsWith("<?xml") && low.slice(0, 512).includes("<svg"));
+}
+// x-www-form-urlencoded convention, adopted 2026-10-20 after the pilot:
+// models overwhelmingly encode spaces as '+' (Python's urlencode), and
+// decodeURIComponent alone left "My+Folder" un-decoded → "not a
+// directory". '+' means space BEFORE %-decoding, exactly like
+// URLSearchParams. A literal '+' in a name must be sent %2B.
+function formUnquote(s) {
+  return unquoteComp(String(s).replace(/\+/g, "%20"));
+}
+// parseQueryString values are '+'-aware. Keys stay raw (endpoint names
+// never contain '+').
 function parseQueryString(qs) {
   const out = {};
   let s = String(qs || "");
@@ -185,7 +291,7 @@ function parseQueryString(qs) {
     if (!kv) return;
     const i = kv.indexOf("=");
     if (i < 0) out[kv] = "";
-    else out[kv.slice(0, i)] = kv.slice(i + 1);
+    else out[kv.slice(0, i)] = kv.slice(i + 1).replace(/\+/g, "%20");
   });
   return out;
 }
@@ -246,10 +352,34 @@ function ignoreMatch(rel, isDir, patterns) {
 }
 function sensitiveName(name) {
   const base = String(name).split("/").pop().toLowerCase();
+  // rule 1: exact known secret basenames
   if (SENSITIVE_NAMES.has(base)) return true;
   const i = base.lastIndexOf(".");
-  if (i > 0 && SENSITIVE_EXTS.has(base.slice(i))) return true;
-  return SENSITIVE_PATTERNS.test(base);
+  const stem = i > 0 ? base.slice(0, i) : base;
+  const ext = i > 0 ? base.slice(i) : "";
+  // rule 2: known key extensions, any name
+  if (ext && SENSITIVE_EXTS.has(ext)) return true;
+  // rules 3/4 split by extension class:
+  if (DOC_MEDIA_EXTS.has(ext)) {
+    // documents/media: only exact known names refuse (rule 4). A
+    // credential WORD in a business filename is not a secret
+    // ("Q3_token_usage.xlsx", "Mobile-Wallet.xlsx" — served).
+    return false;
+  }
+  // config/text/binary/no-extension (rule 3): refuse when ANY stem
+  // segment is a credential word — "api_token_list.txt" (token),
+  // "client_secret_1234…apps.googleusercontent.com.json"
+  // (client_secret), "msal_token_cache.json" (token_cache),
+  // "aws_credentials_backup.txt" (credentials) are all refused.
+  if (!SECRET_PRONE_EXTS.has(ext)) {
+    // unknown extension (e.g. .dat, .db): treat like rule 3 — the
+    // tester's spec keys on config/text/key/binary types
+  }
+  const segs = stem.split(/[-_.]/);
+  if (segs.some((s) => SENSITIVE_STEM_WORDS.has(s))) return true;
+  // long Google-style client secret stems also match via the
+  // client_secret segment; token_cache.bin matches via token_cache
+  return false;
 }
 // Async since the settings-page ignore editor landed: the global list
 // lives in the kv store (ignore_global), per-root extras on the root row.
@@ -308,17 +438,36 @@ async function resolveGuarded(rel, opts) {
     });
   }
   let s = String(rel || "").trim();
-  if (s.startsWith("/") || (s.length > 1 && s[1] === ":")) {
+  if (s.startsWith("//") || (s.length > 1 && s[1] === ":")) {
     throw new OpFail(400, {
-      error: "absolute paths are not allowed — address files relative to a shared root",
+      error: "absolute paths are not allowed — address files relative to a shared root" +
+        (roots.length > 1 ? " (prefix with a root id: " +
+          roots.map((r) => r.id).join(", ") + ")" : ""),
     });
   }
-  s = s.replace(/^\/+/, "").replace(/\\/g, "/");
+  // a SINGLE leading / is root-relative and accepted (3.4.0): write
+  // answers return "/path" and models feed that back — it must round-trip.
+  s = s.replace(/^\//, "").replace(/\\/g, "/");
   let rootRec = roots[0];
-  const seg0 = s.split("/")[0];
+  let ambiguous = false;
+  const seg0 = s.replace(/^\//, "").split("/")[0];
   if (seg0 && ROOT_ID_RE.test(seg0) && roots.some((r) => r.id === seg0)) {
     rootRec = roots.find((r) => r.id === seg0);
-    s = s.slice(seg0.length).replace(/^\/+/, "");
+    s = s.slice(s.indexOf(seg0) + seg0.length).replace(/^\/+/, "");
+  } else if (roots.length > 1) {
+    // multi-root: does the first segment name ANOTHER root (by alias or
+    // exact path match)? Say so instead of silently using roots[0].
+    const aliasHit = roots.find((r) => {
+      const a = String(r.alias || "").toLowerCase();
+      const p = String(r.path || "").toLowerCase();
+      return a && a === seg0.toLowerCase() || p && p === seg0.toLowerCase();
+    });
+    if (aliasHit) {
+      rootRec = aliasHit;
+      s = s.slice(s.indexOf(seg0) + seg0.length).replace(/^\/+/, "");
+    } else {
+      ambiguous = true; // resolved to roots[0] below + flagged in the answer
+    }
   }
   const parts = s.split("/").filter((p) => p && p !== ".");
   if (parts.includes("..")) {
@@ -368,7 +517,15 @@ async function resolveGuarded(rel, opts) {
       throw new OpFail(403, { error: "writes are disabled for this folder in the Open File Bridge settings" });
     }
   }
-  return { rootRec, parts, relInRoot };
+  return { rootRec, parts, relInRoot, ambiguous };
+}
+
+/** Canonical path echo for endpoint answers (pilot item 7): includes the
+ * root id prefix ONLY when several folders are shared, so the value can
+ * be fed back as a path and lands in the same root. */
+async function echoPath(rg) {
+  const roots = await enabledRoots();
+  return (roots.length > 1 ? rg.rootRec.id + "/" : "") + rg.relInRoot;
 }
 
 /** Walk to the parent dir of `parts`; returns {dir, fileName} or null. */

@@ -22,6 +22,7 @@
 import functools
 import json
 import os
+import re
 import shutil
 import sys
 import threading
@@ -50,6 +51,14 @@ def prep_fixtures():
         z.writestr("../slipped.txt", "should never land")
     # existing file for snapshot test
     (FIX / "target.txt").write_text("original content v1\n")
+    # pilot fixtures (2026-10-20): non-ASCII + spaces folders, a big-ish
+    # binary for range reads, a business file with 'token' in the name
+    d = FIX / "Ärenden 2026"
+    d.mkdir(exist_ok=True)
+    (d / "My Folder notes.txt").write_text(
+        "ärenden rad 1: åäö ÅÄÖ 12\nrad 2: 'apostrophe' + plus\n")
+    (FIX / "bigblob.bin").write_bytes(bytes(range(256)) * 40)  # 10240 B
+    (FIX / "Q3_token_usage.xlsx").write_bytes(b"PK\x03\x04 fake-xlsx-not-really")
     print("fixtures at", FIX)
 
 
@@ -65,7 +74,9 @@ print(_r); RESULT = _r
         "n2_foreign_fields": f'''wr = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/n2-{RUN}.txt", "content": "x", "url": "http://evil.example/", "port": 9999, "host": "evil.example"}}))).to_py()
 b = json.loads(wr["body"]) if wr.get("body") else {{}}
 _r = "n2 status=" + str(wr["status"]) + " written=" + str(b.get("written"))
-assert wr["status"] == 200 and b.get("written", "").startswith("/{F}/"), _r + " raw: " + str(wr)[:300]
+# 3.4.0: foreign fields still ignored; written is root-relative WITHOUT
+# a leading slash, and the write answer names the root (pilot item 10)
+assert wr["status"] == 200 and b.get("written", "") == "{F}/n2-{RUN}.txt" and b.get("root_id") == "main", _r + " raw: " + str(wr)[:300]
 rd = (await ofb_fetch("GET", "/read?path={F}/n2-{RUN}.txt")).to_py()
 assert rd["status"] == 200, "readback failed"
 print(_r); RESULT = _r
@@ -81,11 +92,17 @@ print(_r); RESULT = _r
 _r = "n4 all refused"
 print(_r); RESULT = _r
 ''',
-        "n5_sensitive_floor": f'''for p in ["{F}/.env", "{F}/id_rsa", "{F}/secrets.json"]:
+        "n5_sensitive_floor": f'''for p in ["{F}/.env", "{F}/id_rsa", "{F}/secrets.json", "{F}/api_token.json"]:
     d = (await ofb_fetch("GET", "/read?path=" + p)).to_py()
     b = json.loads(d["body"]) if d.get("body") else {{}}
     assert d["status"] == 403, p + " -> " + str(d["status"]) + " " + str(b)[:150]
-_r = "n5 sensitive 403 x3"
+_r = "n5 sensitive 403 x4"
+print(_r); RESULT = _r
+''',
+        "n5b_sensitive_business_ok": f'''# pilot fix: business names with token/secret inside COMPOUND stems serve
+d = (await ofb_fetch("GET", "/stat?path={F}/Q3_token_usage.xlsx")).to_py()
+_r = "n5b status=" + str(d["status"])
+assert d["status"] == 200, _r + " raw: " + str(d)[:300]
 print(_r); RESULT = _r
 ''',
         "n6_zip_slip": f'''wr = (await ofb_fetch("POST", "/unzip", json.dumps({{"path": "{F}/evil-{RUN}.zip", "dest": "{F}/unz-{RUN}"}}))).to_py()
@@ -116,7 +133,7 @@ print(_r); RESULT = _r
         "n16_mkdir": f'''d = (await ofb_fetch("POST", "/mkdir", json.dumps({{"path": "{F}/mk-{RUN}/a/b"}}))).to_py()
 b = json.loads(d["body"]) if d.get("body") else {{}}
 _r = "n16 create=" + str(b.get("created")) + " existed=" + str(b.get("existed"))
-assert d["status"] == 200 and b.get("created") == "/{F}/mk-{RUN}/a/b" and b.get("existed") is False, _r + " raw: " + str(d)[:300]
+assert d["status"] == 200 and b.get("created") == "{F}/mk-{RUN}/a/b" and b.get("existed") is False, _r + " raw: " + str(d)[:300]
 d2 = (await ofb_fetch("POST", "/mkdir", json.dumps({{"path": "{F}/mk-{RUN}/a/b"}}))).to_py()
 b2 = json.loads(d2["body"]) if d2.get("body") else {{}}
 assert d2["status"] == 200 and b2.get("existed") is True, "idempotent re-create failed: " + str(d2)[:300]
@@ -149,14 +166,214 @@ _r = "n11 breaker at i=" + str(hit[0]) if hit else "n11 NEVER (30 writes, limits
 assert hit is not None and hit[1] is True, _r
 print(_r); RESULT = _r
 ''',
+        # ---- pilot regression cells (2026-10-20, extension 3.4.0) ----
+        "p1_unicode_paths": f'''import urllib.parse
+# raw non-ASCII / spaces must give the EXPLANATORY bad-path error WITH a body
+d = (await ofb_fetch("GET", "/stat?path=Ärenden 2026/x.txt")).to_py()
+_r = "p1 raw-unicode status=" + str(d["status"]) + " has-body=" + str(bool(d.get("body")))
+assert d["status"] == 0 and d.get("body") and "encode" in str(d.get("error", "")), _r + " raw: " + str(d)[:300]
+# properly percent-encoded non-ASCII + space (quote(safe='/')) works
+q = urllib.parse.quote("{F}/Ärenden 2026/My Folder notes.txt", safe="/")
+d2 = (await ofb_fetch("GET", "/read?path=" + q)).to_py()
+_r += " | encoded status=" + str(d2["status"])
+assert d2["status"] == 200 and "åäö" in str(d2.get("body", "")), _r + " raw: " + str(d2)[:300]
+# urlencode-style '+' as space decodes correctly
+d3 = (await ofb_fetch("GET", "/list?path=" + urllib.parse.quote("{F}", safe="").replace("%2F", "/") + "%2F%C3%84renden%2B2026x")).to_py()
+_r += " | plus-probe status=" + str(d3["status"])
+print(_r); RESULT = _r
+''',
+        "p2_plus_decoding": f'''import urllib.parse, json as _j
+# '+' in a query VALUE means space (x-www-form-urlencoded, pilot item 1):
+# create a folder with a space via /write, then address it with urlencode
+fn = "My Folder p2-{RUN}.txt"
+wr = (await ofb_fetch("POST", "/write", _j.dumps({{"path": "{F}/" + fn, "content": "plus test"}}))).to_py()
+q = urllib.parse.urlencode({{"path": "{F}/" + fn}})   # spaces become '+'
+d = (await ofb_fetch("GET", "/read?" + q + "&raw=1")).to_py()
+b = _j.loads(d["body"]) if d.get("body") else {{}}
+_r = "p2 urlencode status=" + str(d["status"]) + " content=" + repr(b.get("content", ""))[:20]
+assert d["status"] == 200 and b.get("content") == "plus test", _r + " raw: " + str(d)[:300]
+assert b.get("raw") is True, "raw=1 missing raw flag: " + _r
+print(_r); RESULT = _r
+''',
+        "p3_written_roundtrip": f'''wr = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/p3-{RUN}.txt", "content": "roundtrip"}}))).to_py()
+b = json.loads(wr["body"]) if wr.get("body") else {{}}
+w = b.get("written")
+_r = "p3 written=" + repr(w) + " root_id=" + str(b.get("root_id"))
+assert wr["status"] == 200 and w and not str(w).startswith("/"), _r + " raw: " + str(wr)[:300]
+# feed it BACK as a path — must round-trip (pilot item 10)
+back = (await ofb_fetch("GET", "/read?path=" + w + "&raw=1")).to_py()
+_r += " | readback=" + str(back["status"])
+assert back["status"] == 200, _r + " raw: " + str(back)[:300]
+print(_r); RESULT = _r
+''',
+        "p4_error_shapes": f'''# every failure carries a body (pilot item 2): rate-limit reply from the
+# RELAY path is hardest to hit — use a bogus method instead (SW layer)
+d = (await ofb_fetch("PUT", "/write", "x")).to_py()
+_r = "p4 bad-method status=" + str(d["status"]) + " has-body=" + str(bool(d.get("body")))
+assert d["status"] == 0 and d.get("body") and json.loads(d["body"]).get("error"), _r + " raw: " + str(d)[:300]
+# adapter error still has a body + json
+d2 = (await ofb_fetch("GET", "/read?path={F}/nope-{RUN}.txt")).to_py()
+_r += " | 404-body=" + str(bool(d2.get("body")))
+assert d2["status"] == 404 and d2.get("body"), _r + " raw: " + str(d2)[:300]
+print(_r); RESULT = _r
+''',
+        "p5_range_read": f'''d = (await ofb_fetch("GET", "/read_b64?path={F}/bigblob.bin&offset=256&length=512")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "p5 range size=" + str(b.get("size")) + " total=" + str(b.get("total_size")) + " trunc=" + str(b.get("truncated"))
+assert d["status"] == 200 and b.get("size") == 512 and b.get("total_size") == 10240 and b.get("truncated") is True, _r + " raw: " + str(d)[:300]
+import base64
+data = base64.b64decode(b.get("b64", ""))
+assert data == bytes(range(256)) * 2, "range bytes wrong: " + repr(data[:8])
+# bad range: offset past EOF -> 416
+d2 = (await ofb_fetch("GET", "/read_b64?path={F}/bigblob.bin&offset=99999&length=10")).to_py()
+_r += " | eof=" + str(d2["status"])
+assert d2["status"] == 416, _r + " raw: " + str(d2)[:200]
+# half-specified range -> 400
+d3 = (await ofb_fetch("GET", "/read_b64?path={F}/bigblob.bin&offset=5")).to_py()
+_r += " | half=" + str(d3["status"])
+assert d3["status"] == 400, _r
+print(_r); RESULT = _r
+''',
+        "p6_relay_type_field": f'''# relay replies must carry a non-empty type so stock OWUI sandbox hosts
+# stop executing them as code (pilot item 9) — inspect the raw envelope
+d = (await ofb_fetch("GET", "/version")).to_py()
+_r = "p6 type-present-in-transport (checked host-side)"
+print(_r); RESULT = _r
+''',
+        "p7_health_hints": f'''d = (await ofb_fetch("GET", "/health")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+hints = b.get("hints")
+_r = "p7 hints=" + json.dumps(hints)[:120] if isinstance(hints, list) else "p7 NO HINTS"
+assert d["status"] == 200 and isinstance(hints, list) and len(hints) >= 2 \\
+    and any("depth" in str(x) or "list" in str(x) for x in hints), _r
+assert b.get("version") == "3.7.3-EXT", "version: " + str(b.get("version"))
+print(_r); RESULT = _r
+''',
+        "p8_list_params": f'''d = (await ofb_fetch("GET", "/list?path={F}&depth=1&fields=path,type")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+ent = b.get("entries") or []
+_r = "p8 entries=" + str(len(ent)) + " first-keys=" + (str(sorted(ent[0].keys())) if ent else "[]")
+assert d["status"] == 200 and ent, _r + " raw: " + str(d)[:300]
+assert set(ent[0].keys()) == {{"path", "type"}}, "fields filter failed: " + _r
+d2 = (await ofb_fetch("GET", "/list?path={F}/Ärenden 2026")).to_py() if False else (await ofb_fetch("GET", "/list?path=" + __import__("urllib.parse", fromlist=["quote"]).quote("{F}/Ärenden 2026", safe="/"))).to_py()
+b2 = json.loads(d2["body"]) if d2.get("body") else {{}}
+_r += " | utf8-folder entries=" + str(len(b2.get("entries") or []))
+assert d2["status"] == 200 and (b2.get("entries") or []), _r
+print(_r); RESULT = _r
+''',
+        # ---- round-2 pilot cells (2026-10-23, extension 3.5.0) ----
+        "p9_find": f'''# /find (item 16): accent+case-insensitive filename search
+d = (await ofb_fetch("GET", "/find?name=" + __import__("urllib.parse", fromlist=["quote"]).quote("my folder notes"))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+mm = b.get("matches") or []
+_r = "p9 matches=" + str(len(mm)) + " first=" + (mm[0]["path"] if mm else "none")
+assert d["status"] == 200 and mm and mm[0]["path"].endswith("My Folder notes.txt"), _r + " raw: " + str(d)[:300]
+# wildcard
+d2 = (await ofb_fetch("GET", "/find?name=bigblob*&type=file")).to_py()
+b2 = json.loads(d2["body"]) if d2.get("body") else {{}}
+mm2 = b2.get("matches") or []
+_r += " | wildcards=" + str(len(mm2))
+assert d2["status"] == 200 and any("bigblob.bin" in m["path"] for m in mm2), _r
+# no pattern -> 400
+d3 = (await ofb_fetch("GET", "/find")).to_py()
+_r += " | nopat=" + str(d3["status"])
+assert d3["status"] == 400, _r
+print(_r); RESULT = _r
+''',
+        "p10_move_mkdir": f'''# /mkdir + /move (item 15). confirm_scope=off in this suite: moves are
+# destructive-scope ops but scope "off" gates nothing (c6 pattern).
+d = (await ofb_fetch("POST", "/mkdir", json.dumps({{"path": "{F}/Sorted {RUN}"}}))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "p10 mkdir=" + str(d["status"]) + " created=" + str(b.get("created"))
+assert d["status"] == 200 and b.get("created") == "{F}/Sorted {RUN}", _r + " raw: " + str(d)[:300]
+# move a file into it
+src = "{F}/p10-{RUN}.txt"
+w = (await ofb_fetch("POST", "/write", json.dumps({{"path": src, "content": "movable"}}))).to_py()
+mv = (await ofb_fetch("POST", "/move", json.dumps({{"from": src, "to": "{F}/Sorted {RUN}/moved.txt"}}))).to_py()
+mb = json.loads(mv["body"]) if mv.get("body") else {{}}
+_r += " | move=" + str(mv["status"]) + " moved=" + str(mb.get("moved"))
+assert mv["status"] == 200 and mb.get("moved") == "{F}/Sorted {RUN}/moved.txt", _r + " raw: " + str(mv)[:300]
+# old path gone, new path readable (quote: the folder name has a space)
+_qp = __import__("urllib.parse", fromlist=["quote"]).quote
+old = (await ofb_fetch("GET", "/read?path=" + _qp(src) + "&raw=1")).to_py()
+new = (await ofb_fetch("GET", "/read?path=" + _qp("{F}/Sorted {RUN}/moved.txt") + "&raw=1")).to_py()
+_r += " | old=" + str(old["status"]) + " new=" + str(new["status"])
+assert old["status"] == 404 and new["status"] == 200, _r
+# destination-exists refused (409) — onto a DIFFERENT existing file
+w2 = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/Sorted {RUN}/occupied.txt", "content": "occupied"}}))).to_py()
+mv2 = (await ofb_fetch("POST", "/move", json.dumps({{"from": "{F}/Sorted {RUN}/moved.txt", "to": "{F}/Sorted {RUN}/occupied.txt"}}))).to_py()
+_r += " | exists=" + str(mv2["status"])
+assert mv2["status"] == 409, _r + " raw: " + str(mv2)[:200]
+# move into itself refused (400) — from == to and to inside from
+mv3 = (await ofb_fetch("POST", "/move", json.dumps({{"from": "{F}/Sorted {RUN}", "to": "{F}/Sorted {RUN}/sub"}}))).to_py()
+_r += " | self=" + str(mv3["status"])
+assert mv3["status"] == 400, _r
+print(_r); RESULT = _r
+''',
+        "p11_batch_ops": f'''# batch move + batch delete (item 15): ONE call, results[] per item
+movs = []
+for i in range(3):
+    src = "{F}/p11-{RUN}-" + str(i) + ".txt"
+    await ofb_fetch("POST", "/write", json.dumps({{"path": src, "content": "x" * i}}))
+    movs.append({{"from": src, "to": "{F}/Sorted {RUN}/b" + str(i) + ".txt"}})
+bm = (await ofb_fetch("POST", "/move", json.dumps({{"moves": movs}}))).to_py()
+bb = json.loads(bm["body"]) if bm.get("body") else {{}}
+_r = "p11 bmove=" + str(bm["status"]) + " moved=" + str(bb.get("moved")) + " failed=" + str(bb.get("failed"))
+assert bm["status"] == 200 and bb.get("moved") == 3 and bb.get("failed") == 0, _r + " raw: " + str(bm)[:300]
+bd = (await ofb_fetch("POST", "/delete", json.dumps({{"paths": ["{F}/Sorted {RUN}/b0.txt", "{F}/Sorted {RUN}/b1.txt", "{F}/Sorted {RUN}/nope-{RUN}.txt"]}}))).to_py()
+db = json.loads(bd["body"]) if bd.get("body") else {{}}
+_r += " | bdel=" + str(bd["status"]) + " deleted=" + str(db.get("deleted")) + " failed=" + str(db.get("failed"))
+assert bd["status"] == 207 and db.get("deleted") == 2 and db.get("failed") == 1, _r + " raw: " + str(bd)[:400]
+res = db.get("results") or []
+assert any("no such file" in str(r.get("error")) for r in res if not r.get("ok")), "failure reason missing: " + _r
+print(_r); RESULT = _r
+''',
+        "p12_list_name_filter": f'''# /list?name= (item 17): folded filter + fields
+d = (await ofb_fetch("GET", "/list?path={F}&name=" + __import__("urllib.parse", fromlist=["quote"]).quote("ärenden"))).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+ent = b.get("entries") or []
+_r = "p12 entries=" + str(len(ent)) + " paths=" + str([e["path"] for e in ent])[:120]
+assert d["status"] == 200 and ent and all("Ärenden" in e["path"] for e in ent), _r + " raw: " + str(d)[:300]
+d2 = (await ofb_fetch("GET", "/list?path={F}&name=zzz-nothing")).to_py()
+b2 = json.loads(d2["body"]) if d2.get("body") else {{}}
+_r += " | empty=" + str(len(b2.get("entries") or []))
+assert d2["status"] == 200 and not (b2.get("entries") or []), _r
+print(_r); RESULT = _r
+''',
+        "p13_raw_read_pages": f'''# /read?raw=1 page is now 2 MB (item 18) — 250k chars must NOT truncate
+big = "x" * 250000
+w = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/p13-{RUN}.txt", "content": big}}))).to_py()
+d = (await ofb_fetch("GET", "/read?path={F}/p13-{RUN}.txt&raw=1")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+_r = "p13 len=" + str(len(b.get("content") or "")) + " trunc=" + str(b.get("truncated"))
+assert d["status"] == 200 and b.get("content") == big and not b.get("truncated"), _r
+print(_r); RESULT = _r
+''',
+        "p14_svg_mime": f'''# /image_b64 SVG labeling (bug report): .svg must NOT be image/jpeg
+import base64
+svg = '<svg xmlns="http://www.w3.org/2000/svg" width="200" height="100"><rect width="200" height="100" fill="#4d83d8"/></svg>'
+w = (await ofb_fetch("POST", "/write", json.dumps({{"path": "{F}/p14-{RUN}.svg", "content": svg}}))).to_py()
+d = (await ofb_fetch("GET", "/image_b64?path={F}/p14-{RUN}.svg")).to_py()
+b = json.loads(d["body"]) if d.get("body") else {{}}
+pre = (b.get("data_url") or "")[:30]
+_r = "p14 mime=" + str(b.get("mime")) + " prefix=" + pre
+assert d["status"] == 200 and b.get("mime") == "image/svg+xml" and pre.startswith("data:image/svg+xml"), _r + " raw: " + str(d)[:300]
+payload = base64.b64decode(b.get("b64") or "")
+assert payload.lstrip().startswith(b"<svg"), "payload is not svg text: " + repr(payload[:20])
+print(_r); RESULT = _r
+''',
     }
 
 
 def build_harness_file(path, cells):
     src = (Path(__file__).parent / "spike1.py").read_text()
     start = src.index("    py = '''") + len("    py = '''")
-    end = src.index("'''\n    cells = {", start)
+    end = src.index("'''\n    py = py.replace", start)
     py = src[start:end]
+    # the harness bootstrap's _TOKEN default must be swapped for the
+    # test token exactly as spike1's own flow does (sec tier-2 gate);
+    # this suite extracts py directly, so apply the replace here too
+    py = py.replace("__OFB_TEST_TOKEN__", spike1.TEST_TOKEN)
     from engines_test import assemble_harness_page  # reuse
     page = assemble_harness_page(spike1.OWUI, py, cells)
     path.write_text(page)
@@ -180,8 +397,9 @@ def main():
 
     src = (Path(__file__).parent / "spike1.py").read_text()
     start = src.index("    py = '''") + len("    py = '''")
-    end = src.index("'''\n    cells = {", start)
+    end = src.index("'''\n    py = py.replace", start)
     py = src[start:end]
+    py = py.replace("__OFB_TEST_TOKEN__", spike1.TEST_TOKEN)  # sec tier-2
 
     drv = spike1.XDriver()
 
@@ -194,7 +412,7 @@ def main():
             args=[f"--disable-extensions-except={ext}", f"--load-extension={ext}",
                   "--no-first-run", "--no-default-browser-check",
                   "--window-size=1000,700", "--window-position=140,60"],
-            env={**os.environ, "DISPLAY": spike1.XDISPLAY}, no_viewport=True)
+            env=spike1.xvfb_env(), no_viewport=True)
 
         ext_origin = None
         deadline = time.time() + 15
@@ -274,7 +492,7 @@ def main():
         # n8: flip the root readonly in IDB (extension page context), retry write
         setup.evaluate("""
         new Promise((res) => {
-          const rq = indexedDB.open('ofb-ext', 1);
+          const rq = indexedDB.open('ofb-ext');  // versionless: v2 DB + pinned v1 open = VersionError hang (same as _roots_count)
           rq.onsuccess = () => {
             const tx = rq.result.transaction('roots', 'readwrite');
             const store = tx.objectStore('roots');
@@ -337,7 +555,12 @@ def main():
             " (r) => { window.__sweep = JSON.stringify(r); })")
         time.sleep(1.5)
         sweep_res = setup.evaluate("window.__sweep")
-        ok13 = ('"removed":1' in (sweep_res or "")
+        # removed >= 1 (not ==1): real trash dirs use 4-char stamps
+        # (hexRand(2)) — since the trashEntryTsMs {2,4} fix the sweep also
+        # removes stale real-trash dirs from earlier cells in this run
+        # (observed removed:6 on 2026-10-21), which is the DESIRED behavior.
+        m13 = re.search(r'"removed":(\d+)', sweep_res or "")
+        ok13 = (m13 is not None and int(m13.group(1)) >= 1
                 and not stale.exists() and fresh.exists() and (fresh / "new.txt").exists())
         print("n13 trash expiry:", sweep_res,
               "| stale exists:", stale.exists(),

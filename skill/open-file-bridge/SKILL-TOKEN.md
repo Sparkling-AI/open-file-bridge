@@ -158,7 +158,7 @@ from pyodide.http import pyfetch
 import json, base64, io
 
 BRIDGE_HEADERS = {"Content-Type": "application/json",
-                  "X-Bridge-Token": "__ORG_TOKEN__"}   # org token EMBEDDED — required on every call
+                  "X-Bridge-Token": "__ORG_BRIDGE_TOKEN__"}   # org token EMBEDDED — required on every call
 
 async def bridge_get(path, params=None):
     url = f"http://127.0.0.1:8765{path}"

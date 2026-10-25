@@ -126,8 +126,8 @@ every layer below before touching a file:
 
 ### Official browser extension
 
-1. **Install Open File Bridge 3.x** from the Chrome Web Store. Version 3.3.1
-   has been submitted and is currently under review. For development or
+1. **Install Open File Bridge 3.x** from the Chrome Web Store. Version 3.7.0
+   (tester-round fixes) is the current packaged version. For development or
    pre-release testing, download the extension ZIP from the latest `v3.*`
    [GitHub release](https://github.com/Sparkling-AI/open-file-bridge/releases),
    extract it, and use Chrome/Edge → Extensions → Developer mode → Load

@@ -22,9 +22,21 @@ const MAX_INFLIGHT = 30;
 
 let inflight = 0;
 
-function swFail(id, error, status = 0) {
-  return { ofb: true, id, ok: false, status, error: String(error) };
+function swFail(id, error, status = 0, extra) {
+  // Pilot fix (2026-10-20): EVERY failure carries a body with the same
+  // {error, …} JSON shape adapter errors use — relay/SW failures used to
+  // answer {ok:false, status:0, error} with no body, and the skill's
+  // helpers died with KeyError: 'body' instead of showing the reason
+  // (86× in a 4-week pilot).
+  const obj = Object.assign({ error: String(error) }, extra || {});
+  return { ofb: true, id, ok: false, status, error: String(error),
+    body: JSON.stringify(obj) };
 }
+
+const PATH_WHY = "bad path: URL-encode the query — non-ASCII, spaces and " +
+  "'+' must be percent-encoded by the CALLER's helper (the skill's " +
+  "bridge_get does this; in raw Python use urllib.parse.quote(v, safe='/') " +
+  "and %2B for a literal '+'). Raw spaces/non-ASCII bytes are rejected.";
 
 async function handleOfbRequest(msg, sender) {
   const id = msg.id;
@@ -38,14 +50,17 @@ async function handleOfbRequest(msg, sender) {
   const senderTabId = sender && sender.tab ? sender.tab.id : null;
 
   // ---- shape gate: narrow pipe only ----
-  if (!/^\/[A-Za-z0-9_\-./?&=%+]*$/.test(path)) {
-    return swFail(id, "bad path", 0);
+  // (','/'.'/etc. must pass: 3.4.0 /list accepts fields=path,type.
+  //  Note: "//" is NOT refused here — n1 pins it to the RESOLVER's
+  //  400-with-body so the caller learns WHY; resolveGuarded refuses it.)
+  if (!/^\/[A-Za-z0-9_\-./?&=%+,;:!$'()*@]*$/.test(path)) {
+    return swFail(id, PATH_WHY, 0);
   }
   if (!["GET", "POST", "DELETE"].includes(method)) {
     return swFail(id, "bad method", 0);
   }
   if (path.includes("..")) {
-    return swFail(id, "bad path", 0);
+    return swFail(id, "bad path: '..' is not allowed — address files relative to a shared root", 0);
   }
   let bodyText = null;
   if (msg.body !== undefined && msg.body !== null) {
@@ -64,12 +79,24 @@ async function handleOfbRequest(msg, sender) {
     // internally, so this is free after the first call per SW lifetime
     maybeSweepMaintenance().catch(() => {}); // trash TTL + audit cap
     // out-of-band confirmation gate (destructive ops) — BEFORE the
-    // adapter; passes the requesting tab so the popup lands there
-    const gate = await confirmGate(method, path, bodyText, senderTabId);
-    if (gate) {
-      return { ofb: true, id, ok: false, status: 403, body: JSON.stringify(gate) };
+    // adapter; passes the requesting tab so the popup lands there.
+    // EXCEPT /move (3.7.0 tester should-fix): the card must come AFTER
+    // epMove's source-exists/destination-free checks, else the user
+    // approves a move that then 404/409s. epMove gates itself via
+    // confirmGateLate() for single moves; batches stay SW-gated (the
+    // per-item checks run inside the approved loop).
+    const isMove = method === "POST" && path === "/move";
+    if (!isMove) {
+      const gate = await confirmGate(method, path, bodyText, senderTabId);
+      if (gate) {
+        return { ofb: true, id, ok: false, status: 403, body: JSON.stringify(gate) };
+      }
     }
-    const resp = await fsRoute(method, path, bodyText);
+    // 3.7.3 (review F3): /move's late gate gets the tab as REQUEST-LOCAL
+    // context threaded through fsRoute → epMove → confirmGateLate. It
+    // used to sit in a module-level LAST_MOVE_SENDER_TAB, so two
+    // interleaved moves put one move's approval card in the other's tab.
+    const resp = await fsRoute(method, path, bodyText, false, { tabId: senderTabId });
     if (wantB64 && resp.bodyB64 !== undefined) {
       if (resp.bodyB64.length > MAX_RESPONSE_BYTES) {
         return swFail(id, "response too large", resp.status);
@@ -128,4 +155,91 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       .then(sendResponse);
     return true; // async sendResponse (confirmVerdict touches IndexedDB)
   }
+});
+
+/* ------- runtime sandbox-injection registration (3.5.0 spike) -------
+ * The client injector is registered DYNAMICALLY for the ONE origin the
+ * user set as their allowed site — the manifest declares no static
+ * https match (CWS: no broad install warning from this feature).
+ * registerContentScripts persists across browser restarts but is WIPED
+ * on extension update → re-register in onInstalled from IDB state.
+ * The permission grant (optional_host_permissions) is requested in the
+ * options page on the "Set site" click (user gesture requirement). */
+const INJECT_SCRIPT_ID = "ofb-inject";
+
+function originToMatchPattern(origin) {
+  try {
+    const u = new URL(origin);
+    if (u.protocol !== "https:" && u.protocol !== "http:") return null;
+    return u.protocol + "//" + u.host + "/*";
+  } catch (e) { return null; }
+}
+
+async function injectSync(register) {
+  // register=true: make the registered script match the CURRENT
+  // allowed_site (+ its granted permission). register=false: remove.
+  try {
+    const existing = await chrome.scripting.getRegisteredContentScripts();
+    const have = existing.some((s) => s.id === INJECT_SCRIPT_ID);
+    if (register) {
+      const site = await secAllowedSite();
+      const pattern = site ? originToMatchPattern(site) : null;
+      if (!pattern) {
+        if (have) await chrome.scripting.unregisterContentScripts({ ids: [INJECT_SCRIPT_ID] });
+        return { ok: true, registered: false, reason: "no allowed site" };
+      }
+      // 3.7.0: never register beyond what the user actually granted —
+      // a revoked-but-still-allowed-in-IDB site must degrade to the
+      // pasted bootstrap, not throw on every SW start
+      let granted = true;
+      try {
+        granted = await chrome.permissions.contains({ origins: [pattern] });
+      } catch (e) { /* permissions API unavailable (older Chrome) — try */ }
+      if (!granted) {
+        if (have) await chrome.scripting.unregisterContentScripts({ ids: [INJECT_SCRIPT_ID] });
+        return { ok: true, registered: false, reason: "host permission not granted" };
+      }
+      const reg = {
+        id: INJECT_SCRIPT_ID,
+        js: ["inject-main.js"],
+        matches: [pattern],
+        allFrames: true,
+        matchOriginAsFallback: true,
+        world: "MAIN",
+        runAt: "document_start",
+        persistAcrossSessions: true,
+      };
+      if (have) await chrome.scripting.updateContentScripts([reg]);
+      else await chrome.scripting.registerContentScripts([reg]);
+      return { ok: true, registered: true, pattern: pattern };
+    }
+    if (have) await chrome.scripting.unregisterContentScripts({ ids: [INJECT_SCRIPT_ID] });
+    return { ok: true, registered: false };
+  } catch (e) {
+    return { ok: false, error: String(e) };
+  }
+}
+
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg && msg.ofbInjectSync === true) {
+    injectSync(msg.register !== false).then(sendResponse);
+    return true; // async
+  }
+});
+
+// 3.7.0 (tester blocker 2): keep the registered injector in lockstep
+// with reality at every edge — permission revoked from the site
+// controls, and every browser start (dynamic registrations persist
+// across sessions but NOT across extension updates; onInstalled below
+// covers those).
+chrome.permissions.onRemoved.addListener((p) => {
+  injectSync(true).catch(() => {}); // re-sync vs the now-smaller grant set
+});
+chrome.runtime.onStartup.addListener(() => {
+  injectSync(true).catch(() => {});
+});
+
+chrome.runtime.onInstalled.addListener(() => {
+  // dynamic registrations are wiped on update — restore from IDB
+  injectSync(true).catch(() => {});
 });

@@ -37,7 +37,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 import spike1  # noqa: E402
-from spike1 import build_test_extension, find_ext, sec_configure, TEST_TOKEN
+from spike1 import build_test_extension, find_ext, sec_configure, TEST_TOKEN, xvfb_env
 
 SCRATCH = Path(os.environ.get("OFB_SEC_DIR", "/tmp/ofb-s3/sec"))
 results = []
@@ -99,7 +99,8 @@ def main():
         ctx = p.chromium.launch_persistent_context(
             str(SCRATCH / "profile"), headless=not headed,
             args=["--disable-extensions-except=" + str(ext),
-                  "--load-extension=" + str(ext)])
+                  "--load-extension=" + str(ext)],
+            env=xvfb_env())
         sw, ext_origin = find_ext(ctx)
         if not ext_origin:
             print("VERDICT: FAIL — no service worker (try OFB_SEC_HEADED=1)")

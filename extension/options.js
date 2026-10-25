@@ -199,8 +199,18 @@ async function renderSec() {
     del.textContent = "Remove";
     del.onclick = async () => {
       siteEditing = false;
-      await OFBIDB.del("kv", "allowed_site");
-      try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
+      // also tear down the sandbox injection for the old site (3.5.0):
+      // unregister + drop the optional host permission if we hold it
+      try {
+        const old = await OFBIDB.get("kv", "allowed_site");
+        await OFBIDB.del("kv", "allowed_site");
+        try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
+        if (old) {
+          const pat = String(old).replace(/\/+$/, "") + "/*";
+          try { await chrome.runtime.sendMessage({ ofbInjectSync: true, register: false }); } catch (e) {}
+          try { await chrome.permissions.remove({ origins: [pat] }); } catch (e) {}
+        }
+      } catch (e) { /* non-fatal: SW cleanup below is best-effort */ }
       document.getElementById("siteadd").value = "";
       renderSec(); beat();
     };
@@ -212,8 +222,28 @@ async function renderSec() {
   const mode = site ? (token ? "site lock + token" : "site lock") : (token ? "token only" : "nothing");
   modeEl.innerHTML = "Current protection: <b>" + esc(mode) + "</b>" +
     (site || token ? "" :
-      " — <span class='warn'>no site can use the bridge yet; set your Open WebUI address above.</span>");
+      " — <span class='warn'>no site can use the bridge yet; set your Open WebUI address above.</span>") +
+    (site && !token ?
+      " — <span class='warn'>without a bridge token, ANY html the model renders on that site (artifact/preview panels) can read the shared folder through the injected client. Set a token unless the site is localhost.</span>" :
+      "");
   modeEl.className = "hint";
+
+  // 3.7.1 (tester request 5): ALWAYS show the injection status — after
+  // an update the registration is restored silently and the user sees
+  // nothing until re-saving the site. Query the real state.
+  if (site) {
+    try {
+      const reg = await chrome.scripting.getRegisteredContentScripts();
+      const active = reg.some((s) => s.id === "ofb-inject");
+      const statEl = document.getElementById("sitestat");
+      if (active && !statEl.textContent.trim()) {
+        statEl.textContent = "✓ client injection active for this site " +
+          "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))";
+      } else if (!active && !statEl.textContent.trim()) {
+        statEl.textContent = "one-line bootstrap: OFF — click Edit → Save (or re-type the site + Set site) once to enable it; the pasted bootstrap works meanwhile";
+      }
+    } catch (e) { /* scripting API unavailable — stay silent */ }
+  }
 
   // recently-blocked suggestions — one click REPLACES the current site
   const denied = (await OFBIDB.get("kv", "denied_origins")) || [];
@@ -238,8 +268,24 @@ async function renderSec() {
       add.textContent = "Use this site";
       add.onclick = async () => {
         siteEditing = false;
+        const stat = document.getElementById("sitestat");
+        // 3.7.0 (tester blocker 2): route through the SAME path as
+        // "Set site" — permission request (user gesture = this click)
+        // + registration sync for the NEW site, and the sync also
+        // unregisters the OLD one. Failure is non-fatal (relay works).
         await OFBIDB.put("kv", d.o, "allowed_site");
         try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
+        try {
+          const pat = String(d.o).replace(/\/+$/, "") + "/*";
+          const granted = await chrome.permissions.request({ origins: [pat] });
+          const sync = await chrome.runtime.sendMessage({ ofbInjectSync: true, register: granted !== false });
+          if (granted && sync && sync.registered) {
+            stat.textContent = "✓ client injection active for this site " +
+              "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))";
+          } else if (granted === false) {
+            stat.textContent = "✓ site set (permission declined — the pasted bootstrap still works)";
+          }
+        } catch (e) { /* non-fatal */ }
         renderSec(); beat();
       };
       row.append(name, add);
@@ -514,6 +560,26 @@ window.addEventListener("DOMContentLoaded", async () => {
     document.getElementById("siteadd").value = "";
     stat.textContent = "";
     siteEditing = false;
+    // sandbox injection (3.5.0): ask for the ONE-origin host permission
+    // (user gesture = this click) and register the client injector for
+    // exactly this site. Failure is non-fatal: the relay pipe still
+    // works; cells just keep pasting the full bootstrap.
+    try {
+      const pat = n.origin.replace(/\/+$/, "") + "/*";
+      const granted = await chrome.permissions.request({ origins: [pat] });
+      const sync = await chrome.runtime.sendMessage({ ofbInjectSync: true, register: granted });
+      if (granted && sync && sync.registered) {
+        stat.textContent = "✓ client injection active for this site " +
+          "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))";
+      } else if (granted) {
+        stat.textContent = "✓ site set (injection registration failed: " +
+          (sync && sync.error ? sync.error : "unknown") + ")";
+      } else {
+        stat.textContent = "✓ site set (permission declined — the pasted bootstrap still works)";
+      }
+    } catch (e) {
+      stat.textContent = "✓ site set (injection unavailable: " + e + ")";
+    }
     renderSec(); beat();
   };
   document.getElementById("siteadd").addEventListener("keydown", (ev) => {

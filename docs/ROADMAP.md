@@ -883,3 +883,49 @@ the 3.3.2 floor note. Verified 11/11 by SW smoke on the Mac (OPFS-backed
 root, full handler path); negatives suite gained n16/n17/n8b for the next
 Linux run; live OWUI chat round pending Dandan. Deferred: folder
 rename/move still has no endpoint (TODO §6b).
+
+## Stage 3 (extension): pilot-feedback release 3.4.0 (2026-10-20)
+
+A 4-week corporate pilot (7 users, ~100 chats, extension 3.3.1 + skill
+3.3.3/3.3.4-EXT; Windows network shares, OneDrive, Swedish folder
+names) produced a 13-item report; all items shipped in ext 3.4.0 +
+skill 3.4.0-EXT:
+
+1. `+` decodes as space in query values (x-www-form-urlencoded);
+   "bad path" errors explain URL-encoding and carry a body.
+2. EVERY pipe failure carries a JSON body (relay + SW shapes too) —
+   no more KeyError:'body' in the skill helpers.
+3. Skill bootstrap: all helpers in one block (models dropped
+   ofb_fetch_b64 in 107/149 trial copies), URL-encoding, BridgeError
+   unifying both error shapes.
+4. `/list` gains `depth` (default 1 at the share root, recursive with
+   an explicit path or `depth=0`), `max_entries`, `fields=path,type`
+   (skips slow getFile() on network shares).
+5. Client timeouts 45 s (hosts kill cells at 60 s + reset the sandbox);
+   skill teaches the NameError = reset rule and max_pages splitting.
+6. `/read_b64?offset=&length=` range reads (files > 8 MB readable in
+   chunks); the skill's read_binary auto-ranges.
+7. Multi-root: write answers carry `written` (no leading /, root id
+   kept when several folders are shared) + `root_id`/`root_name`;
+   `/list` resolves alias-prefixed paths and flags ambiguity
+   (`root_note`).
+8. `/health` carries a short `hints` array (list with a path, root ids,
+   45 s budget).
+9. Relay replies carry `type:"ofb"` — stock Open WebUI sandbox hosts
+   (pyodideSandboxHost.ts, all versions incl. 0.12.2/main 2026-10-16)
+   executed every type-less message as code, resetting cell stdout.
+   Upstream guard proposed separately (their issue tracker).
+10. A single leading `/` on paths is accepted (write answers used to
+    feed back "/x" and 400).
+11. `/read?raw=1` returns un-numbered text for parsing.
+12. olefile wheel bundled (Outlook `.msg` metadata — a trial model
+    hand-wrote a CFB parser otherwise); skill tries host-bundled
+    openpyxl/docx/pptx BEFORE bridge wheels; host-version floor table
+    (0.12.0+ for Word/PowerPoint).
+13. Credential filter narrowed to bare-credential STEMS — business
+    files like `Q3_token_usage.xlsx` are served; `api_token.json`,
+    `backup_secrets.yml`, key files still refused.
+
+Also: negatives suite un-broken (its spike1-extraction needle predated
+the 09-11 spike1 change — broken on master since), 8 pilot-regression
+cells added (p1-p8); CI wheel-count smoke 8→9 (olefile).

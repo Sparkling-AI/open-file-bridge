@@ -1,6 +1,6 @@
 # Open File Bridge privacy policy
 
-Last updated: 12 September 2026
+Last updated: 26 October 2026
 
 Open File Bridge is published by Sparkling AI AB and ships in two forms:
 the **Open File Bridge extension for Chrome** and the **Open File Bridge
@@ -12,10 +12,12 @@ run entirely on the user's own machine.
 
 ### Data the extension handles
 
-- **One user-selected folder.** Access starts only after the user picks a
-  folder in the browser's directory picker. The extension can read and write
-  files inside that folder when the connected Open WebUI asks it to; it
-  cannot reach any other location on the device.
+- **User-selected folders.** Access starts only after the user picks a
+  folder in the browser's directory picker, and only for the folders the
+  user picks (several may be shared, each with its own read/write setting).
+  The extension can read and write files inside those folders when the
+  connected Open WebUI asks it to; it cannot reach any other location on
+  the device.
 - **Allowed-site requests.** File-operation requests are accepted only from
   web origins the user has placed on the extension's allowlist, optionally
   protected by a bridge token the user configures. The extension checks each
@@ -27,17 +29,36 @@ run entirely on the user's own machine.
   that same page's worker over a same-origin channel. The token never leaves
   the user's browser profile, is never sent to the extension's background
   service, and is never transmitted anywhere by the extension.
-- **Retained versions and trash.** When files are written, prior versions
-  and deleted-file recovery entries may be retained so the user can restore
-  them. This data stays inside the browser profile until the user deletes it
-  or removes the extension.
+- **Retained versions and trash.** Before a file is overwritten, its prior
+  contents are normally copied so the user can restore them, subject to
+  snapshot size limits and filesystem availability. Deleted files are moved
+  instead of being erased. Both are kept as ordinary files **inside the
+  user-selected folder itself** (in the hidden `.ofb-snapshots` and
+  `.ofb-trash` folders), so they are as reachable — and as removable — as
+  the user's own files.
 
-### Storage
+### Storage and deletion
 
-Everything the extension keeps — settings, the folder grant, retained
-versions, and trash — lives in the browser's local IndexedDB storage on the
-user's device. Nothing is stored in the cloud. Removing the extension from
-Chrome deletes this data.
+Two different kinds of data are involved, and they are deleted differently:
+
+- **Browser-side data.** Settings, the folder grants, the optional bridge
+  token, the confirmation state, and the local activity log are stored in
+  the extension's own browser storage (IndexedDB) on the user's device.
+  Removing the extension from Chrome deletes this data.
+- **Recovery files in the shared folder(s).** Retained versions
+  (`.ofb-snapshots/<timestamp>/<original path>`) and deleted files
+  (`.ofb-trash/<timestamp>/<original path>`) are written as normal files
+  inside the folder the user selected. They are NOT part of the browser
+  profile: uninstalling the extension does **not** remove them, and they
+  are visible to anyone the folder is shared with. Deleted-file entries are
+  swept automatically 30 days after deletion; retained versions are kept
+  until the user removes them. Both can be deleted at any time with the
+  ordinary file manager, exactly like the
+  user's other files; the settings page's recovery guide shows where they
+  are.
+
+Nothing is stored in the cloud, and no recovery data is written outside the
+folders the user selected.
 
 ### Collection and transmission
 
@@ -45,14 +66,15 @@ The extension contains no advertising, analytics, telemetry, user accounts,
 or Sparkling AI AB cloud service, and it does not upload file names, file
 contents, or any other data to Sparkling AI AB. The only receivers of file
 data are (1) the user's own Open WebUI instance, on an origin the user
-allowed, responding to a request it made, and (2) the browser-profile storage
-described above. Any AI service the user connects through Open WebUI operates
+allowed, responding to a request it made, (2) the browser-profile storage,
+and (3) the selected folders containing recovery files as described above.
+Any AI service the user connects through Open WebUI operates
 under that service's own privacy terms.
 
 ### Security
 
-- Access is limited to the single user-selected folder; requested paths are
-  validated and confined to that folder.
+- Access is limited to the user-selected folders; every requested path is
+  validated and confined to one of them.
 - Requests are accepted only from origins on the user's allowlist, optionally
   with a bridge token.
 - Destructive operations require interactive confirmation in the page, and

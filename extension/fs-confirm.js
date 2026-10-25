@@ -107,8 +107,26 @@ async function confirmRequiredFor(method, path, body) {
   let b = {};
   try { b = typeof body === "string" ? JSON.parse(body || "{}") : (body || {}); } catch (e) {}
 
-  if (path === "/delete") return "delete";
-  if (scope !== "all") return null; // "destructive" = deletes only
+  if (path === "/delete") {
+    // 3.5.0 (pilot item 15): batch delete — ONE card for a whole list.
+    // E03: 12 parallel deletes each raised their own card, each timed
+    // out separately, 9 originals survived as duplicates.
+    // 3.7.1 (tester request 1): an oversized batch raises NO card —
+    // epDelete's 400 must land before the user is asked anything.
+    if (Array.isArray(b.paths) && b.paths.length > 50) return null;
+    if (Array.isArray(b.paths) && b.paths.length) return "bulk_delete";
+    return "delete";
+  }
+  // 3.5.0 (pilot item 15): a move makes the ORIGINAL disappear — it is
+  // destructive at any scope, like a delete. Single move = one card
+  // worded as a move; batch move (moves:[...]) = one card for the batch.
+  if (path === "/move") {
+    if (Array.isArray(b.moves) && b.moves.length > 50) return null; // 3.7.1: no card for oversized
+    if (Array.isArray(b.moves) && b.moves.length) return "bulk_move";
+    return "move";
+  }
+  if (path === "/mkdir") return null; // pure creation, never destructive
+  if (scope !== "all") return null; // "destructive" = deletes/moves only
 
   if (path === "/write" || path === "/write_b64" || path === "/edit") {
     return (await confirmTargetExists(b.path || "")) ? "overwrite" : null;
@@ -162,8 +180,26 @@ async function confirmTargetExists(relPath) {
   }                // produce its own honest error)
 }
 
+/** Late gate for /move (3.7.0): epMove calls this AFTER its 404/409
+ * pre-checks so the user never approves a move that then fails.
+ * sw.js skips its own gate for POST /move; epMove routes both single
+ * and batch through here (batches pre-check nothing per-item — the
+ * card is still ONE for the whole batch, per pilot item 15).
+ *
+ * 3.7.3 (review F3): the requesting tab arrives as ARGUMENT context
+ * (ctx.tabId, threaded sw.js → fsRoute → epMove → here). It used to be
+ * a module-level LAST_MOVE_SENDER_TAB written by sw.js: two interleaved
+ * moves overwrote it during the async pre-checks, so move A's approval
+ * card popped up in move B's chat tab. No per-request state lives in a
+ * global any more.
+ * Returns null (proceed) or a 403-shaped body for the adapter to
+ * return via fsFail(403, gate). */
+async function confirmGateLate(method, path, body, ctx) {
+  return confirmGate(method, path, body, (ctx && ctx.tabId != null) ? ctx.tabId : null);
+}
+
 /** Gate entry: returns null (proceed — including after an in-window
- *  approval) or the 403 response body. BLOCKS up to CONFIRM_WAIT_MS. */
+ * approval) or the 403 response body. BLOCKS up to CONFIRM_WAIT_MS. */
 async function confirmGate(method, path, body, senderTabId) {
   const op = await confirmRequiredFor(method, path, body);
   if (op === null) return null;
@@ -233,10 +269,16 @@ async function confirmGate(method, path, body, senderTabId) {
   // next identical retry (findLiveGrant above)
   const out = confirmBody(id, entry, null);
   out.timed_out = true;
+  // 3.5.0 (pilot item 14, 2026-10-23): the CARD self-closed after the
+  // 20 s countdown (2026-09-09 change, at this pilot's request) — the
+  // old wording told the model to send the user to a popup that is
+  // gone. E07 burned a turn on it. The grant IS still armed, but the
+  // reliable path for the user is a retry: it raises a FRESH card.
   out.hint = "no approval within " + Math.round(CONFIRM_WAIT_MS / 1000) +
-    " s — tell the user to click Approve on the popup (or to say when " +
-    "they have), then retry this exact request ONCE. A late click still " +
-    "counts; denied means do not retry.";
+    " s and the popup has closed. Tell the user you will ask again, wait " +
+    "for their go-ahead, then retry this exact request ONCE — a new popup " +
+    "appears and waits " + Math.round(CONFIRM_WAIT_MS / 1000) +
+    " s. (A click on the old box is impossible; it is gone.)";
   return out;
 }
 
@@ -244,7 +286,11 @@ function pathKeyFor(path, body) {
   // the retry must match the SAME op; body path is the file identity
   try {
     const b = typeof body === "string" ? JSON.parse(body || "{}") : (body || {});
-    return path + "|" + String(b.path || b.out || "");
+    // batch ops (3.5.0): the LIST is the identity — one grant covers
+    // the whole batch, and the retry must repeat the same list
+    if (Array.isArray(b.paths) && b.paths.length) return path + "|paths:" + b.paths.slice().sort().join("\u0001");
+    if (Array.isArray(b.moves) && b.moves.length) return path + "|moves:" + b.moves.map((m) => String((m && m.from) || "") + ">" + String((m && m.to) || "")).sort().join("\u0001");
+    return path + "|" + String(b.path || b.out || (b.from ? b.from + ">" + b.to : ""));
   } catch (e) {
     return path + "|";
   }
@@ -254,6 +300,21 @@ function describeOp(op, path, body) {
   try {
     const b = typeof body === "string" ? JSON.parse(body || "{}") : (body || {});
     if (op === "delete") return "delete " + (b.path || "?");
+    if (op === "move") return "move " + (b.from || b.path || "?") + " → " + (b.to || "?");
+    if (op === "bulk_delete") {
+      // 3.7.0 (tester should-fix): names, not just a count — the user
+      // approves WHAT, not HOW MANY
+      const ps = Array.isArray(b.paths) ? b.paths : [];
+      const names = ps.slice(0, 15).map(String);
+      const more = ps.length > 15 ? " …and " + (ps.length - 15) + " more" : "";
+      return "delete " + ps.length + " files: " + names.join(", ") + more;
+    }
+    if (op === "bulk_move") {
+      const ms = Array.isArray(b.moves) ? b.moves : [];
+      const names = ms.slice(0, 15).map((m) => String((m && m.from) || "?"));
+      const more = ms.length > 15 ? " …and " + (ms.length - 15) + " more" : "";
+      return "move " + ms.length + " files: " + names.join(", ") + more;
+    }
     if (op === "restore") {
       // say RESTORE, not overwrite (Dandan 2026-09-09) — the live file is
       // replaced by the old version, but that's the POINT of the request
