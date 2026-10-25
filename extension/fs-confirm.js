@@ -110,6 +110,9 @@ async function confirmRequiredFor(method, path, body) {
     // 3.5.0 (pilot item 15): batch delete — ONE card for a whole list.
     // E03: 12 parallel deletes each raised their own card, each timed
     // out separately, 9 originals survived as duplicates.
+    // 3.7.1 (tester request 1): an oversized batch raises NO card —
+    // epDelete's 400 must land before the user is asked anything.
+    if (Array.isArray(b.paths) && b.paths.length > 50) return null;
     if (Array.isArray(b.paths) && b.paths.length) return "bulk_delete";
     return "delete";
   }
@@ -117,6 +120,7 @@ async function confirmRequiredFor(method, path, body) {
   // destructive at any scope, like a delete. Single move = one card
   // worded as a move; batch move (moves:[...]) = one card for the batch.
   if (path === "/move") {
+    if (Array.isArray(b.moves) && b.moves.length > 50) return null; // 3.7.1: no card for oversized
     if (Array.isArray(b.moves) && b.moves.length) return "bulk_move";
     return "move";
   }

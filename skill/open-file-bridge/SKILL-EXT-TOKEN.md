@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text', and when the user attached a file in the chat and wants a changed or new file back. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.5.0-EXT (extension backend, TOKEN variant)
+# Local File Bridge — skill v3.7.1-EXT (extension backend, TOKEN variant)
 
 > **TOKEN variant — publish this only when the extension's 🔒 Security
 > card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`
@@ -58,8 +58,10 @@ re-elects automatically).
 6. **Look in the shared folder before answering from general knowledge**
    when the user refers to "my material / the offer / the results".
 7. **Errors are explicit — read them, don't guess.** Helpers raise
-   `BridgeError` carrying the extension's own message. Never repeat a
-   failed request unchanged.
+   `BridgeError` carrying the extension's own message; `e.info` holds
+   the FULL parsed error body (`e.info["results"]` for batch 207s,
+   `e.info["retry_after_s"]` for rate limits) and `e.status` the HTTP
+   number. Never repeat a failed request unchanged.
 8. **Find a file before you use it — never guess a path** (E03/D03
    failures). When the folder is unknown, call
    `/find?name=<part of the name>` FIRST. A listing that says
@@ -195,6 +197,13 @@ _S = {"pending": {}, "n": 0, "bc": None, "relay": None, "roots": [],
 class BridgeError(RuntimeError):
     pass
 
+class BridgeError_with_info(BridgeError):
+    """Full parsed error body on .info, HTTP number on .status."""
+    def __init__(self, msg, info, status=None):
+        super().__init__(msg)
+        self.info = info
+        self.status = status
+
 def ofb_set_token(t):
     _TOKEN[0] = str(t or "")
 
@@ -283,15 +292,16 @@ def _url(path, params=None):
 
 def _check(path, d, key="body"):
     """Both failure shapes -> one BridgeError with the real reason.
-    (Relay/SW failures carry error + a JSON body; adapter failures carry
-    status + body. Anything without the wanted key on 200 is a bug.)"""
+    Message is bounded; the FULL body rides on .info so batch results
+    and long hints are never lost."""
     if d.get("status") == 200 and key in d:
         return
     info = d.get("error") or ""
     if d.get("body"):
         try: info = json.loads(d["body"])
         except Exception: info = d["body"][:400]
-    raise BridgeError(f"{path} -> HTTP {d.get('status')}: {json.dumps(info, ensure_ascii=False)[:700]}")
+    msg = f"{path} -> HTTP {d.get('status')}: {json.dumps(info, ensure_ascii=False)[:700]}"
+    raise BridgeError_with_info(msg, info, d.get("status"))
 
 async def bridge_get(path, params=None, timeout=45.0):
     d = await ofb_fetch("GET", _url(path, params), timeout=timeout)
@@ -309,9 +319,22 @@ async def ofb_fetch_b64(path, timeout=45.0):
     return base64.b64decode(d["bodyB64"])
 
 async def read_binary(path):
-    """File bytes; big files (>8 MB) are read in ranges automatically."""
-    d = await bridge_get("/read_b64", {"path": path})
-    return base64.b64decode(d["b64"])
+    """File bytes; a 413 (over the 8 MB cap) auto-loops ranges."""
+    try:
+        d = await bridge_get("/read_b64", {"path": path})
+        return base64.b64decode(d["b64"])
+    except BridgeError_with_info as e:
+        if getattr(e, "status", None) != 413:
+            raise
+        st = e.info.get("size_bytes") if isinstance(e.info, dict) else None
+        if not st:
+            raise
+        chunks, off = [], 0
+        while off < st:
+            n = min(4_000_000, st - off)
+            chunks.append(await read_binary_range(path, off, n))
+            off += n
+        return b"".join(chunks)
 
 async def read_binary_range(path, offset, length):
     d = await bridge_get("/read_b64", {"path": path, "offset": offset, "length": length})
@@ -360,12 +383,23 @@ def out(obj, limit=4000):
     s = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False, default=str)
     print(s if len(s) <= limit else s[:limit] + f" …[+{len(s) - limit} chars cut — print a smaller slice]")
 
-h = await bridge_get("/health")
-_S["roots"] = h.get("roots") or []
-out({"version": h.get("version"),
-     "roots": [{"id": r.get("id"), "name": r.get("alias") or r.get("path"),
-                "perm": r.get("perm")} for r in _S["roots"]],
-     "helpers": "ready"})
+async def ofb_init(token=None, transport="auto", quiet=False):
+    """(Re)run the first-cell handshake — also callable after the
+    fallback block, mirroring the one-liner's ofb_init."""
+    if token:
+        ofb_set_token(token)
+    if transport in ("js", "pm"):
+        _S["transport"] = transport
+    h = await bridge_get("/health")
+    _S["roots"] = h.get("roots") or []
+    if not quiet:
+        out({"version": h.get("version"),
+             "roots": [{"id": r.get("id"), "name": r.get("alias") or r.get("path"),
+                        "perm": r.get("perm")} for r in _S["roots"]],
+             "helpers": "ready"})
+    return h
+
+h = await ofb_init()
 ```
 
 Helpers: `bridge_get(path, params)` (params URL-encoded for you — å/ä/ö,
@@ -498,6 +532,7 @@ try:
     import docx, pptx                    # hosts 0.12+ bundle these (need lxml)
 except ImportError:
     try:
+        import micropip                # 3.7.1: not auto-imported on 0.10.x
         await micropip.install("lxml")
         await install_bridge_wheels("python_docx", "python_pptx", "typing_extensions")
         import docx, pptx
@@ -635,12 +670,17 @@ tokens and corrupted images in the trial).
 
 **A local image file** (screenshot, photo, slide export): fetch it as
 PNG with `/image_b64?path=…&format=png` (3.5.0) and print the data
-line — no base64 copying, no matplotlib round trip:
+line — no base64 copying, no matplotlib round trip. SVG files come
+back as `image/svg+xml` (rasterising on the host is not supported) —
+check `img["data_url"].startswith("data:image/png")` before printing;
+for an SVG, print the file PATH for the user instead of a data URL:
 
 ```python
 img = await bridge_get("/image_b64", {"path": p, "format": "png"})
-w = None   # optionally also copy into the folder via write_binary
-print(img["data_url"])          # starts with data:image/png;base64,
+if img["data_url"].startswith("data:image/png"):
+    print(img["data_url"])          # raster image — print the line
+else:
+    out({"path": p, "note": "vector (svg) — not printable as a data URL"})
 ```
 
 ```python
@@ -700,9 +740,10 @@ three more OCR passes.
 
 ## Diagnostics: ONE `print` per cell — never inside a loop
 
-Hosts show only the LAST stdout line of a cell; sessions lost a 403
-this way and then guessed nonexistent endpoints. Accumulate results
-into a dict/list across iterations, print it ONCE at the end (`out()`).
+Prints survive bridge calls on current hosts (3.6+), but everything
+printed is re-sent to the model on every later step — keep it small.
+Accumulate results into a dict/list across iterations, print it ONCE
+at the end (`out()`); never print inside a loop.
 
 ## Method cheat (405 enforces it)
 

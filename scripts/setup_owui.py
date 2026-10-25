@@ -142,7 +142,7 @@ def load_skill_md(fname, bridge_token):
                                              includes the 401→ask-once
                                              recovery block)
       SKILL-TOKEN.md / SKILL-STRICT-TOKEN.md — TOKEN (tier-2; org token
-                                             replaces __ORG_TOKEN__ at
+                                             replaces __ORG_BRIDGE_TOKEN__ at
                                              publish time)
     With --bridge-token the caller must pass a TOKEN variant here; without
     it a no-token variant. The returned body has exactly ONE
@@ -152,13 +152,13 @@ def load_skill_md(fname, bridge_token):
     skill_md = (REPO / SKILL_DIR / fname).read_text()
     if skill_md.startswith("---"):
         skill_md = skill_md.split("---", 2)[2].lstrip("\n")
-    if "__ORG_TOKEN__" in skill_md:
+    if "__ORG_BRIDGE_TOKEN__" in skill_md:
         if not bridge_token:
             raise SystemExit(
                 f"{fname} is the TOKEN variant — publish it with "
                 f"--bridge-token <secret> (or publish the no-token "
                 f"SKILL.md / SKILL-STRICT.md instead)")
-        skill_md = skill_md.replace("__ORG_TOKEN__", bridge_token)
+        skill_md = skill_md.replace("__ORG_BRIDGE_TOKEN__", bridge_token)
     return skill_md
 
 
@@ -220,7 +220,7 @@ def main():
 
     # 2. skills — FOUR variants ship in the repo, two axes:
     #      standard | strict   (strict = fixed recipes for weak models)
-    #      no-token | token    (token files carry __ORG_TOKEN__, replaced
+    #      no-token | token    (token files carry __ORG_BRIDGE_TOKEN__, replaced
     #                           at publish time — see load_skill_md)
     #    --bridge-token picks the TOKEN files; otherwise the no-token files.
     #    Both standard+strict of the chosen token-mode are installed.

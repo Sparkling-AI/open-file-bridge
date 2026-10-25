@@ -2,6 +2,43 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.7.1 — 2026-10-24 (extension 3.7.1: tester retest round)
+
+Tester retest of 3.7.0 (in-place update over 3.6.0 AND 3.3.1, Chrome
+118 load check, dual-origin site switching) — "go for the Web Store
+once the batch-card fix is in". All six requests:
+
+1. Oversized batches (>50) raise NO approval card — the 400 lands
+   before the user is asked (confirmRequiredFor returns null; unit-
+   checked: 55-path delete and 51-move batch produce no card, normal
+   batches still do).
+2. The pasted fallback block is now in sync with ofb-client.py:
+   read_binary auto-ranges on 413, BridgeError_with_info (.info /
+   .status) with e.info["results"] documented in the errors rule,
+   and an ofb_init() helper — a model that falls back from the
+   one-liner can call it instead of hitting NameError.
+3. /move creates destination parent folders only AFTER approval (the
+   timed-out card no longer leaves K_moved/ behind; read-walk first,
+   create-walk after the gate, dest-free re-checked post-create).
+4. The relay-level rate limit answers 429 with retry_after_s (true
+   seconds-to-window-end), rate_limited and a /search hint — no more
+   HTTP 0 "rate limit". Same for the in-flight cap (retry_after_s 5).
+5. The Security card ALWAYS shows injection status now — active, or
+   "one-line bootstrap: OFF — click Edit → Save once to enable it"
+   (previously silent after updates).
+6. Skill cleanups: version header 3.7.1, `import micropip` before
+   use in the Office recipe, the outdated "hosts show only the LAST
+   stdout line" section rewritten, the image_b64 recipe guards
+   against SVG data-URLs, and ONE placeholder name everywhere
+   (__ORG_BRIDGE_TOKEN__; setup_owui.py + all four legacy variants
+   updated).
+
+Extension versions: manifest/FS_VERSION 3.7.1, client 3.7.1-inj.
+Release-notes items (from their compatibility checks): after ANY
+update, click "Set site" (or Edit → Save) once to re-grant the
+optional host permission; trash older than 30 days from before the
+update is swept on the first request afterwards.
+
 ## 3.7.0 — 2026-10-23 (extension 3.7.0: tester round — 6 blockers fixed)
 
 External agent review + overnight browser test of 3.6.0 (OWUI 0.10.x

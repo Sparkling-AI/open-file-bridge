@@ -462,12 +462,19 @@ async function epMove(body, opts) {
     try { srcDir = await wF.dir.getDirectoryHandle(wF.fileName); } catch (e) {}
   }
   if (!srcFile && !srcDir) return fsFail(404, { error: "no such file: " + from });
-  // refuse overwrite semantics — dest must not exist
-  const wT = await walkToParent(rgT.rootRec, rgT.parts, true);
+  // refuse overwrite semantics — dest must not exist.
+  // 3.7.1 (tester request 3): the READ walk first — creating the
+  // destination's parent folders BEFORE the approval card left empty
+  // folders behind when the card timed out (K_moved/ bug). Parents are
+  // now created only AFTER the gate.
+  let wT = await walkToParent(rgT.rootRec, rgT.parts, false);
+  const destParentsMissing = !wT;
   try {
-    await wT.dir.getFileHandle(wT.fileName);
-    return fsFail(409, { error: "destination exists: " + to,
-      hint: "move never overwrites — delete or rename the destination first, or copy with /write_b64" });
+    if (wT) {
+      await wT.dir.getFileHandle(wT.fileName);
+      return fsFail(409, { error: "destination exists: " + to,
+        hint: "move never overwrites — delete or rename the destination first, or copy with /write_b64" });
+    }
   } catch (e) { /* good */ }
   // 3.7.0 (tester should-fix): the approval card comes AFTER the
   // pre-checks — never approve a move that then 404/409s
@@ -475,6 +482,17 @@ async function epMove(body, opts) {
     const gate = await confirmGateLate("POST", "/move", body);
     if (gate) return fsFail(403, gate);
   }
+  // approved (or internal): NOW create missing parents, then re-check
+  // the destination name is still free (a file OR folder there = 409)
+  if (destParentsMissing) {
+    wT = await walkToParent(rgT.rootRec, rgT.parts, true);
+    if (!wT) return fsFail(400, { error: "cannot create destination folders for " + to });
+  }
+  try {
+    await wT.dir.getFileHandle(wT.fileName);
+    return fsFail(409, { error: "destination exists: " + to,
+      hint: "move never overwrites — delete or rename the destination first, or copy with /write_b64" });
+  } catch (e) { /* good */ }
   try {
     await wT.dir.getDirectoryHandle(wT.fileName);
     return fsFail(409, { error: "destination exists: " + to,

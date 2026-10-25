@@ -62,8 +62,21 @@
 
   function capReject() {
     pruneMinute();
-    if (minuteStamps.length >= MAX_PER_MINUTE) return "rate limit";
-    if (inflight.size + bcInflight >= MAX_INFLIGHT) return "too many in-flight";
+    // 3.7.1 (tester request 4): a real status + retry_after_s + a
+    // useful hint — the old "HTTP 0 {error: rate limit}" buried 49 of
+    // a 130-request burst with nothing actionable
+    if (minuteStamps.length >= MAX_PER_MINUTE) {
+      return { err: "rate limit", status: 429,
+        body: JSON.stringify({ error: "relay rate limit: " + MAX_PER_MINUTE +
+          " requests / minute reached (shared across tabs)", rate_limited: true,
+          retry_after_s: Math.max(1, Math.ceil((minuteStamps[0] + 60000 - Date.now()) / 1000)),
+          hint: "wait retry_after_s, then continue; for content questions prefer /search over listing many files" }) };
+    }
+    if (inflight.size + bcInflight >= MAX_INFLIGHT) {
+      return { err: "too many in-flight", status: 429,
+        body: JSON.stringify({ error: "too many in-flight requests (" + MAX_INFLIGHT + ")",
+          retry_after_s: 5, hint: "await each call before starting the next" }) };
+    }
     return null;
   }
 
@@ -96,8 +109,8 @@
           (typeof m.token !== "string" || m.token.length > 256)) return;
       const cap = capReject();
       if (cap) {
-        try { ev.source.postMessage({ type: "ofb", ofb: true, id: m.id, ok: false, status: 0,
-          error: cap, body: JSON.stringify({ error: cap }) }, "*"); } catch (e) {}
+        try { ev.source.postMessage({ type: "ofb", ofb: true, id: m.id, ok: false, status: cap.status,
+          error: cap.err, body: cap.body }, "*"); } catch (e) {}
         return;
       }
       if (m.body !== undefined && m.body !== null) {

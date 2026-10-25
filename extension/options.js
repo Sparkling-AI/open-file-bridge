@@ -228,6 +228,23 @@ async function renderSec() {
       "");
   modeEl.className = "hint";
 
+  // 3.7.1 (tester request 5): ALWAYS show the injection status — after
+  // an update the registration is restored silently and the user sees
+  // nothing until re-saving the site. Query the real state.
+  if (site) {
+    try {
+      const reg = await chrome.scripting.getRegisteredContentScripts();
+      const active = reg.some((s) => s.id === "ofb-inject");
+      const statEl = document.getElementById("sitestat");
+      if (active && !statEl.textContent.trim()) {
+        statEl.textContent = "✓ client injection active for this site " +
+          "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))";
+      } else if (!active && !statEl.textContent.trim()) {
+        statEl.textContent = "one-line bootstrap: OFF — click Edit → Save (or re-type the site + Set site) once to enable it; the pasted bootstrap works meanwhile";
+      }
+    } catch (e) { /* scripting API unavailable — stay silent */ }
+  }
+
   // recently-blocked suggestions — one click REPLACES the current site
   const denied = (await OFBIDB.get("kv", "denied_origins")) || [];
   const drows = document.getElementById("deniedrows");
