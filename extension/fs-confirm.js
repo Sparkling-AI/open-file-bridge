@@ -184,11 +184,17 @@ async function confirmTargetExists(relPath) {
  * sw.js skips its own gate for POST /move; epMove routes both single
  * and batch through here (batches pre-check nothing per-item — the
  * card is still ONE for the whole batch, per pilot item 15).
+ *
+ * 3.7.3 (review F3): the requesting tab arrives as ARGUMENT context
+ * (ctx.tabId, threaded sw.js → fsRoute → epMove → here). It used to be
+ * a module-level LAST_MOVE_SENDER_TAB written by sw.js: two interleaved
+ * moves overwrote it during the async pre-checks, so move A's approval
+ * card popped up in move B's chat tab. No per-request state lives in a
+ * global any more.
  * Returns null (proceed) or a 403-shaped body for the adapter to
  * return via fsFail(403, gate). */
-let LAST_MOVE_SENDER_TAB = null;   // set by sw.js per request
-async function confirmGateLate(method, path, body) {
-  return confirmGate(method, path, body, LAST_MOVE_SENDER_TAB);
+async function confirmGateLate(method, path, body, ctx) {
+  return confirmGate(method, path, body, (ctx && ctx.tabId != null) ? ctx.tabId : null);
 }
 
 /** Gate entry: returns null (proceed — including after an in-window

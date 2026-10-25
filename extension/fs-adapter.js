@@ -27,10 +27,17 @@ const FS_WHEELS = [
 
 /* ---------------- the router ---------------- */
 
-async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
+/** ctx = REQUEST-LOCAL context, not shared state. Today it carries
+ * {tabId} — the tab the request came from, so a confirmation card raised
+ * LATE (after async pre-checks) still lands in the originating chat tab
+ * (review F3: a module-level "last move tab" let a concurrent second
+ * move steal the first move's card). Never store per-request authority
+ * in a global. */
+async function fsRoute(method, pathWithQs, bodyText, b64Mode, ctx) {
   const qi = pathWithQs.indexOf("?");
   const path = qi < 0 ? pathWithQs : pathWithQs.slice(0, qi);
   const q = parseQueryString(pathWithQs);
+  const rctx = ctx || {};
   let body = {};
   if (bodyText) {
     try { body = JSON.parse(bodyText); }
@@ -222,7 +229,8 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
       const nameFilter = unquoteComp(String(q.name || "")).trim();
       const namePat = nameFilter ? foldName(nameFilter) : null;
       const depth = Number.isFinite(depthReq) && depthReq > 0 ? depthReq : 0;
-      return await listEndpoint(rootRec, startParts, { depth, maxEntries, wantFields, namePat, ambiguous });
+      return await listEndpoint(rootRec, startParts, { depth, maxEntries, wantFields, namePat, ambiguous,
+        qualify: roots.length > 1 });
     }
 
     if (method === "GET" && path === "/read") return await epRead(q);
@@ -241,11 +249,11 @@ async function fsRoute(method, pathWithQs, bodyText, b64Mode) {
   try {
     if (method === "POST" && path === "/write") return await epWrite(body, false);
     if (method === "POST" && path === "/write_b64") return await epWrite(body, true);
-    if (method === "POST" && path === "/write_b64_chunk") return await epWriteB64Chunk(body);
+    if (method === "POST" && path === "/write_b64_chunk") return await epWriteB64Chunk(body, rctx);
     if (method === "POST" && path === "/write_many") return await epWriteMany(body);
     if (method === "POST" && path === "/edit") return await epEdit(body);
     if (method === "POST" && path === "/delete") return await epDelete(body);
-    if (method === "POST" && path === "/move") return await epMove(body);
+    if (method === "POST" && path === "/move") return await epMove(body, { ctx: rctx });
     if (method === "POST" && path === "/mkdir") return await epMkdir(body);
     if (method === "POST" && path === "/versions/list") return await epVersionsList(body);
     if (method === "POST" && path === "/versions/read") return await epVersionsRead(body);
@@ -419,11 +427,26 @@ async function listEndpoint(rootRec, startParts, opts) {
     }
   }
   function mkEntry(rel, type, size, mtime) {
-    const e = { path: rel, type: type };
-    if (type === "dir") return e;                       // dirs never had size/mtime
-    if (!wantFields) { e.size = size; e.mtime = mtime; return e; }
-    if (wantFields.has("size")) e.size = size;
-    if (wantFields.has("mtime")) e.mtime = mtime;
+    // 3.7.3 (review F2): with several folders shared, entries are
+    // ROOT-QUALIFIED so e.path can be fed straight back in (into /read,
+    // /stat, /list path= …). `rel` keeps the folder-relative name for
+    // display, `root_id` names the folder.
+    // The SINGLE-folder shape stays exactly {path,type[,size,mtime]} —
+    // recipes and the Stage-3 cells pin those keys.
+    let e;
+    if (o.qualify) {
+      e = { path: rootRec.id + "/" + rel, rel: rel, type: type, root_id: rootRec.id };
+    } else {
+      e = { path: rel, type: type };
+      if (type === "dir") return e;                     // dirs never had size/mtime
+      if (!wantFields) { e.size = size; e.mtime = mtime; return e; }
+      if (wantFields.has("size")) e.size = size;
+      if (wantFields.has("mtime")) e.mtime = mtime;
+      return e;
+    }
+    // multi-root: keep size/mtime when the caller wants them
+    if (type !== "dir" && (!wantFields || wantFields.has("size"))) e.size = size;
+    if (type !== "dir" && (!wantFields || wantFields.has("mtime"))) e.mtime = mtime;
     return e;
   }
   await rec(startDir, startParts, 1);
@@ -542,7 +565,7 @@ async function epPeek(q) {
   for (const b of head) if ((b >= 32 && b < 127) || b === 9 || b === 10 || b === 13) pr++;
   await auditRow({ endpoint: "/peek", method: "GET", path: rg.relInRoot, status: 200, size: n });
   return fsOk({
-    path: q.path, size: file.size, ext: ext || null, kind: guessed,
+    path: await echoPath(rg), size: file.size, ext: ext || null, kind: guessed,
     printable_ratio: pr / Math.max(head.length, 1),
     preview: preview,
     hint: kind ? routingHint(kind, ext)
@@ -604,13 +627,19 @@ async function epStat(q) {
       : [".doc", ".xls", ".ppt"].includes(ext) ? "legacy"
       : [".txt", ".md", ".csv", ".json", ".xml", ".yml", ".yaml", ".log", ".py", ".js", ".html", ".css"].includes(ext) ? "text"
       : "other";
-    return fsOk({ path: rg.relInRoot, size: file.size, mtime: Math.floor(file.lastModified / 1000), kind: kind, ext: ext || null });
+    // echoPath (3.7.3, review F2): a bare rel path does not round-trip in
+    // multi-root mode — it re-resolves against roots[0]
+    return fsOk({ path: await echoPath(rg), rel: rg.relInRoot, root_id: rg.rootRec.id,
+      root_name: rg.rootRec.alias || rg.rootRec.id,
+      size: file.size, mtime: Math.floor(file.lastModified / 1000), kind: kind, ext: ext || null });
   }
   // directory?
   try {
     await w.dir.getDirectoryHandle(w.fileName);
     await auditRow({ endpoint: "/stat", method: "GET", path: rg.relInRoot, status: 200 });
-    return fsOk({ path: q.path, size: null, mtime: null, kind: "dir", ext: extOf(name) || null });
+    return fsOk({ path: (await echoPath(rg)), rel: rg.relInRoot, root_id: rg.rootRec.id,
+      root_name: rg.rootRec.alias || rg.rootRec.id,
+      size: null, mtime: null, kind: "dir", ext: extOf(name) || null });
   } catch (e) {
     return fsFail(404, { error: "not found: " + q.path });
   }
@@ -752,6 +781,7 @@ async function epFind(q) {
   const startPath = String(q.path || "").trim();
   const roots = await enabledRoots();
   if (!roots.length) throw new OpFail(503, { error: "no shared folder configured — click the Open File Bridge toolbar icon and choose a folder" });
+  const multiRoot = roots.length > 1;
   const starts = [];
   if (startPath) {
     const rg = await resolveGuarded(unquoteComp(startPath), {});
@@ -772,36 +802,76 @@ async function epFind(q) {
     for (const r of roots) starts.push({ dir: r.handle, prefix: "", rootRec: r });
   }
   const pat = foldName(namePat);
-  const pats = await allIgnorePatterns(starts[0].rootRec);
   const matches = [];
-  let truncated = false, visited = 0;
+  let truncated = false, visited = 0, capped = false, unproven = false, capAt = -1;
   const MAX_VISIT = 20000, TIME_BUDGET_MS = 10000;
+  // once the result cap is reached we keep walking a SHORT way only, to
+  // learn whether anything else matches (an exact-cap search that really
+  // finished is not "truncated"). Beyond this bound we cannot prove
+  // completeness, so we say truncated instead of guessing.
+  const PROBE_VISIT = 2000;
   const t0 = Date.now();
-  async function rec(dir, prefixParts) {
+  // 3.7.3 (review F2): every result path is ROOT-QUALIFIED when several
+  // folders are shared, so feeding it back into /read, /stat or /delete
+  // lands in the SAME folder. A bare relative path used to resolve
+  // against roots[0], i.e. a different file (or a 404). root_id /
+  // root_name travel with each match for display.
+  function matchPath(rootRec, relParts) {
+    const rel = relParts.join("/");
+    return { path: (multiRoot ? rootRec.id + "/" : "") + rel, rel: rel,
+      root_id: rootRec.id, root_name: rootRec.alias || rootRec.id };
+  }
+  async function rec(dir, prefixParts, rootRec, pats) {
     for await (const [nm, h] of dir.entries()) {
-      if (matches.length >= max || truncated) return;
+      if (truncated) return;
       if (Date.now() - t0 > TIME_BUDGET_MS) { truncated = true; return; }
       if (visited++ > MAX_VISIT) { truncated = true; return; }
+      if (capAt >= 0 && visited - capAt > PROBE_VISIT) {
+        // gave up proving completeness — say truncated, but do NOT claim
+        // "more matches exist": the probe found none
+        truncated = true; unproven = true; return;
+      }
       const relParts = prefixParts.concat(nm);
       const rel = relParts.join("/");
       const isDir = h.kind === "directory";
       if (ignoreMatch(rel, isDir, pats)) continue;
       if (nameMatches(foldName(nm), pat) && (!wantType || (wantType === "dir") === isDir)) {
+        // 3.7.3 (review F5): a result that EXACTLY fills the cap is only
+        // "truncated" if something more exists — keep walking for one
+        // extra hit rather than reporting a complete search as cut.
+        if (matches.length >= max) { truncated = true; capped = true; return; }
         let size = null, mtime = null;
         if (!isDir) {
           try { const f = await h.getFile(); size = f.size; mtime = f.lastModified; }
           catch (e) {}
         }
-        matches.push({ path: rel, type: isDir ? "dir" : "file", size: size,
-          mtime: mtime === null ? null : Math.floor(mtime / 1000) });  // SECONDS everywhere (3.7.0 tester note)
+        const m = matchPath(rootRec, relParts);
+        m.type = isDir ? "dir" : "file";
+        m.size = size;
+        m.mtime = mtime === null ? null : Math.floor(mtime / 1000); // SECONDS everywhere (3.7.0 tester note)
+        matches.push(m);
+        if (matches.length >= max && capAt < 0) capAt = visited;
       }
-      if (isDir) await rec(h, relParts);
+      if (isDir) await rec(h, relParts, rootRec, pats);
     }
   }
-  for (const st of starts) await rec(st.dir, st.prefix ? st.prefix.split("/") : []);
+  for (const st of starts) {
+    // ignore patterns are per-root (a root can carry its own list)
+    const pats = await allIgnorePatterns(st.rootRec);
+    await rec(st.dir, st.prefix ? st.prefix.split("/") : [], st.rootRec, pats);
+  }
   await auditRow({ endpoint: "/find", method: "GET", path: startPath || ".", status: 200, size: matches.length });
-  const out = { matches: matches, truncated: truncated, searched: namePat };
-  if (truncated) out.hint = "result cut at " + matches.length + " — narrow with path= or a more specific name=";
+  const out = { matches: matches, truncated: truncated, searched: namePat,
+    max: max, roots_searched: starts.map((s) => s.rootRec.id) };
+  if (truncated) {
+    out.hint = capped
+      ? "stopped at the result cap (" + max + ") — more matches exist; raise max= or narrow with path= / a more specific name="
+      : unproven
+        ? "hit the result cap (" + max + ") and this search was too large to confirm completeness — treat it as PARTIAL; raise max= or narrow with path= / a more specific name="
+        : "result cut at " + matches.length + " after the time/entry cap — narrow with path= or a more specific name=";
+  } else if (matches.length >= max) {
+    out.hint = "exactly " + matches.length + " matches and the search finished — this IS the complete list";
+  }
   return fsOk(out);
 }
 
@@ -897,7 +967,7 @@ async function epImageInfo(q) {
     return fsFail(415, { error: "unsupported image format", hint: "supported: png/jpeg/gif/webp/bmp" });
   }
   await auditRow({ endpoint: "/image_info", method: "GET", path: rg.relInRoot, status: 200 });
-  return fsOk(Object.assign({ path: q.path, size: file.size }, info));
+  return fsOk(Object.assign({ path: await echoPath(rg), size: file.size }, info));
 }
 
 async function epImageB64(q) {
@@ -930,7 +1000,7 @@ async function epImageB64(q) {
   }
   await auditRow({ endpoint: "/image_b64", method: "GET", path: rg.relInRoot, status: 200, size: r.bytes });
   return fsOk({
-    path: q.path, mime: r.mime, width: r.width, height: r.height,
+    path: await echoPath(rg), mime: r.mime, width: r.width, height: r.height,
     bytes: r.bytes, shrunk: r.shrunk,
     ...(r.shrunk ? { orig_bytes: r.origBytes, orig_width: r.origWidth, orig_height: r.origHeight } : {}),
     b64: r.b64, data_url: "data:" + r.mime + ";base64," + r.b64,

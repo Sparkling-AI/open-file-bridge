@@ -3119,3 +3119,68 @@ docs/ROADMAP.md § "pilot-feedback release 3.4.0". Gotchas learned:
   nautilus before suite runs; worker_transport_test needs
   DISPLAY=:99 exported (it does not set it itself); playwright
   browsers drift (wt needed chromium-1248).
+
+## Stage-3 session #47: branch-review fixes (2026-10-25, ext 3.7.3)
+
+An independent review of `feat/runtime-injection` (`cb1cd9d`) held merge
+and store submission on five findings; all five fixed here, each with a
+regression test that FAILS on 3.7.2 and passes on 3.7.3.
+
+- **F1 bridge_path.** The 3.7.2 "rightmost root" fix scanned every
+  segment, so an explicit `rA/...` was silently re-anchored on any
+  descendant folder whose name matched ANOTHER root (wrong file, wrong
+  folder) and lost intermediate dirs. Rewritten: explicit root id /
+  (multi-root) alias wins; relative paths are returned as typed; only an
+  ABSOLUTE paste is searched, deepest match wins (keeps the 3.7.2
+  `N:\Shared\…\shared\…` case); >1 candidate root raises with the
+  candidates instead of guessing. Three copies (client + both skills),
+  injector regenerated. `tests/unit/bridge_path_test.py` = 21 cases x 3
+  copies.
+- **F2 /find + /list paths.** Multi-root searches returned bare relative
+  paths that re-resolve against roots[0]. Now root-qualified `path` +
+  `rel`/`root_id`/`root_name`; same for `/stat`, `/peek`, `/edit`,
+  `/image_info`, `/image_b64` echoes (all previously `rg.relInRoot` or
+  `q.path`). Single-root output shape unchanged (no churn for existing
+  recipes/tests).
+- **F3 move-card tab race.** Module-level `LAST_MOVE_SENDER_TAB` (set by
+  sw.js, read by the late gate) was overwritten by a concurrent move
+  during the async pre-checks → card in the wrong tab. Replaced with
+  request-local `ctx={tabId}` threaded sw.js → fsRoute → epMove →
+  confirmGateLate (also batches + chunk-finalize gate). No global left.
+- **F4 batch pre-validation mutated.** `walkToParent(..., true)` created
+  destination parents BEFORE the card, so deny/timeout left empty
+  folders (the single-move path had already been fixed in 3.7.1). Now
+  read-only; parents created after approval. Also moved the cross-root
+  check into pre-validation so a bad batch refuses before the card.
+- **F5 /find cap.** `matches.length >= max` returned without setting
+  `truncated`. Now capped → `truncated:true` + narrowing hint; an
+  exact-cap COMPLETE search → `truncated:false` + "this IS the complete
+  list". The completeness probe is bounded (PROBE_VISIT=2000 entries
+  past the cap) so a huge share never turns one search into two full
+  walks; if it cannot prove completeness it says truncated.
+- **Docs.** PRIVACY.md: recovery data lives in `.ofb-snapshots`/`.ofb-trash`
+  INSIDE the shared folder (not IndexedDB), NOT removed by uninstall,
+  trash swept at 30 days, snapshots kept until deleted; multi-folder
+  wording; date bumped. CHROME-WEB-STORE.md: 3.7.3 package name + notes,
+  `scripting` justification, precise static-vs-runtime host-match
+  wording, multi-folder listing/single-purpose copy.
+- **CI.** `.github/workflows/extension.yml` now regenerates the injector
+  and `cmp`s it, checks client↔both skills via AST, and runs the three
+  new suites. `tests/unit/README.md` documents them.
+- **Verification run here (macOS):** node --check all extension JS;
+  python AST on client/builder/tests; injector byte-identical after
+  rebuild; version/floor consistency; `git archive` ZIP = 81 entries,
+  manifest at root, no `extension/` prefix, 48,348,792 B; **real
+  Chromium SW** smoke with real OPFS directory handles
+  (`tests/unit/browser_smoke.mjs`): find→stat→read round-trip, same-named
+  files in two roots read their own contents, cap cases, denied batch
+  creates nothing, exact-cap not truncated; second pass: approved batch
+  and single moves create parents only after approval, `/edit`+`/stat`
+  echo round-trips, options page renders with zero page errors. Both
+  smokes were also run against a 3.7.2 copy and FAIL there (regression
+  detection proven). NOT run: the Linux/Xvfb Stage-3 suites
+  (spike1/confirm/injection/negatives/engines/sec/worker) and a live
+  CWS dashboard check.
+- **Pre-existing, unrelated:** `tests/skill_write_contract_test.py`
+  fails on 3.7.2 too (SKILL.md description vs setup_owui.UNIFIED_DESC
+  drift) — not touched by this branch's findings.

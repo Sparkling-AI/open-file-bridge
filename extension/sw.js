@@ -91,11 +91,12 @@ async function handleOfbRequest(msg, sender) {
       if (gate) {
         return { ofb: true, id, ok: false, status: 403, body: JSON.stringify(gate) };
       }
-    } else {
-      // the late gate (fs-confirm.js) picks the tab up from here
-      LAST_MOVE_SENDER_TAB = senderTabId;
     }
-    const resp = await fsRoute(method, path, bodyText);
+    // 3.7.3 (review F3): /move's late gate gets the tab as REQUEST-LOCAL
+    // context threaded through fsRoute → epMove → confirmGateLate. It
+    // used to sit in a module-level LAST_MOVE_SENDER_TAB, so two
+    // interleaved moves put one move's approval card in the other's tab.
+    const resp = await fsRoute(method, path, bodyText, false, { tabId: senderTabId });
     if (wantB64 && resp.bodyB64 !== undefined) {
       if (resp.bodyB64.length > MAX_RESPONSE_BYTES) {
         return swFail(id, "response too large", resp.status);

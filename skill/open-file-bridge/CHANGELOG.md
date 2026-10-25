@@ -2,6 +2,61 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.7.3 — 2026-10-25 (extension 3.7.3: branch-review fixes)
+
+An independent review of `feat/runtime-injection` (commit `cb1cd9d`)
+held merge and store submission on five findings. All five are fixed;
+each has a regression test that fails on 3.7.2 and passes here.
+
+- **F1 (P1) `bridge_path` re-anchored explicit paths.** The 3.7.2
+  rightmost-root scan looked at EVERY segment, so
+  `rA/reports/Archive/budget.xlsx` came back as `rB/budget.xlsx` — a
+  different shared folder, and `rA/Shared/x` lost a directory level.
+  Now: a root-qualified path is returned as typed; an ordinary relative
+  path is never re-anchored; only a pasted ABSOLUTE path is searched for
+  a folder name (deepest match, so the 3.7.2 Windows-ancestor case still
+  works). If an absolute path could belong to more than one shared
+  folder it raises and names the candidates instead of guessing. Fixed
+  in `extension/ofb-client.py` and BOTH skill bootstraps, with the
+  injector regenerated; `tests/unit/bridge_path_test.py` runs all three
+  copies over 21 cases.
+- **F2 (P1) `/find` and `/list` returned paths that did not name their
+  folder.** With several folders shared, a bare relative path resolved
+  against the FIRST folder, so following a search result hit a different
+  file (or 404). Every match/entry now carries a root-qualified `path`
+  plus `rel`/`root_id`/`root_name`, and `/stat`, `/peek`, `/edit`,
+  `/image_info`, `/image_b64` echo a round-tripping path. Single-folder
+  installs keep the historical bare shape.
+- **F3 (P1) concurrent moves could show the approval card in the wrong
+  chat tab.** The requesting tab lived in a module-level
+  `LAST_MOVE_SENDER_TAB` that a second interleaved move overwrote during
+  the async pre-checks. The tab now travels as request-local context
+  (sw.js → `fsRoute` → `epMove` → late gate), including batch moves and
+  the chunked-write finalize gate.
+- **F4 (P2) a denied batch move left destination folders behind.** The
+  batch pre-validation created missing parents before the card. It is
+  read-only now; parents are created only after approval, inside each
+  item's `epMove`.
+- **F5 (P2) `/find` silently truncated at its result cap.** Reaching
+  `max` now sets `truncated:true` with a narrowing hint; an exact-cap
+  search that genuinely finished reports `truncated:false` plus
+  "this IS the complete list" (a bounded probe decides, so a huge share
+  cannot turn one search into two full walks).
+- **Docs (store blockers).** `docs/PRIVACY.md` now states that retained
+  versions (`.ofb-snapshots`) and trash (`.ofb-trash`) are ordinary
+  files INSIDE the user-selected folder — not browser storage, and NOT
+  removed by uninstalling — and describes multi-folder support.
+  `docs/CHROME-WEB-STORE.md` names the 3.7.3 package, adds a `scripting`
+  permission justification, and separates the STATICALLY declared
+  `relay.js`/`confirm.js` matches from the runtime-registered injector.
+
+CI now regenerates the injector and compares it byte-for-byte, checks
+the client against both skill copies, and runs the F1–F5 suites
+(`tests/unit/`), so a one-copy fix cannot pass again.
+
+Versions: manifest 3.7.3 / FS_VERSION 3.7.3-EXT / client 3.7.3-inj /
+skill v3.7.3-EXT (both variants).
+
 ## 3.7.2 — 2026-10-25 (extension 3.7.2: upload-candidate build)
 
 Tester retest of 3.7.1: all six claims pass, regression clean, best

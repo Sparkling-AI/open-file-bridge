@@ -33,6 +33,22 @@ jobs:
           find extension -maxdepth 1 -name '*.js' -print0 |
             xargs -0 -n1 node --check
 
+      - name: Client / skill / injector consistency + review regressions
+        shell: bash
+        run: |
+          set -euo pipefail
+          # the generated injector must match its two sources byte-for-byte
+          cp extension/inject-main.js /tmp/inject-main.before.js
+          python3 scripts/build_inject.py
+          cmp extension/inject-main.js /tmp/inject-main.before.js
+          # the client block pasted into the skills must match the real client
+          python3 tests/unit/skill_client_sync_test.py
+          # F1: bridge_path must not re-anchor an explicit root
+          python3 tests/unit/bridge_path_test.py
+          # F2–F5: multi-root find round-trip, move-tab race, no pre-approval
+          # folder creation, truthful /find truncation
+          node tests/unit/review_regressions.cjs
+
           python3 - <<'PY'
           import json
           import re

@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text', and when the user attached a file in the chat and wants a changed or new file back. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.7.2-EXT (extension backend, TOKEN variant)
+# Local File Bridge — skill v3.7.3-EXT (extension backend, TOKEN variant)
 
 > **TOKEN variant — publish this only when the extension's 🔒 Security
 > card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`
@@ -361,24 +361,69 @@ async def install_bridge_wheels(*prefixes):
     return got
 
 def bridge_path(p):
-    """'N:\\...\\<shared folder>\\a\\b' or '<shared folder>/a' -> bridge
-    path ('r3/a/b' when several folders are shared). Users paste
-    Windows paths — use this instead of exploring the tree."""
+    """Translate a path the USER typed into a bridge path.
+
+    Explicitly root-qualified input wins, always:
+      'r3/reports/x.xlsx'      -> 'r3/reports/x.xlsx'  (root id = r3)
+      'Shared/reports/x.xlsx'  -> 'rA/reports/x.xlsx'  (root alias, multi-root)
+    A RELATIVE path is never re-anchored on a folder name inside it, so
+    'reports/Archive/x.xlsx' stays relative even when another shared
+    folder is called 'Archive'.
+    Only a pasted ABSOLUTE path ('N:\\...\\<shared folder>\\a', '/Users/…')
+    is searched for a shared-folder name; the LAST (deepest) match wins
+    because an ANCESTOR of the mounted folder may carry the same name
+    (N:\\Shared\\…\\shared\\…). If an absolute path could belong to more
+    than one shared folder this raises instead of guessing."""
     parts = [x for x in str(p).replace("\\", "/").split("/") if x and x != "."]
     roots = _S["roots"]
-    # rightmost match: an ANCESTOR folder may share the root's name
-    # (N:\Shared\…\shared\…) — the mounted folder is the LAST hit
-    for i in range(len(parts) - 1, -1, -1):
-        hit = [r for r in roots if parts[i].lower() in {
-            str(r.get("alias") or "").lower(), str(r.get("path") or "").lower(),
-            str(r.get("id")).lower()}]
-        if hit:
-            rest = "/".join(parts[i + 1:])
-            return (hit[0]["id"] + "/" + rest).rstrip("/") if len(roots) > 1 else rest
-    if parts and len(parts[0]) == 2 and parts[0][1] == ":":
+    if not parts:
+        return ""
+
+    def _names(r):
+        return {str(r.get(k) or "").lower()
+                for k in ("alias", "path", "id")} - {""}
+
+    def _hit(seg):
+        return [r for r in roots if seg.lower() in _names(r)]
+
+    def _join(r, rest):
+        rel = "/".join(rest)
+        if len(roots) > 1:
+            return (str(r["id"]) + "/" + rel).rstrip("/")
+        return rel
+
+    # 1) explicit root qualifier — a root id always, an alias/path only
+    # when several folders are shared (the same rule resolveGuarded uses).
+    first = _hit(parts[0])
+    ids = [r for r in first if str(r["id"]).lower() == parts[0].lower()]
+    if ids:
+        return _join(ids[0], parts[1:])
+    if first and len(roots) > 1:
+        return _join(first[0], parts[1:])
+
+    # 2) relative path — returned as typed, never re-anchored on a
+    # folder name inside it (a subfolder called like another shared
+    # folder must not silently move the target to that other folder)
+    raw = str(p)
+    drive = len(parts[0]) == 2 and parts[0][1] == ":"
+    if not (drive or raw.startswith("/")):
+        return "/".join(parts)
+
+    # 3) absolute path: anchor on the deepest shared-folder name
+    hits = [(i, r) for i, seg in enumerate(parts) for r in _hit(seg)]
+    if not hits:
         raise BridgeError(f"no shared folder contains {p!r} — shared roots: "
                           f"{[r.get('alias') or r.get('id') for r in roots]}")
-    return "/".join(parts)
+    ids_found = {str(r["id"]) for _, r in hits}
+    if len(ids_found) > 1:
+        cands = sorted({f"{r['id']} ({r.get('alias') or r['id']}) -> "
+                        f"{_join(r, parts[i + 1:])}" for i, r in hits})
+        raise BridgeError(
+            f"{p!r} matches more than one shared folder — " + "; ".join(cands) +
+            ". Re-send the path with the folder id in front (e.g. "
+            f"{hits[0][1]['id']}/<relative path>).")
+    i, root = hits[-1]
+    return _join(root, parts[i + 1:])
 
 def out(obj, limit=4000):
     """Print cap — everything printed is re-sent to the model later."""
@@ -438,8 +483,12 @@ run the whole block again (rule 2).
   wrong place that way. With one shared folder, no id is needed.
 - **Windows paths from the user** (`N:\Open Lan Shared\Cost Assurance\
   TELIA ÖPPEN FIBER\202608`) → `bridge_path(that)` returns the bridge
-  path. If it raises, the folder is not shared — tell the user which
-  folders are.
+  path. If it raises, either the folder is not shared or the absolute
+  path fits more than one shared folder — tell the user which folders
+  are and ask which one they meant. Never re-anchor on your own guess.
+- A path you already have is used as-is: `rA/reports/Archive/x.xlsx`
+  stays in `rA` even when another shared folder is called `Archive`.
+  `bridge_path` only searches folder names inside an ABSOLUTE paste.
 - Paths never need a leading `/` (a single leading `/` is tolerated and
   stripped). `written` values are ready to reuse as paths as-is.
 - File names that are bare credential words (`token.txt`,
@@ -452,7 +501,7 @@ run the whole block again (rule 2).
 
 | Need | Call |
 |---|---|
-| **where is file X (folder unknown)** | `bridge_get("/find", {"name": "part of the name"})` — case-/accent-insensitive, `*`/`?` wildcards, `path=`/`type=`/`max=` optional |
+| **where is file X (folder unknown)** | `bridge_get("/find", {"name": "part of the name"})` — case-/accent-insensitive, `*`/`?` wildcards, `path=`/`type=`/`max=` optional. Every match's `path` is ready to reuse and names its folder (`root_id`); a match under `truncated: true` is NOT the whole answer |
 | does X exist / size / mtime (path known) | `bridge_get("/stat", {"path": p})` |
 | what is in ONE folder (top level) | `bridge_get("/list", {"path": folder})` — non-recursive |
 | N levels under a folder | `bridge_get("/list", {"path": p, "depth": 3, "max_entries": 200, "fields": "path,type"})` |

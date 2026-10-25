@@ -1,4 +1,4 @@
-"""Open File Bridge — Pyodide client (ofb_client) 3.7.2-inj.
+"""Open File Bridge — Pyodide client (ofb_client) 3.7.3-inj.
 
 Same helpers as the SKILL-EXT bootstrap, refactored for injection:
 exec()'d from js.OFB_CLIENT_PY inside Open WebUI's sandbox iframe.
@@ -20,7 +20,7 @@ try:
 except ImportError:
     parent = None
 
-OFB_CLIENT_VERSION = "3.7.2-inj"
+OFB_CLIENT_VERSION = "3.7.3-inj"
 _TOKEN = [""]
 _S = {"pending": {}, "n": 0, "bc": None, "relay": None, "roots": [],
       "wid": "w%08x" % random.getrandbits(32), "transport": None}
@@ -224,25 +224,69 @@ async def install_bridge_wheels(*prefixes):
 
 
 def bridge_path(p):
+    """Translate a path the USER typed into a bridge path.
+
+    Explicitly root-qualified input wins, always:
+      'r3/reports/x.xlsx'      -> 'r3/reports/x.xlsx'  (root id = r3)
+      'Shared/reports/x.xlsx'  -> 'rA/reports/x.xlsx'  (root alias, multi-root)
+    A RELATIVE path is never re-anchored on a folder name inside it, so
+    'reports/Archive/x.xlsx' stays relative even when another shared
+    folder is called 'Archive'.
+    Only a pasted ABSOLUTE path ('N:\\...\\<shared folder>\\a', '/Users/…')
+    is searched for a shared-folder name; the LAST (deepest) match wins
+    because an ANCESTOR of the mounted folder may carry the same name
+    (N:\\Shared\\…\\shared\\…). If an absolute path could belong to more
+    than one shared folder this raises instead of guessing."""
     parts = [x for x in str(p).replace("\\", "/").split("/") if x and x != "."]
     roots = _S["roots"]
-    # 3.7.2 (tester): match the RIGHTMOST segment naming a root — a
-    # pasted absolute path may contain an ANCESTOR folder sharing the
-    # root's name (N:\Shared\…\shared\…), and the leftmost match cut
-    # at the ancestor, 404ing every path under it. The mounted folder
-    # is the last place the root's own name can appear in the prefix.
-    for i in range(len(parts) - 1, -1, -1):
-        hit = [r for r in roots if parts[i].lower() in {
-            str(r.get("alias") or "").lower(), str(r.get("path") or "").lower(),
-            str(r.get("id")).lower()}]
-        if hit:
-            rest = "/".join(parts[i + 1:])
-            return (hit[0]["id"] + "/" + rest).rstrip("/") if len(roots) > 1 else rest
-    if parts and (len(parts[0]) == 2 and parts[0][1] == ":"):
+    if not parts:
+        return ""
+
+    def _names(r):
+        return {str(r.get(k) or "").lower()
+                for k in ("alias", "path", "id")} - {""}
+
+    def _hit(seg):
+        return [r for r in roots if seg.lower() in _names(r)]
+
+    def _join(r, rest):
+        rel = "/".join(rest)
+        if len(roots) > 1:
+            return (str(r["id"]) + "/" + rel).rstrip("/")
+        return rel
+
+    # 1) explicit root qualifier — a root id always, an alias/path only
+    # when several folders are shared (the same rule resolveGuarded uses).
+    first = _hit(parts[0])
+    ids = [r for r in first if str(r["id"]).lower() == parts[0].lower()]
+    if ids:
+        return _join(ids[0], parts[1:])
+    if first and len(roots) > 1:
+        return _join(first[0], parts[1:])
+
+    # 2) relative path — returned as typed, never re-anchored on a
+    # folder name inside it (a subfolder called like another shared
+    # folder must not silently move the target to that other folder)
+    raw = str(p)
+    drive = len(parts[0]) == 2 and parts[0][1] == ":"
+    if not (drive or raw.startswith("/")):
+        return "/".join(parts)
+
+    # 3) absolute path: anchor on the deepest shared-folder name
+    hits = [(i, r) for i, seg in enumerate(parts) for r in _hit(seg)]
+    if not hits:
         raise BridgeError(f"no shared folder contains {p!r} — shared roots: "
                           f"{[r.get('alias') or r.get('id') for r in roots]}")
-    return "/".join(parts)
-
+    ids_found = {str(r["id"]) for _, r in hits}
+    if len(ids_found) > 1:
+        cands = sorted({f"{r['id']} ({r.get('alias') or r['id']}) -> "
+                        f"{_join(r, parts[i + 1:])}" for i, r in hits})
+        raise BridgeError(
+            f"{p!r} matches more than one shared folder — " + "; ".join(cands) +
+            ". Re-send the path with the folder id in front (e.g. "
+            f"{hits[0][1]['id']}/<relative path>).")
+    i, root = hits[-1]
+    return _join(root, parts[i + 1:])
 
 def out(obj, limit=4000):
     s = obj if isinstance(obj, str) else json.dumps(obj, ensure_ascii=False, default=str)

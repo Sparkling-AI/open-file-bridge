@@ -6,8 +6,21 @@ the Microsoft Store, not the CWS).
 
 ## 1. Package to upload
 
-`dist-extension/open-file-bridge-extension-3.7.0.zip`
+`dist-extension/open-file-bridge-extension-3.7.3.zip`
 
+- Version 3.7.3 (2026-10-25, external-review fixes): multi-root path
+  safety — an explicit root-qualified path is no longer re-anchored on a
+  descendant folder name, and `/find` (plus `/stat`, `/peek`, `/edit`)
+  return paths that name their folder and round-trip; a denied or
+  timed-out batch move no longer leaves destination folders behind; a
+  concurrent second move can no longer put the first move's approval
+  card in the wrong chat tab; `/find` reports truncation at its result
+  cap truthfully. Also corrects the privacy policy's storage/deletion
+  description (recovery files live inside the shared folder, not the
+  browser profile).
+- Version 3.7.2 (2026-10-25): Chrome floor 119 for
+  `matchOriginAsFallback` on registered content scripts; `bridge_path`
+  rightmost-root fix for pasted absolute Windows paths.
 - Version 3.7.0 (2026-10-23, tester round): fixes the external test's
   six blockers — TOKEN one-liner quoting, "Use this site" injection
   sync + onRemoved/onStartup, credential filter v3 (serves Office,
@@ -72,18 +85,18 @@ the Microsoft Store, not the CWS).
 
 ### Detailed description (paste into the store)
 
-> Turn Open WebUI into your Cowork — one that works in ONE folder on your
-> own computer: the folder you pick. Your AI chat can then list, read,
-> write, search, OCR, and convert files in that folder, while everything
-> stays on your machine.
+> Turn Open WebUI into your Cowork — one that works in the folders on your
+> own computer that you pick (one or several). Your AI chat can then list,
+> read, write, search, OCR, and convert files in those folders, while
+> everything stays on your machine.
 >
 > Why: Open WebUI's code interpreter runs in a sandbox that cannot touch
 > your files. Open File Bridge gives it a locked door — you choose the
-> folder, you choose the ONE website allowed to use the door, and the
+> folder(s), you choose the ONE website allowed to use the door, and the
 > extension enforces both.
 >
 > How it works:
-> 1. Pick a folder in the extension's settings.
+> 1. Pick a folder in the extension's settings (add more whenever you like).
 > 2. Allow your Open WebUI address (for example http://127.0.0.1:8080 or
 >    https://chat.example.com) and optionally set a bridge token.
 > 3. Install the bridge skill in Open WebUI (copy-paste from the GitHub
@@ -91,7 +104,8 @@ the Microsoft Store, not the CWS).
 > 4. Ask: "list the files in my folder", or "write the summary to notes.md".
 >
 > Safety model:
-> - One folder only — nothing outside it is visible.
+> - Only the folders you chose — nothing outside them is visible, and each
+>   folder can be set read-only or read/write on its own.
 > - One site only — every other origin is refused; an optional bridge token
 >   stops a fake page impersonating your Open WebUI address.
 > - Approve/Deny cards inside the chat page for deletes and overwrites;
@@ -138,14 +152,26 @@ store icon requirement; a 1280×800 marquee can be added later.
   — `docs/PRIVACY.md` covers the extension (and the desktop app); keep the
   "Last updated" date current when behavior changes.
 - **Single purpose:**
-  > Lets the user's own Open WebUI instance read and write files in one
-  > user-selected folder on the user's computer, under a user-configured
-  > site lock.
+  > Lets the user's own Open WebUI instance read and write files in the
+  > folders on the user's computer that the user has selected (one or
+  > several), under a user-configured site lock.
 - **Permission — `offscreen`:**
   > Normally runs OCR (Tesseract WASM) and document conversion in an offscreen
   > document so no extra tabs or windows open on the user's machine. If the
   > offscreen document is unavailable or fails, the extension uses its bundled
   > extension-page fallback.
+- **Permission — `scripting`:**
+  > Used for one thing: after the user presses **Use this site** for their own
+  > Open WebUI origin, the extension registers a single MAIN-world content
+  > script (`inject-main.js`) on exactly that origin, so the chat's Python
+  > sandbox can call the bridge through a page-local function instead of
+  > pasting a client bootstrap into every cell. Registration is created at
+  > request time for that one origin, never as a static manifest match, and
+  > is unregistered when the user removes the site, revokes host access, or
+  > uninstalls. No other site is scripted, and the script adds no network
+  > access of its own — it only forwards messages the page's sandbox already
+  > sends to the extension's service worker, which applies the same origin
+  > allowlist and optional bridge token to every request.
 - **Host permission justification** (the dashboard field triggered by the
   content-script matches on `https://*/*`, `http://127.0.0.1/*`,
   `http://localhost/*` — the manifest declares no separate
@@ -153,17 +179,24 @@ store icon requirement; a 1280×800 marquee can be added later.
   > The manifest uses content scripts on HTTPS pages and localhost because
   > users choose their own Open WebUI origin at setup time; the origin may be
   > localhost, an HTTPS LAN deployment, or a custom HTTPS domain and cannot be
-  > pre-listed. The two content scripts have narrow roles: `relay.js` forwards
-  > explicitly shaped bridge messages and `confirm.js` renders an in-page
-  > approval card when the extension requires confirmation. They do not scrape
-  > arbitrary page content or monitor browsing history. In worker mode, the
-  > relay may transiently read the Open WebUI session token from that page's
-  > local storage at the page's request and return it over a same-origin
-  > channel; it is never sent to the service worker or Sparkling AI. All
-  > file-operation requests from web pages are rejected by the service worker
-  > unless the browser-provided sender origin is on the user's explicit
-  > allowlist, with an optional user-set bridge token as a second lock. Until
-  > the user allowlists a site, every web-page request is refused.
+  > pre-listed. Be precise about what is broad and what is not: the two
+  > content scripts (`relay.js`, `confirm.js`) ARE declared statically on
+  > those matches, because the extension must be able to offer the chat page
+  > an approval card the first time the user allowlists it. The MAIN-world
+  > client injector (`inject-main.js`) is NOT static — it is registered at
+  > runtime for the single origin the user explicitly allowlists. Their roles:
+  > `relay.js` forwards explicitly shaped bridge messages and `confirm.js`
+  > renders an in-page approval card when the extension requires
+  > confirmation. They do not scrape arbitrary page content or monitor
+  > browsing history. In worker mode, the relay may transiently read the Open
+  > WebUI session token from that page's local storage at the page's request
+  > and return it over a same-origin channel; it is never sent to the service
+  > worker or Sparkling AI. All file-operation requests from web pages are
+  > rejected by the service worker unless the browser-provided sender origin
+  > is on the user's explicit allowlist, with an optional user-set bridge
+  > token as a second lock. Until the user allowlists a site, every web-page
+  > request is refused. Static host access is what lets the extension ASK;
+  > the allowlist is what lets it ACT.
 - **Data Usage disclosures:** local-only handling still requires disclosure,
   and reading browser storage counts as handling. Select the dashboard
   category or categories that describe the user-selected file contents handled

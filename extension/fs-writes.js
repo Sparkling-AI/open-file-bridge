@@ -152,7 +152,7 @@ async function finalizeTransfer(rootRec, parts, rec, tid) {
 /** Multi-message chunked write for model-driven large payloads:
  *  {tid?, path, seq, total, b64, last?} — tid reused across messages;
  *  seq is the 0-based chunk index. Returns progress; on last, finalizes. */
-async function epWriteB64Chunk(body) {
+async function epWriteB64Chunk(body, ctx) {
   const rg = await resolveGuarded(unquoteComp(body.path || ""), { forWrite: true });
   if (typeof body.seq !== "number" || typeof body.total !== "number") {
     return fsFail(400, { error: "missing seq/total" });
@@ -193,7 +193,8 @@ async function epWriteB64Chunk(body) {
     // gated /write_b64, so check here too (the model-facing ask is the
     // same single popup; grants are path-keyed, not endpoint-keyed)
     const gate = await confirmGate("POST", "/write_b64_chunk",
-      JSON.stringify({ path: rg.relInRoot, __finalizing: true }), null);
+      JSON.stringify({ path: rg.relInRoot, __finalizing: true }),
+      (ctx && ctx.tabId != null) ? ctx.tabId : null);
     if (gate) {
       return fsFail(403, Object.assign(gate, {
         note: "chunked finalize gated — approve and resend the last chunk",
@@ -274,7 +275,8 @@ async function epEdit(body) {
   // edited+path: the app's _attach_links key — the router mints outcome
   // links from exactly these two fields
   const edited = results.reduce((n, r) => n + (r.ok ? (r.replaced || 0) : 0), 0);
-  return fsOk({ ok: true, edited: edited, path: rg.relInRoot, results: results, snapshot: snap });
+  return fsOk(Object.assign({ ok: true, edited: edited, path: await echoPath(rg),
+    results: results, snapshot: snap }, writtenFields(rg)));
 }
 
 /* ---------------- /delete (trash-move) ---------------- */
@@ -372,6 +374,7 @@ async function moveDirToTrash(rootRec, parts, ts) {
 
 async function epMove(body, opts) {
   const internal = opts && opts.internal; // batch inner op (see epDelete)
+  const ctx = (opts && opts.ctx) || {};  // request-local {tabId} for the late gate
   // 3.5.0 (pilot item 15): batch move — one body, one approval card.
   if (Array.isArray(body.moves) && body.moves.length) {
     // 3.7.0 (tester blocker 5): same up-front cap as batch delete
@@ -387,21 +390,36 @@ async function epMove(body, opts) {
     // destination free BEFORE the card — a batch the user approves must
     // be a batch that can actually run (partial 207s stay possible only
     // for races, e.g. a file appearing mid-batch)
+    // 3.7.3 (review F4): this pre-check is READ-ONLY. It used to call
+    // walkToParent(..., true), so a DENIED or timed-out batch left the
+    // destination folders it invented on disk. Missing parents are now
+    // created only after approval, inside the per-item epMove call.
     for (const m of body.moves) {
       if (!m || typeof m.from !== "string" || typeof m.to !== "string") continue;
       try {
         const rgF = await resolveGuarded(unquoteComp(m.from), { forWrite: true });
         const wF = await walkToParent(rgF.rootRec, rgF.parts, false);
         let ok = false;
-        try { await wF.dir.getFileHandle(wF.fileName); ok = true; } catch (e) {}
-        try { await wF.dir.getDirectoryHandle(wF.fileName); ok = true; } catch (e) {}
+        if (wF) {
+          try { await wF.dir.getFileHandle(wF.fileName); ok = true; } catch (e) {}
+          if (!ok) { try { await wF.dir.getDirectoryHandle(wF.fileName); ok = true; } catch (e) {} }
+        }
         if (!ok) return fsFail(404, { error: "batch move: no such file: " + m.from,
           hint: "nothing was moved — fix the list and re-send" });
         const rgT = await resolveGuarded(unquoteComp(m.to), { forWrite: true });
-        const wT = await walkToParent(rgT.rootRec, rgT.parts, true);
+        if (rgF.rootRec.id !== rgT.rootRec.id) {
+          return fsFail(400, { error: "batch move: cannot move across shared folders (" +
+            m.from + " → " + m.to + ")",
+            hint: "nothing was moved — copy then delete instead" });
+        }
+        // destination parent may legitimately not exist yet (created after
+        // approval) — then the destination cannot be occupied
+        const wT = await walkToParent(rgT.rootRec, rgT.parts, false);
         let occupied = false;
-        try { await wT.dir.getFileHandle(wT.fileName); occupied = true; } catch (e) {}
-        try { await wT.dir.getDirectoryHandle(wT.fileName); occupied = true; } catch (e) {}
+        if (wT) {
+          try { await wT.dir.getFileHandle(wT.fileName); occupied = true; } catch (e) {}
+          if (!occupied) { try { await wT.dir.getDirectoryHandle(wT.fileName); occupied = true; } catch (e) {} }
+        }
         if (occupied) return fsFail(409, { error: "batch move: destination exists: " + m.to,
           hint: "nothing was moved — move never overwrites; fix the list and re-send" });
       } catch (e) {
@@ -409,7 +427,7 @@ async function epMove(body, opts) {
       }
     }
     // ONE card for the whole (now pre-validated) batch
-    const gate = await confirmGateLate("POST", "/move", body);
+    const gate = await confirmGateLate("POST", "/move", body, ctx);
     if (gate) return fsFail(403, gate);
     for (const m of body.moves.slice(0, 50)) {
       if (!m || typeof m.from !== "string" || typeof m.to !== "string") {
@@ -417,7 +435,7 @@ async function epMove(body, opts) {
         fails++;
         continue;
       }
-      const one = await epMove({ from: m.from, to: m.to }, { internal: true });
+      const one = await epMove({ from: m.from, to: m.to }, { internal: true, ctx: ctx });
       if (one.status !== 200) fails++;
       let ob = null;
       try { ob = JSON.parse(one.body || "{}"); } catch (e) {}
@@ -479,7 +497,7 @@ async function epMove(body, opts) {
   // 3.7.0 (tester should-fix): the approval card comes AFTER the
   // pre-checks — never approve a move that then 404/409s
   if (!internal) {
-    const gate = await confirmGateLate("POST", "/move", body);
+    const gate = await confirmGateLate("POST", "/move", body, ctx);
     if (gate) return fsFail(403, gate);
   }
   // approved (or internal): NOW create missing parents, then re-check
