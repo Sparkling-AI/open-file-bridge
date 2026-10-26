@@ -86,15 +86,17 @@ the Microsoft Store, not the CWS).
 |---|---|
 | Name | Open File Bridge |
 | Summary | (the 116-char manifest description, auto-filled) |
-| Category | Productivity |
+| Category | Tools |
 | Language | English (US) |
 
 ### Detailed description (paste into the store)
 
 > Turn Open WebUI into your Cowork — one that works in the folders on your
 > own computer that you pick (one or several). Your AI chat can then list,
-> read, write, search, OCR, and convert files in those folders, while
-> everything stays on your machine.
+> read, write, search, OCR, and convert files in those folders. The extension
+> processes files locally and returns requested results to the Open WebUI
+> site you allow. That site and your connected AI provider may process the
+> data remotely under their own privacy terms.
 >
 > Why: Open WebUI's code interpreter runs in a sandbox that cannot touch
 > your files. Open File Bridge gives it a locked door — you choose the
@@ -112,16 +114,18 @@ the Microsoft Store, not the CWS).
 > Safety model:
 > - Only the folders you chose — nothing outside them is visible, and each
 >   folder can be set read-only or read/write on its own.
-> - One site only — every other origin is refused; an optional bridge token
->   stops a fake page impersonating your Open WebUI address.
+> - Site lock — requests are checked against the Open WebUI origin you
+>   configure; an optional bridge token adds another check.
 > - Approve/Deny cards inside the chat page for deletes and overwrites;
 >   overwrites normally retain the previous version, subject to snapshot
 >   size limits and filesystem availability; deletes go to a 30-day trash.
+>   Recovery copies are files inside the selected folders; uninstalling the
+>   extension does not remove them.
 > - Read-only mode, write-rate brake, ignore patterns, and built-in refusal
 >   of credential-looking files (.env, id_rsa, *.pem, …).
-> - Local-first: no cloud service, accounts, analytics, or
->   telemetry. The extension sends file data only to the user's explicitly
->   allowlisted Open WebUI origin when that origin requests it.
+> - Local-first: no built-in cloud storage, extension account, analytics, or
+>   telemetry. Requested file data is returned only to your configured Open
+>   WebUI site. Its hosting and connected AI services have their own data policies.
 >
 > Extras: OCR in 20+ languages (runs locally in the extension), PDF text
 > extraction, xlsx→csv and docx→html conversion, and full-text search.
@@ -151,6 +155,12 @@ pages in a fresh synthetic profile (no real user data appears):
 
 Optional: icon assets in `extension/icons/` (16–256) already satisfy the
 store icon requirement; a 1280×800 marquee can be added later.
+
+For the current 3.7.4 submission, use **cws-1-options-fresh.png only** as the
+store screenshot. The security and OCR/safety source screenshots above are
+retained locally, but their displayed recovery copy makes absolute guarantees
+that the snapshot limits do not support. Omit them from the current draft;
+they can return after the extension's copy is corrected in a future version.
 
 ## 4. Privacy tab
 
@@ -183,47 +193,35 @@ store icon requirement; a 1280×800 marquee can be added later.
   content-script matches on `https://*/*`, `http://127.0.0.1/*`,
   `http://localhost/*` — the manifest declares no separate
   `host_permissions` key):
-  > The manifest uses content scripts on HTTPS pages and localhost because
-  > users choose their own Open WebUI origin at setup time; the origin may be
-  > localhost, an HTTPS LAN deployment, or a custom HTTPS domain and cannot be
-  > pre-listed. Be precise about what is broad and what is not: the two
-  > content scripts (`relay.js`, `confirm.js`) ARE declared statically on
-  > those matches, because the extension must be able to offer the chat page
-  > an approval card the first time the user allowlists it. The MAIN-world
-  > client injector (`inject-main.js`) is NOT static — it is registered at
-  > runtime for the single origin the user explicitly allowlists. Their roles:
-  > `relay.js` forwards explicitly shaped bridge messages and `confirm.js`
-  > renders an in-page approval card when the extension requires
-  > confirmation. They do not scrape arbitrary page content or monitor
-  > browsing history. In worker mode, the relay may transiently read the Open
-  > WebUI session token from that page's local storage at the page's request
-  > and return it over a same-origin channel; it is never sent to the service
-  > worker or Sparkling AI. All file-operation requests from web pages are
-  > rejected by the service worker unless the browser-provided sender origin
-  > is on the user's explicit allowlist, with an optional user-set bridge
-  > token as a second lock. Until the user allowlists a site, every web-page
-  > request is refused. Static host access is what lets the extension ASK;
-  > the allowlist is what lets it ACT.
-- **Data Usage disclosures:** local-only handling still requires disclosure,
-  and reading browser storage counts as handling. Select the dashboard
-  category or categories that describe the user-selected file contents handled
-  by the extension (for example, **Website content** or **User-generated
-  content**, depending on the labels in the current dashboard). The extension
-  handles generic files, so do not claim that their contents can never include
-  personal, health, financial, or communications data. It uses the bytes only
-  to perform the requested operation and may return them to the user's
-  explicitly allowlisted Open WebUI origin.
+  > Users choose their Open WebUI origin, so relay.js and confirm.js are
+  > statically matched to HTTPS sites and localhost. They relay explicitly
+  > shaped requests and show approval cards, without scraping page content or
+  > recording browsing history. The service worker accepts file requests only
+  > from the saved origin, with an optional bridge token, and confines access
+  > to user-selected folders. inject-main.js is registered dynamically for
+  > that origin after permission is granted. In worker mode, the relay may
+  > read the page's Open WebUI sign-in token and return it over a same-origin
+  > channel; the extension never sends that token to its service worker or
+  > Sparkling AI.
+- **Data Usage disclosures:** keep the current published disclosure:
+  **Authentication information** and **Website content** only. The current
+  product provides a generic file bridge and same-origin authentication
+  handling, not dedicated health, payment or financial-data collection.
+  Do not add categories solely by guessing what an arbitrary file could
+  contain. Reassess the actual collection behavior if functionality changes.
+  Local processing still needs disclosure; the privacy policy explains
+  user-selected file contents and the connected Open WebUI/AI service flow.
   - **Authentication information** — the Open WebUI sign-in token (read from
     the page's local storage in worker mode, returned same-origin, never sent
     to the service worker) and the user-set bridge token (stored in IndexedDB
-    and checked per request). Both stay on-device, but must still be disclosed
-    if the dashboard category applies.
-  - Do not tick **Location**, **Web history**, or **User activity**: the
-    extension does not use GPS/IP location, record browsing history, or run
-    generalized interaction analytics. Do not omit **PII**, **Health**,
-    **Financial**, or **Personal communications** merely because the files are
-    processed locally; disclose them if the current form defines them as data
-    the extension may handle.
+    and checked per request).
+  - **Website content** — the text, images and other file content returned
+    through the bridge at the user's request.
+  - Leave **PII**, **Health**, **Financial and payment information**,
+    **Personal communications**, **Location**, **Web history**, and
+    **User activity** unchecked for the present submission, matching the
+    existing published item and the user's clarification. Do not infer
+    tracking merely from the broad content-script match.
   - Certify the limited-use statements only after confirming that the current
     implementation still uses disclosed data solely to provide the file bridge,
     does not sell or use it for advertising, and does not transfer it to

@@ -18,6 +18,12 @@ run entirely on the user's own machine.
   The extension can read and write files inside those folders when the
   connected Open WebUI asks it to; it cannot reach any other location on
   the device.
+- **Selected file contents.** The extension processes the contents of files
+  the user chooses to share and operations the connected Open WebUI requests.
+  Those files may contain personal or sensitive information. The extension
+  uses the bytes only to perform the requested file operation; it does not
+  independently seek out sensitive information or use it for advertising,
+  profiling, credit decisions or unrelated purposes.
 - **Allowed-site requests.** File-operation requests are accepted only from
   web origins the user has placed on the extension's allowlist, optionally
   protected by a bridge token the user configures. The extension checks each
@@ -57,19 +63,26 @@ Two different kinds of data are involved, and they are deleted differently:
   user's other files; the settings page's recovery guide shows where they
   are.
 
-Nothing is stored in the cloud, and no recovery data is written outside the
-folders the user selected.
+The extension does not provide developer-operated cloud storage. Recovery
+data is written only inside the folders the user selected. If those folders
+are on a network drive or synchronized by another service, that service's
+storage and sharing rules also apply.
 
 ### Collection and transmission
 
 The extension contains no advertising, analytics, telemetry, user accounts,
-or Sparkling AI AB cloud service, and it does not upload file names, file
-contents, or any other data to Sparkling AI AB. The only receivers of file
-data are (1) the user's own Open WebUI instance, on an origin the user
-allowed, responding to a request it made, (2) the browser-profile storage,
-and (3) the selected folders containing recovery files as described above.
-Any AI service the user connects through Open WebUI operates
-under that service's own privacy terms.
+or built-in Sparkling AI AB data-collection service. It does not automatically
+upload file names, file contents or other data to developer-selected servers.
+It returns requested file-operation results to the Open WebUI origin the user
+explicitly allowed, including file contents when requested. Settings and
+activity records are stored in the browser profile; writes and recovery
+copies are stored in the selected folders as described above.
+
+The allowed Open WebUI instance may run on another computer or a hosted
+server. That instance and any AI provider the user connects to it may receive
+and process the requested file data remotely under their own privacy terms.
+Local processing by the extension does not mean that all data remains on the
+computer after it is returned to the connected application.
 
 ### Security
 
