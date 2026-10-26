@@ -67,6 +67,7 @@
     .card.resolved .verdict { display: block; }
     .card.ok .verdict { color: #0a7d32; }
     .card.no .verdict { color: #b00; }
+    .card.error .verdict { color: #b00; }
     .card.expired .row { display: none; }
   </style>
   <div class="wrap"></div>`;
@@ -95,7 +96,7 @@
       '<div class="row">' +
       '<button class="approve">Approve</button>' +
       '<button class="deny">Deny</button></div>' +
-      '<div class="verdict"></div>' +
+      '<div class="verdict" role="status"></div>' +
       '<div class="meta">click within <span class="countdown">' + waitSec +
         '</span> s · single-use · from your AI assistant\u2019s request</div>';
 
@@ -125,35 +126,40 @@
 
     const settle = (verdict) => {
       clearInterval(tick);
-      card.classList.add("resolved", verdict === "approved" ? "ok" : "no");
+      card.classList.add("resolved");
       // in-window click → the blocked request completes in THIS round
       // trip; late click (countdown already at 0) → the request returned
       // timed_out and the assistant's one retry will pick the grant up
       const inWindow = (Date.now() - t0) < waitSec * 1000;
-      card.querySelector(".verdict").textContent =
+      const recordedText =
         verdict === "approved"
           ? (inWindow ? "✓ Approved — completing the operation…"
                       : "✓ Approved (late) — the assistant can retry once now")
           : "✗ Denied — nothing was changed";
+      card.querySelector(".verdict").textContent =
+        verdict === "approved" ? "Recording approval…" : "Recording denial…";
+      const failed = (error) => {
+        if (!card.isConnected) return;
+        card.classList.remove("ok", "no");
+        card.classList.add("error", "expired");
+        card.querySelector(".verdict").textContent = "⚠ " + error + " — ask again in chat";
+      };
       try {
         chrome.runtime.sendMessage({
           ofbConfirmVerdict: true, id: ask.id, verdict: verdict,
         }, (resp) => {
-          void chrome.runtime.lastError;
+          const runtimeError = chrome.runtime.lastError;
           // honest outcome: the SW (which may have restarted since the
           // ask) is the authority — never claim an approval it rejected
-          if (resp && resp.ok === false && card.isConnected) {
-            card.classList.add("expired");
-            card.querySelector(".verdict").textContent =
-              "⚠ " + (resp.error || "not recorded") + " — ask again in chat";
+          if (runtimeError || !resp || resp.ok !== true) {
+            failed((runtimeError && runtimeError.message) || (resp && resp.error) || "confirmation response not recorded");
+          } else if (card.isConnected) {
+            card.classList.add(verdict === "approved" ? "ok" : "no");
+            card.querySelector(".verdict").textContent = recordedText;
           }
         });
       } catch (e) { /* SW gone: the ask expires server-side anyway */
-        if (card.isConnected) {
-          card.classList.add("expired");
-          card.querySelector(".verdict").textContent =
-            "⚠ extension unavailable — ask again in chat";
-        }
+        failed("extension unavailable");
       }
       setTimeout(() => {
         try { card.remove(); } catch (e2) {}

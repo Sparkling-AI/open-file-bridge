@@ -153,6 +153,21 @@ function normalizeSite(raw) {
   return { origin: u.origin };
 }
 
+function setStatus(id, message, tone = "hint") {
+  const el = document.getElementById(id);
+  el.textContent = message;
+  el.className = tone;
+}
+
+function setSiteStatus(message, tone = "hint") {
+  setStatus("sitestat", message, tone);
+}
+
+function renderConfirmStatus(scope) {
+  setStatus("confirmstat", scope === "off" ? "⚠ Confirmations are off" :
+    "✓ Active", scope === "off" ? "caution" : "ok");
+}
+
 const SKILL_FILE_PLAIN = "SKILL-EXT.md";
 const SKILL_FILE_TOKEN = "SKILL-EXT-TOKEN.md";
 const SKILL_FILE_BASE =
@@ -212,6 +227,7 @@ async function renderSec() {
         }
       } catch (e) { /* non-fatal: SW cleanup below is best-effort */ }
       document.getElementById("siteadd").value = "";
+      setSiteStatus("");
       renderSec(); beat();
     };
     r.append(name, edit, del);
@@ -220,11 +236,16 @@ async function renderSec() {
 
   const modeEl = document.getElementById("secmodeinfo");
   const mode = site ? (token ? "site lock + token" : "site lock") : (token ? "token only" : "nothing");
+  let localSite = false;
+  try { localSite = ["localhost", "127.0.0.1", "[::1]"].includes(new URL(site).hostname); }
+  catch (e) { /* no configured site */ }
   modeEl.innerHTML = "Current protection: <b>" + esc(mode) + "</b>" +
     (site || token ? "" :
-      " — <span class='warn'>no site can use the bridge yet; set your Open WebUI address above.</span>") +
+      " — <span class='caution'>no site can use the bridge yet; set your Open WebUI address above.</span>") +
     (site && !token ?
-      " — <span class='warn'>without a bridge token, ANY html the model renders on that site (artifact/preview panels) can read the shared folder through the injected client. Set a token unless the site is localhost.</span>" :
+      (localSite
+        ? " — no bridge token set. Code running on this allowed site can access the shared folders."
+        : " — <span class='caution'>no bridge token set. Code running on this allowed site can access the shared folders. Set a bridge token for a remote site.</span>") :
       "");
   modeEl.className = "hint";
 
@@ -237,10 +258,10 @@ async function renderSec() {
       const active = reg.some((s) => s.id === "ofb-inject");
       const statEl = document.getElementById("sitestat");
       if (active && !statEl.textContent.trim()) {
-        statEl.textContent = "✓ client injection active for this site " +
-          "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))";
+        setSiteStatus("✓ client injection active for this site " +
+          "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))", "ok");
       } else if (!active && !statEl.textContent.trim()) {
-        statEl.textContent = "one-line bootstrap: OFF — click Edit → Save (or re-type the site + Set site) once to enable it; the pasted bootstrap works meanwhile";
+        setSiteStatus("one-line bootstrap: OFF — click Edit → Save (or re-type the site + Set site) once to enable it; the pasted bootstrap works meanwhile");
       }
     } catch (e) { /* scripting API unavailable — stay silent */ }
   }
@@ -268,7 +289,7 @@ async function renderSec() {
       add.textContent = "Use this site";
       add.onclick = async () => {
         siteEditing = false;
-        const stat = document.getElementById("sitestat");
+        setSiteStatus("");
         // 3.7.0 (tester blocker 2): route through the SAME path as
         // "Set site" — permission request (user gesture = this click)
         // + registration sync for the NEW site, and the sync also
@@ -280,10 +301,10 @@ async function renderSec() {
           const granted = await chrome.permissions.request({ origins: [pat] });
           const sync = await chrome.runtime.sendMessage({ ofbInjectSync: true, register: granted !== false });
           if (granted && sync && sync.registered) {
-            stat.textContent = "✓ client injection active for this site " +
-              "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))";
+            setSiteStatus("✓ client injection active for this site " +
+              "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))", "ok");
           } else if (granted === false) {
-            stat.textContent = "✓ site set (permission declined — the pasted bootstrap still works)";
+            setSiteStatus("✓ site set (permission declined — the pasted bootstrap still works)");
           }
         } catch (e) { /* non-fatal */ }
         renderSec(); beat();
@@ -295,9 +316,8 @@ async function renderSec() {
 
   const tokInput = document.getElementById("bridgetoken");
   if (document.activeElement !== tokInput) tokInput.value = token || "";
-  document.getElementById("tokenstat").textContent = token
-    ? "✓ token required from every chat request"
-    : "no token — the site lock alone guards the bridge";
+  setStatus("tokenstat", token ? "✓ token required from every chat request"
+    : "no bridge token set", token ? "ok" : "hint");
   renderStart();
 }
 
@@ -334,14 +354,13 @@ async function refresh() {
     const cs = document.getElementById("confirmscope");
     cs.value = ["off", "destructive", "all"].includes(s.confirm_scope)
       ? s.confirm_scope : "all";
-    document.getElementById("confirmstat").textContent = "✓";
+    renderConfirmStatus(cs.value);
     renderRoots();
     renderSec();
     renderAudit();
     renderPreview();
   } catch (e) {
-    document.getElementById("secstatus").textContent =
-      "✗ could not load settings (" + (e.message || e) + ")";
+    setStatus("secstatus", "✗ could not load settings (" + (e.message || e) + ")", "warn");
   }
 }
 
@@ -363,9 +382,7 @@ function renderLangs(avail, cur) {
 /* ---------------- shared folders card (ported from setup.js) ---------------- */
 
 function status(text, cls) {
-  const s = document.getElementById("folderstatus");
-  s.textContent = text;
-  s.className = cls || "";
+  setStatus("folderstatus", text, cls || "hint");
 }
 
 async function renderRoots() {
@@ -425,7 +442,9 @@ async function pickFolder() {
       id: id, alias: handle.name, mode: "readwrite", handle: handle,
       grantedAt: Date.now(), writesEnabled: true, ignore: [],
     });
-    status("Folder connected: " + handle.name + (ps === "granted" ? "" : " (permission: " + ps + ")"), "ok");
+    status(ps === "granted" ? "Folder connected: " + handle.name :
+      "Folder saved: " + handle.name + " — permission needed; press Reconnect.",
+      ps === "granted" ? "ok" : "caution");
     renderRoots(); beat(); renderPreview();
   } catch (e) {
     if (String(e && e.name) === "AbortError") { status("Folder selection cancelled.", ""); return; }
@@ -552,13 +571,12 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   // Security card: ONE site + bridge token (fs-sec tiers 1 & 2)
   document.getElementById("siteaddbtn").onclick = async () => {
-    const stat = document.getElementById("sitestat");
     const n = normalizeSite(document.getElementById("siteadd").value);
-    if (n.err) { stat.textContent = "✗ " + n.err; return; }
+    if (n.err) { setSiteStatus("✗ " + n.err, "warn"); return; }
     await OFBIDB.put("kv", n.origin, "allowed_site");
     try { await OFBIDB.del("kv", "allowed_origins"); } catch (e) {}
     document.getElementById("siteadd").value = "";
-    stat.textContent = "";
+    setSiteStatus("");
     siteEditing = false;
     // sandbox injection (3.5.0): ask for the ONE-origin host permission
     // (user gesture = this click) and register the client injector for
@@ -569,16 +587,16 @@ window.addEventListener("DOMContentLoaded", async () => {
       const granted = await chrome.permissions.request({ origins: [pat] });
       const sync = await chrome.runtime.sendMessage({ ofbInjectSync: true, register: granted });
       if (granted && sync && sync.registered) {
-        stat.textContent = "✓ client injection active for this site " +
-          "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))";
+        setSiteStatus("✓ client injection active for this site " +
+          "(one-line bootstrap: import js; exec(js.OFB_CLIENT_PY); await ofb_init(\"…\"))", "ok");
       } else if (granted) {
-        stat.textContent = "✓ site set (injection registration failed: " +
-          (sync && sync.error ? sync.error : "unknown") + ")";
+        setSiteStatus("✓ site set (injection registration failed: " +
+          (sync && sync.error ? sync.error : "unknown") + ")", "warn");
       } else {
-        stat.textContent = "✓ site set (permission declined — the pasted bootstrap still works)";
+        setSiteStatus("✓ site set (permission declined — the pasted bootstrap still works)");
       }
     } catch (e) {
-      stat.textContent = "✓ site set (injection unavailable: " + e + ")";
+      setSiteStatus("✓ site set (injection unavailable: " + e + ")", "warn");
     }
     renderSec(); beat();
   };
@@ -588,27 +606,27 @@ window.addEventListener("DOMContentLoaded", async () => {
   document.getElementById("tokenset").onclick = async () => {
     const v = document.getElementById("bridgetoken").value.trim();
     if (v && v.length < 8) {
-      document.getElementById("tokenstat").textContent = "✗ use at least 8 characters (or Generate)";
+      setStatus("tokenstat", "✗ use at least 8 characters (or Generate)", "warn");
       return;
     }
     if (v) await OFBIDB.put("kv", v, "bridge_token");
     else await OFBIDB.del("kv", "bridge_token");
-    document.getElementById("tokenstat").textContent =
-      v ? "✓ token saved — chats must now present it" : "token cleared — site list alone guards the bridge";
+    setStatus("tokenstat", v ? "✓ token saved — chats must now present it" :
+      "token cleared", v ? "ok" : "hint");
     renderSec(); beat();
   };
   document.getElementById("tokengen").onclick = () => {
     document.getElementById("bridgetoken").value = genToken();
     document.getElementById("tokengen").textContent = "New"; // next click replaces again
-    document.getElementById("tokenstat").textContent = "generated — press Save to activate";
+    setStatus("tokenstat", "generated — press Save to activate");
   };
   document.getElementById("tokencopy").onclick = async () => {
     const v = document.getElementById("bridgetoken").value.trim();
     try {
       await navigator.clipboard.writeText(v);
-      document.getElementById("tokenstat").textContent = "✓ copied — paste it in chat when the assistant asks";
+      setStatus("tokenstat", "✓ copied — paste it in chat when the assistant asks", "ok");
     } catch (e) {
-      document.getElementById("tokenstat").textContent = "copy failed — select the field and copy manually";
+      setStatus("tokenstat", "copy failed — select the field and copy manually", "warn");
     }
   };
 
@@ -616,16 +634,16 @@ window.addEventListener("DOMContentLoaded", async () => {
   // isn't stored is a lie). The ✓ line under the box is the readout.
   document.getElementById("langbox").addEventListener("change", async () => {
     const v = [...document.querySelectorAll("#langbox input:checked")].map((x) => x.value).join("+");
-    const stat = document.getElementById("langs");
     if (!v) {  // at least one language must stay on — restore the stored set
       document.querySelectorAll("#langbox input").forEach((x) => { x.checked = langSaved.has(x.value); });
-      stat.textContent = "✗ keep at least one language ticked — still using the saved set";
+      setStatus("langs", "✗ keep at least one language ticked — still using the saved set", "warn");
       return;
     }
     const r = await pipe("POST", "/ocr/lang", { lang: v });
     if (r.ok) langSaved = new Set(String(r.data.ocr_lang).split("+"));
     langSig = "";  // force re-render from the saved value on the next beat
-    stat.textContent = r.ok ? "✓ OCR language: " + r.data.ocr_lang : "✗ " + (r.error || "failed");
+    setStatus("langs", r.ok ? "✓ OCR language: " + r.data.ocr_lang :
+      "✗ " + (r.error || "failed"), r.ok ? "ok" : "warn");
     beat();
   });
 
@@ -660,9 +678,7 @@ window.addEventListener("DOMContentLoaded", async () => {
 
   document.getElementById("confirmscope").onchange = async (ev) => {
     await OFBIDB.put("kv", ev.target.value, "confirm_scope");
-    document.getElementById("confirmstat").textContent =
-      "✓ " + (ev.target.value === "all" ? "delete + overwrite"
-        : ev.target.value === "destructive" ? "delete only" : "off");
+    renderConfirmStatus(ev.target.value);
   };
 
   document.getElementById("openguide").onclick = () => {

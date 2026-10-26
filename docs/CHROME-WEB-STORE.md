@@ -6,8 +6,14 @@ the Microsoft Store, not the CWS).
 
 ## 1. Package to upload
 
-`dist-extension/open-file-bridge-extension-3.7.3.zip`
+`dist-extension/open-file-bridge-extension-3.7.4.zip`
 
+- Version 3.7.4 (2026-10-26, status feedback): injection success is green;
+  folder access awaiting permission and disabled confirmations use amber;
+  token/OCR failures and rejected approval responses use red. Localhost
+  token guidance stays neutral. Approval success is shown only after the
+  service worker acknowledges it. The unchanged 3.7.3 extension skill and
+  injected Python client remain compatible; no skill reinstallation is needed.
 - Version 3.7.3 (2026-10-25, external-review fixes): multi-root path
   safety — an explicit root-qualified path is no longer re-anchored on a
   descendant folder name, and `/find` (plus `/stat`, `/peek`, `/edit`)

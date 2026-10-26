@@ -3262,3 +3262,41 @@ The old TODO about a missing move endpoint is marked superseded. Privacy
 copy distinguishes recovery files in selected folders from browser storage
 and states snapshot limits. No live Open WebUI/native-picker acceptance or
 Chrome Web Store dashboard submission was performed in this merge review.
+
+## Status-feedback patch (2026-10-26, extension 3.7.4)
+
+The site-status element used a permanent red warning class even for
+successful injection. Statuses now select their tone: green for confirmed
+success, gray for information, amber for attention, red for failures.
+
+- Injection success is green in save, recently-blocked-site selection and
+  restored-registration paths. Removing the site clears stale feedback.
+- A saved folder with pending/denied permission says permission is needed
+  and uses amber; only a granted folder is reported connected in green.
+- Token validation/copy and OCR save/selection failures are red; successful
+  saves/copies are green; generating an unsaved token is neutral.
+- Localhost no-token guidance is neutral. Remote no-token guidance and the
+  unconfigured-site prompt use amber, without removing the risk explanation.
+- Disabled confirmations say "Confirmations are off" in amber both on change
+  and after settings reload. Enabled settings are green. Scope labels now
+  include moves, matching the existing confirmation gate.
+- Approval cards remain neutral while recording the click. They become green
+  only after the service worker returns ok:true. Rejection, missing response,
+  runtime.lastError and synchronous send failures all show red error state;
+  success/denial classes cannot linger on failures. Closed-shadow isolation
+  and the existing confirmation authority remain intact.
+- Status messages have role=status for assistive-technology announcements.
+
+Release: manifest/core 3.7.4; the Python client and both skills are unchanged
+at 3.7.3 and remain compatible (no skill update required). Release package
+path and README updated; picker-driven suites' expected bridge version is
+3.7.4-EXT. No change to endpoint, origin/token or filesystem policy.
+
+Verification: browser_status_smoke.mjs covers 23 computed-color and status
+outcome checks using the shipped settings/confirmation scripts in Chromium.
+Native picker/clipboard failures and approval response outcomes are simulated;
+actual DOM, CSS and closed shadow-root rendering are inspected. The existing
+26 behavioral cases, 63 bridge_path cases and 22 helper-consistency checks pass.
+Real OPFS move/search checks and extension packaging are also verified before
+release. Linux/Xvfb and a live Open WebUI chat are not part of this UI patch's
+verification.

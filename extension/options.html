@@ -36,6 +36,7 @@ textarea { width: 100%; max-width: 440px; min-height: 104px; padding: 8px 10px;
 .ok { color: #0a7d32; font-weight: bold; }
 .hint { color: #666; font-size: 14px; }
 .warn { color: #b00; font-weight: bold; }
+.caution { color: #8a4b08; font-weight: bold; }
 details.sec { background: #f4f6f8; padding: 14px 18px; border-radius: 8px; margin: 16px 0; }
 details.sec > summary { cursor: pointer; list-style: none; display: flex;
        align-items: center; gap: 10px; font-weight: bold; font-size: 1.17em;
@@ -106,7 +107,7 @@ After a browser restart the assistant may report <code>permission-needed</code>
 <div class="btnrow">
 <button id="pick" class="secondary">Choose folder…</button>
 </div>
-<p class="ok" id="folderstatus"></p>
+<p class="hint" id="folderstatus" role="status"></p>
 <div id="roots"></div>
 </details>
 
@@ -123,7 +124,7 @@ old one.</p>
 <button id="siteaddbtn" class="secondary">Set site</button>
 </div>
 <div id="siteview"></div>
-<p class="warn" id="sitestat" style="margin:6px 0 0 0"></p>
+<p class="hint" id="sitestat" role="status" style="margin:6px 0 0 0"></p>
 <div id="deniedrows"></div>
 <p class="hint" id="secmodeinfo"></p>
 <div class="btnrow" style="margin-top:10px">
@@ -133,7 +134,7 @@ old one.</p>
 <button id="tokengen" class="secondary">Generate</button>
 <button id="tokencopy" class="secondary">Copy</button>
 </div>
-<p class="hint" id="tokenstat"></p>
+<p class="hint" id="tokenstat" role="status"></p>
 <p class="hint" style="margin-top:2px">With a token set, the chat must
 also present it — this stops a <i>fake</i> page impersonating your
 Open WebUI address (possible for local/http addresses). When the
@@ -142,15 +143,15 @@ back. Leave empty to rely on the site lock alone.</p>
 <p class="hint">Always on, not configurable: credential-looking files
 (<code>.env</code>, <code>id_rsa</code>, <code>*.pem</code>, …) are refused;
 every overwrite keeps the previous version; deletes go to the trash (30-day expiry).</p>
-<p class="hint" id="secstatus"></p>
+<p class="hint" id="secstatus" role="status"></p>
 <div class="btnrow" style="margin-top:4px">
 <label class="hint" for="confirmscope" style="white-space:nowrap">Confirm before</label>
 <select id="confirmscope">
-<option value="all">delete &amp; overwrite</option>
-<option value="destructive">delete only</option>
+<option value="all">delete, move &amp; overwrite</option>
+<option value="destructive">delete &amp; move</option>
 <option value="off">nothing (no confirmations)</option>
 </select>
-<span class="hint" id="confirmstat"></span>
+<span class="hint" id="confirmstat" role="status"></span>
 </div>
 <p class="hint" style="margin-top:2px">Destructive requests pop up an
 Approve/Deny card <b>inside the chat page</b>; the assistant retries
@@ -175,7 +176,7 @@ the assistant asks you to start them.
 <p class="hint">For reading scanned PDFs / photos — tick one or more
 (applies immediately):</p>
 <div id="langbox" class="panel"></div>
-<p class="hint" id="langs"></p>
+<p class="hint" id="langs" role="status"></p>
 </details>
 
 <details class="sec" id="sec-safety" open>
