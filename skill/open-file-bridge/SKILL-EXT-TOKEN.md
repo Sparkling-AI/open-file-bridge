@@ -3,7 +3,7 @@ name: open-file-bridge
 description: "Read, create, edit, search, convert, and organize files in the folder the user shared from their computer through the Open File Bridge extension — Word, Excel, PowerPoint, PDF, image, archive, email, text, or code files, INCLUDING trivial asks like 'create a small test file' or 'save 2 lines of text', and when the user attached a file in the chat and wants a changed or new file back. MUST-CALL before acting: the code sandbox's own filesystem (e.g. /mnt/uploads) is a throwaway VM the user cannot see — files written there NEVER reach the user's machine. Only a successful bridge response confirms the work."
 ---
 
-# Local File Bridge — skill v3.7.3-EXT (extension backend, TOKEN variant)
+# Local File Bridge — skill v3.7.4-EXT (extension backend, TOKEN variant)
 
 > **TOKEN variant — publish this only when the extension's 🔒 Security
 > card HAS a bridge token set** (no token set? publish `SKILL-EXT.md`
@@ -73,6 +73,16 @@ re-elects automatically).
    which file is current). The snapshot system makes overwrites
    undoable; a NEW name only for a genuinely new, derived output
    (summary, chart, export) or an asked-for copy.
+   **A typo may be a name** (company, product, person, place, project).
+   Unless the user supplied the replacement, check the same document
+   and relevant shared files before changing it: search a distinctive
+   prefix with `/find {"name": prefix}` and `/search {"q": prefix}`.
+   `/search` covers plain text, not Office/PDF contents — inspect
+   relevant documents with the readers below too. Use a spelling only
+   when the context identifies the same entity unambiguously. If the
+   evidence is missing or conflicting, ask before writing; never turn
+   a possible name into a dictionary-word guess. Report the replacement
+   and the file that supports it.
 10. **Destructive steps run ONE at a time, sequentially** — never
    `asyncio.gather` on deletes/moves/overwrites (E03: 12 parallel
    deletes, 12 approval cards, 9 duplicates left behind). For batches,
@@ -581,21 +591,26 @@ right) → **Files**, select the file and press **Download**.
 ## Office files
 
 Libraries do the work — never edit the XML inside xlsx/docx/pptx by
-hand. Import first, wheels only as fallback:
+hand. Write each third-party import on its own line: hosts scan literal
+import lines to load packages and can miss names after a comma. Import
+first, wheels only as fallback:
 
 ```python
 try:
     import openpyxl                      # hosts 0.11.4+ install it on import
 except ImportError:
-    await install_bridge_wheels("openpyxl", "et_xmlfile"); import openpyxl
+    await install_bridge_wheels("openpyxl", "et_xmlfile")
+    import openpyxl
 try:
-    import docx, pptx                    # hosts 0.12+ bundle these (need lxml)
+    import docx                         # hosts 0.12+ bundle these (need lxml)
+    import pptx
 except ImportError:
     try:
         import micropip                # 3.7.1: not auto-imported on 0.10.x
         await micropip.install("lxml")
         await install_bridge_wheels("python_docx", "python_pptx", "typing_extensions")
-        import docx, pptx
+        import docx
+        import pptx
     except Exception as e:
         out(f"docx/pptx unavailable on this host: {e}")
 ```
@@ -621,6 +636,58 @@ except ImportError:
 - pandas/matplotlib (compiled) come from the host's Pyodide via
   `micropip.install("pandas")` — never from bridge wheels.
 
+**Templates: fill the template's own content areas.**
+
+- **pptx:** inspect `[(i, l.name) for i, l in enumerate(prs.slide_layouts)]`,
+  choose a suitable layout by name, then add a slide with
+  `prs.slides.add_slide(prs.slide_layouts[i])`. Fill its placeholders by
+  `placeholder_format.idx` (not their position in the collection).
+  Use picture/table/chart placeholder insertion methods when available;
+  add custom shapes only when the layout has no suitable placeholder.
+  Remove unused content placeholders from the slide, preserving template
+  branding, date/footer/slide-number fields, masters and layouts. Remove
+  sample slides only when creating a new deck from the template; edit
+  existing decks in place when asked to update them.
+- **docx:** replace the template's tokens (`{{name}}`, `[Date]`, etc.)
+  in place, including any in tables, headers and footers. Preserve run
+  formatting: assigning `paragraph.text` discards it. A token may span
+  multiple runs, so use a replacement method that handles that case.
+  Do not rebuild the document from scratch.
+- **Before saving:** check for unfilled content placeholders, remaining
+  prompt/sample text and unresolved template tokens (including `{{`),
+  then inspect the output. Do not delete filled media or intentional
+  template fields just because they have no text.
+
+For freshly added **text-only slides**, these helpers fill text and drop
+unused content placeholders. Do not use `fill_slide` on existing slides
+or slides with media to preserve. For rich-content layouts, fill their
+picture/table/chart placeholders with the appropriate insertion methods
+and remove only those you leave unused.
+
+```python
+from pptx.enum.shapes import PP_PLACEHOLDER
+
+TEMPLATE_FIELDS = {PP_PLACEHOLDER.DATE, PP_PLACEHOLDER.FOOTER,
+                   PP_PLACEHOLDER.SLIDE_NUMBER}
+
+def fill_slide(slide, values):           # {placeholder idx: text or [lines]}
+    for ph in list(slide.placeholders):
+        if ph.placeholder_format.type in TEMPLATE_FIELDS:
+            continue
+        idx = ph.placeholder_format.idx
+        if idx in values:
+            value = values[idx]
+            ph.text = "\n".join(value) if isinstance(value, (list, tuple)) else str(value)
+        else:
+            ph._element.getparent().remove(ph._element)  # remove unused shape only
+
+def empty_placeholders(prs):             # must be [] before saving a finished deck
+    return [(n, ph.name) for n, slide in enumerate(prs.slides, 1)
+            for ph in slide.placeholders
+            if ph.placeholder_format.type not in TEMPLATE_FIELDS
+            and ph.has_text_frame and not ph.text_frame.text.strip()]
+```
+
 ```python
 # xlsx read → edit → write:
 import io
@@ -637,7 +704,8 @@ for r in wb.active.iter_rows(values_only=True):
 await write_binary(out_path, b.getvalue().encode("utf-8-sig"))
 
 # docx → html (semantic — headings/paragraphs/lists/tables, not a styled render):
-import docx, html
+import docx
+import html
 d = docx.Document(io.BytesIO(await read_binary(path)))
 # … walk d.paragraphs / d.tables, html.escape text, build tags …
 ```
@@ -663,15 +731,21 @@ d = docx.Document(io.BytesIO(await read_binary(path)))
   new page (same page size — read it from the source's MediaBox or
   `/pdf_text` images mode) and `/pdf_op merge`. If the user wanted it
   "inside" a page, say once that it goes on its own page.
-- **fpdf2 recipe (creating PDFs from text):** needs ssl + the wheel:
+- **fpdf2 recipe (creating PDFs from text):** run this entire setup cell
+  **before any other `fpdf` import or PDF layout code**, once per chat
+  and again after a sandbox reset. It loads ssl before fpdf2 even if the
+  host bundles fpdf2. For `No module named 'fpdf'` or `HTTPSHandler`
+  import errors, rerun the setup rather than guessing alternate imports.
 
 ```python
-import io, os, re, base64, micropip, importlib, http.client, urllib.request
+import io, os, re, base64, importlib, http.client, urllib.request
+import micropip
 await micropip.install("ssl")            # fpdf2 imports HTTPSHandler
 if not hasattr(urllib.request, "HTTPSHandler"):   # urllib imported pre-ssl
     importlib.reload(http.client); importlib.reload(urllib.request)
 await install_bridge_wheels("fpdf2", "defusedxml", "fonttools")
 from fpdf import FPDF                    # FPDF, not FPdf
+from fpdf.fonts import FontFace          # headings_style takes FontFace, not a dict
 import matplotlib                         # loads Pillow + the DejaVu fonts
 FONTS = os.path.join(matplotlib.get_data_path(), "fonts", "ttf")
 
@@ -702,9 +776,28 @@ def bullets(pdf, items, size=10):
         pdf.multi_cell(0, size * 1.45, t, align="L", **NL)
     pdf.ln(4)
 
+def table(pdf, rows, widths=None, size=9, head_fill=(31, 56, 100)):
+    # rows[0] is the header; widths are relative column proportions.
+    pdf.set_font("DejaVu", "", size); pdf.set_text_color(0, 0, 0)
+    pdf.set_x(pdf.l_margin)
+    head = FontFace(emphasis="BOLD", color=(255, 255, 255), fill_color=head_fill)
+    with pdf.table(col_widths=widths, line_height=size * 1.5,
+                   text_align="LEFT", headings_style=head) as t:
+        for values in rows:
+            row = t.row()
+            for value in values:
+                row.cell(str(value))
+    pdf.ln(6)
+```
+
+After setup, build and verify the requested PDF in another cell:
+
+```python
 pdf = new_doc("Document title — summary")
 h(pdf, "Document title", 0); p(pdf, "Subtitle · version · date", 9, "I")
 h(pdf, "1. Section"); p(pdf, "Paragraph text …"); bullets(pdf, ["First", "Second"])
+table(pdf, [("Idea", "Next step"), ("First idea", "Run a small trial"),
+            ("Second idea", "Collect feedback")], widths=(1, 2))
 w = await write_binary("Summary.pdf", bytes(pdf.output()))
 shot = await bridge_get("/pdf_text", {"path": "Summary.pdf", "pages": "1", "mode": "images"})
 out({"written": w["written"], "pages": pdf.page_no()})

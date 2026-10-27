@@ -2,6 +2,27 @@
 
 Notable, user-facing changes to the OWUI skill
 
+## 3.7.4 — 2026-10-27 (extension skills only: tester Run 4)
+
+Both `SKILL-EXT.md` and `SKILL-EXT-TOKEN.md` address the five behaviour
+gaps reported in the 40-case tester run:
+
+- Verify possible name corrections against the user's own material;
+  ask when the spelling is ambiguous and identify the supporting file.
+- Fill PowerPoint/Word templates in place. Fresh text-slide helpers
+  fill placeholders and remove unused content areas while preserving
+  date/footer/slide-number fields; Word guidance preserves run formatting
+  and accounts for tokens split across runs.
+- Add a PDF table helper using `fpdf.fonts.FontFace` for headings.
+- Separate PDF setup from the output example and require setup before
+  any other fpdf import, including after a sandbox reset.
+- Put third-party imports on separate lines so host package scanners
+  can discover both docx and pptx, including the fallback recipe.
+
+Skill version only: the extension/client versions and compatibility floor
+are unchanged. The missing-file and append-to-PDF behaviours already
+matched the intended contract and need no changes.
+
 ## 3.7.3 — 2026-10-25 (extension 3.7.3: branch-review fixes)
 
 An independent review of `feat/runtime-injection` (commit `cb1cd9d`)
