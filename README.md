@@ -126,7 +126,7 @@ every layer below before touching a file:
 
 ### Official browser extension
 
-1. **Install Open File Bridge 3.x.** Version 3.7.4 is the current packaged
+1. **Install Open File Bridge 3.x.** Version 3.7.5 is the current packaged
    version. Before Chrome Web Store publication, or for development testing,
    download the extension ZIP from the latest `v3.*`
    [GitHub release](https://github.com/Sparkling-AI/open-file-bridge/releases),

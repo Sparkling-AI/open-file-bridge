@@ -355,7 +355,7 @@ def main():
             r3 = json.loads((out or {}).get("result") or "{}")
         except Exception:
             r3 = {}
-        ok3 = (r3.get("health_version") == "3.7.4-EXT" and
+        ok3 = (r3.get("health_version") == "3.7.5-EXT" and
                isinstance(r3.get("roots"), list) and len(r3["roots"]) >= 1 and
                r3.get("has_client_py") is True and r3.get("client_len", 0) > 5000)
         check("R3 one-liner exec + ofb_init via js pipe", bool(ok3),

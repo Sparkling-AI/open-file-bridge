@@ -1,0 +1,80 @@
+{
+  "generator": "scripts/vendor-patch-tesseract.mjs",
+  "upstream": "tesseract.js@7.0.0 (npm dist, Apache-2.0)",
+  "upstream_sha256": {
+    "tesseract.min.js": "000c27d9cd0def655f77b36c72a389c0ab13793aa31cb4d7aab56d09c0afbc7e",
+    "worker.min.js": "576b7df7e3393e137e51849357c9adb53fe7ac1bb69bfa06cf3d61520f182c6d"
+  },
+  "patched_sha256": {
+    "tesseract.min.js": "505ba7318a5c3baa40d97f54f3b5fb8a77a85809fa9bbbbe28a84c988b8720d0",
+    "worker.min.js": "bb06793a07f9bb54872716a29751794482081d2d658285048e5c4a95ff70c658"
+  },
+  "patches": [
+    {
+      "id": "T1-rhc1-worker-default",
+      "file": "tesseract.min.js",
+      "why": "RHC-1: remove the remote worker.min.js CDN default"
+    },
+    {
+      "id": "T2-rhc1-spawnworker-packaged-only",
+      "file": "tesseract.min.js",
+      "why": "RHC-1: delete the blob-worker wrapper; only same-extension packaged worker URLs may spawn"
+    },
+    {
+      "id": "T3-blob-option-off",
+      "file": "tesseract.min.js",
+      "why": "make the now-inert workerBlobURL default honest (no blob branch remains)"
+    },
+    {
+      "id": "T5-page-side-path-validation",
+      "file": "tesseract.min.js",
+      "why": "page-side createWorker validation: reject non-packaged or missing langPath (and non-packaged corePath) immediately, before any worker spawn — worker-side language-job rejections never settle the page promise (upstream tesseract.js 7 bug), so the library-level langPath guard must fire in the page"
+    },
+    {
+      "id": "T6-init-chain-failures-settle-createworker",
+      "file": "tesseract.min.js",
+      "why": "upstream createWorker ends its load/loadLanguage/initialize chain in an EMPTY catch, so any worker-side failure (e.g. a missing packaged language model) leaves the returned promise pending forever; route the failure to the gate reject so createWorker always settles"
+    },
+    {
+      "id": "T4-csp-regenerator-fallback",
+      "file": "tesseract.min.js",
+      "why": "CSP cleanup: dead eval-based regeneratorRuntime fallback (globalThis always exists in supported Chrome)"
+    },
+    {
+      "id": "W1-rhc2-core-default",
+      "file": "worker.min.js",
+      "why": "RHC-2: remove the remote tesseract.js-core CDN default; require an explicit packaged core path"
+    },
+    {
+      "id": "W2-rhc2-importscripts-guard",
+      "file": "worker.min.js",
+      "why": "RHC-2: the assembled core URL must be same-extension packaged before importScripts"
+    },
+    {
+      "id": "W3-data1-lang-default",
+      "file": "worker.min.js",
+      "why": "DATA-1: remove the remote @tesseract.js-data CDN fallback; require the packaged tessdata directory"
+    },
+    {
+      "id": "W4-data1-fetch-message",
+      "file": "worker.min.js",
+      "why": "DATA-1: the missing-model failure must state the local-only policy"
+    },
+    {
+      "id": "W7-data1-fetch-rejection",
+      "file": "worker.min.js",
+      "why": "DATA-1: a missing packaged model makes fetch() REJECT (TypeError) on chrome-extension:// URLs; without this wrapper the rejection escapes the job protocol and createWorker hangs forever instead of failing"
+    },
+    {
+      "id": "W5-csp-global-fallback",
+      "file": "worker.min.js",
+      "why": "CSP cleanup: dead new Function('return this') global getter (globalThis branch always wins in supported Chrome)"
+    },
+    {
+      "id": "W6-csp-regenerator-fallback",
+      "file": "worker.min.js",
+      "why": "CSP cleanup: dead eval-based regeneratorRuntime fallback (globalThis always exists in supported Chrome)"
+    }
+  ],
+  "note": "Vendored tesseract.js bundles are PATCHED for this extension: remote worker/core/language-data CDN defaults removed; loading restricted to same-extension packaged URLs; eval-based compatibility fallbacks dropped. Regenerate with scripts/vendor-patch-tesseract.mjs."
+}

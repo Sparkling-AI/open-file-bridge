@@ -6,8 +6,28 @@ the Microsoft Store, not the CWS).
 
 ## 1. Package to upload
 
-`dist-extension/open-file-bridge-extension-3.7.4.zip`
+`dist-extension/open-file-bridge-extension-3.7.5.zip`
 
+- Version 3.7.5 (2026-10-28, Blue Argon remediation): removes the vendored
+  tesseract.js library's remote-loading defaults — the `cdn.jsdelivr.net`
+  worker.min.js default (Google's reported finding), the
+  `cdn.jsdelivr.net` tesseract.js-core default, and the
+  `@tesseract.js-data` language-model fallback. The bundles are patched
+  reproducibly from pinned upstream 7.0.0 inputs
+  (`scripts/vendor-patch-tesseract.mjs`, provenance in
+  `extension/vendor/tesseractjs/PATCHES.json`, documented in
+  `extension/vendor/NOTICE.md`). Loading is now packaged-only by
+  construction: worker/core/language paths must be same-extension
+  `chrome-extension://` URLs, the blob-worker wrapper is deleted, and
+  three dead eval-based compatibility fallbacks are dropped. OCR, language
+  switching, and searchable-PDF output are unchanged and verified in real
+  Chrome with all external DNS resolution blocked
+  (`--host-resolver-rules="MAP * ~NOTFOUND"`) and netlog inspection
+  showing no engine/CDN request — OCR and PDF processing ran entirely from
+  packaged resources. A new package policy check
+  (`scripts/check-remote-code.mjs`) runs in extension CI against both the
+  tree and the packaged ZIP; it rejects the 3.7.4 artifact. The extension
+  skill and Python client are unchanged (skill floor stays 3.4.0).
 - Version 3.7.4 (2026-10-26, status feedback): injection success is green;
   folder access awaiting permission and disabled confirmations use amber;
   token/OCR failures and rejected approval responses use red. Localhost
@@ -156,7 +176,7 @@ pages in a fresh synthetic profile (no real user data appears):
 Optional: icon assets in `extension/icons/` (16–256) already satisfy the
 store icon requirement; a 1280×800 marquee can be added later.
 
-For the current 3.7.4 submission, use **cws-1-options-fresh.png only** as the
+For the current 3.7.5 submission, use **cws-1-options-fresh.png only** as the
 store screenshot. The security and OCR/safety source screenshots above are
 retained locally, but their displayed recovery copy makes absolute guarantees
 that the snapshot limits do not support. Omit them from the current draft;

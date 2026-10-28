@@ -90,6 +90,16 @@ function sanitizeLangs(raw) {
 
 async function getTessWorker(lang) {
   if (ENGINES.tessWorker && ENGINES.tessLang === lang) return ENGINES.tessWorker;
+  // packaged-models-only (CWS remote-code remediation, 3.7.5): reject
+  // languages we do not ship BEFORE spawning a worker — a missing packaged
+  // .traineddata would otherwise fail deep inside tesseract's loader
+  // (no remote fallback exists anymore; see vendor/tesseractjs/PATCHES.json)
+  const unsupported = String(lang || "").split("+").filter(
+    (l) => !ENG_OCR_LANGS.includes(l));
+  if (unsupported.length) {
+    throw engError(400, "unsupported OCR language(s): " + unsupported.join(", ")
+      + " — the extension packages only: " + ENG_OCR_LANGS.join(", "));
+  }
   if (ENGINES.tessWorker) {
     try { await ENGINES.tessWorker.terminate(); } catch (e) { /* stale */ }
     ENGINES.tessWorker = null;

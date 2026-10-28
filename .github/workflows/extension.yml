@@ -8,12 +8,20 @@ on:
       - 'extension/**'
       - 'skill/open-file-bridge/SKILL-EXT*.md'
       - 'tests/stage3/**'
+      - 'tests/unit/tesseract_rhc_guard_test.cjs'
+      - 'scripts/check-remote-code.mjs'
+      - 'scripts/vendor-patch-tesseract.mjs'
+      - 'vendor-upstream/**'
       - '.github/workflows/extension.yml'
   pull_request:
     paths:
       - 'extension/**'
       - 'skill/open-file-bridge/SKILL-EXT*.md'
       - 'tests/stage3/**'
+      - 'tests/unit/tesseract_rhc_guard_test.cjs'
+      - 'scripts/check-remote-code.mjs'
+      - 'scripts/vendor-patch-tesseract.mjs'
+      - 'vendor-upstream/**'
       - '.github/workflows/extension.yml'
   workflow_dispatch:
 
@@ -32,6 +40,19 @@ jobs:
           python3 -m json.tool extension/manifest.json >/dev/null
           find extension -maxdepth 1 -name '*.js' -print0 |
             xargs -0 -n1 node --check
+
+      # CWS "Blue Argon" (3.7.5): the vendored tesseract bundles are patched
+      # — prove the committed patches reproduce from the pinned upstream,
+      # exercise the packaged-only guards, and policy-scan the tree.
+      - name: Vendored remote-code policy (Tesseract provenance + guards)
+        shell: bash
+        run: |
+          set -euo pipefail
+          node --check extension/vendor/tesseractjs/tesseract.min.js
+          node --check extension/vendor/tesseractjs/worker.min.js
+          node scripts/vendor-patch-tesseract.mjs verify
+          node tests/unit/tesseract_rhc_guard_test.cjs
+          node scripts/check-remote-code.mjs --dir extension
 
       - name: Client / skill / injector consistency + review regressions
         shell: bash
@@ -124,6 +145,9 @@ jobs:
           unzip -t "$archive"
           test "$(unzip -Z1 "$archive" | grep -cx 'manifest.json')" -eq 1
           test "$(unzip -Z1 "$archive" | grep -c '^extension/')" -eq 0
+          # packaged-artifact policy scan: the ZIP must obey the same
+          # remote-code rules as the tree it was archived from
+          node scripts/check-remote-code.mjs --zip "$archive"
           (cd dist-extension && sha256sum *.zip > SHA256SUMS)
 
       - name: Upload extension artifact

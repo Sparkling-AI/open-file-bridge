@@ -3300,3 +3300,71 @@ actual DOM, CSS and closed shadow-root rendering are inspected. The existing
 Real OPFS move/search checks and extension packaging are also verified before
 release. Linux/Xvfb and a live Open WebUI chat are not part of this UI patch's
 verification.
+
+## Blue Argon remediation (2026-10-28, extension 3.7.5)
+
+Google warned on 3.7.4 (ref Blue Argon, 2026-10-28): remotely hosted code.
+The audit (`.private/notes/remote-code-audit-3.7.4-2026-10-28.md`) found two
+executable CDN fallback paths in the vendored tesseract.js 7.0.0 bundles
+(worker default = Google's finding, core-loader default) plus a language-data
+CDN fallback; application-level overrides in engine-impl did not remove the
+shipped loader code, which the store requires.
+
+- The two bundles are now PATCHED, reproducibly: pristine npm 7.0.0 inputs
+  are pinned in `vendor-upstream/tesseract.js-7.0.0/` and
+  `scripts/vendor-patch-tesseract.mjs` (apply/verify, SHA-256-pinned, each
+  replacement must match exactly once) regenerates them; provenance ships
+  inside the package as `vendor/tesseractjs/PATCHES.json` and the vendor
+  NOTICE documents the deltas. Loading is packaged-only by construction:
+  worker/core/lang paths must be same-extension chrome-extension:// URLs,
+  the blob-worker wrapper is deleted, and three dead eval-based
+  compatibility fallbacks are dropped (CSP cleanup).
+- engine-impl validates requested OCR languages against the packaged set
+  BEFORE spawning a worker. Without this, a missing packaged model made
+  fetch() reject with a bare TypeError that hung createWorker forever:
+  MV3 extension resources REJECT (no 404) for missing files, and upstream
+  tesseract.js 7 ends its load/loadLanguage/initialize chain in an EMPTY
+  CATCH that swallows the failure (coordinator review flagged the same
+  gap). Fixed at BOTH layers: the vendor fetch is wrapped with a clear
+  no-remote-fallback error (W7) and the empty catch now routes failures to
+  the gate reject (T6), so createWorker settles promptly for missing
+  models AND missing core files; the engine gate keeps the product error
+  fast and lists the packaged set. Guards compare protocol+extension-ID
+  as an explicit string prefix (self.location.origin+"/"), never
+  URL.origin — adversarial lookalikes (spoofed IDs, userinfo tricks,
+  scheme lookalikes) are unit-tested rejections.
+- New CI steps (extension.yml): vendor patch verification, the guard unit
+  tests (`tests/unit/tesseract_rhc_guard_test.cjs`, VM-driven through the
+  real public API), and `scripts/check-remote-code.mjs` — a package policy
+  scan (tree pre-package + ZIP post-package) with an explicit
+  doc/license/namespace/match-pattern allowlist, banned CDN hosts,
+  required-asset and version-consistency assertions. The 3.7.4 ZIP fails
+  it for exactly the audited reasons (including the string-concat
+  assembled CDN prefixes).
+- Real-Chrome verification (tests/stage3/tesseract_local_test.py): fresh
+  disposable profile, ALL external DNS blocked
+  (`--host-resolver-rules=MAP * ~NOTFOUND`), netlog + in-worker
+  performance timelines + a page Worker-spawn recorder as evidence. OCR
+  (eng, swe+eng, and back), searchable-PDF creation with text surviving
+  extraction, raster PDF OCR, missing-model failures, the full negative
+  guard matrix (remote/blob/data/cross-extension/missing × worker/core/
+  lang), and BOTH packaged SIMD cores (forced via the library's direct
+  core-file contract; natural detection covered by the directory-path
+  runs) all pass with zero external requests. macOS gotchas baked in:
+  netlog skips chrome-extension:// URLs (negative evidence only there),
+  extension-page CSP forbids eval — guard cases are generated per-case,
+  not eval'd — and playwright's service_workers list needs the CDP
+  Target.getTargets fallback.
+- Release: manifest/core 3.7.5; skill floor stays 3.4.0 and the skills +
+  Python client are unchanged (no contract change). Store
+  upload/publication is NOT part of this change; the candidate ZIP is
+  built from the working tree (NOT git archive — the fixes are uncommitted
+  until review) by scripts/package_extension_local.sh.
+
+Verification summary: vendor patch verify PASS; 20-check guard unit suite
+PASS; CI consistency/regression suites PASS; remote-code scan PASS on the
+tree and (post-packaging) the 3.7.5 ZIP, FAIL on the 3.7.4 artifact as
+designed; real-Chrome local-only suite PASS (t0–t8). engines_test.py and
+the other picker-driven stage-3 suites need the Linux/Xvfb + OWUI harness
+and were not re-run in this remediation (the new suite covers the engine
+paths they exercised through the same real bundles).
